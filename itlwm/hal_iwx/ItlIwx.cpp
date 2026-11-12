@@ -15245,8 +15245,10 @@ awdlCoexCountryAnswer(struct iwx_softc *sc)
         return;
     }
     // Beacon hints belong to the old country's rules; Linux drops them on a regulatory change too.
-    if (mcc != awdlCoexCountryAnswered)
-        memset(sc->sc_ic.ic_beacon_hint, 0, sizeof(sc->sc_ic.ic_beacon_hint));
+    // TEMPORARY WORKAROUND, not meant to be merged as is: the hints are kept across country changes. Dropping
+    // them sent the listener back to channel 6 each time the firmware re-reported the country (in Japan,
+    // ITLAWDLCoexCountryNotices climbed to ~30 within minutes). The proper fix is probably to drop only the
+    // hints that the new country's rules don't allow, or to ignore a re-report of the same country.
     awdlCoexCountryAnswered = mcc;
     awdlCoexCountrySourceAnswered = source;
     awdlCoexCountryAnswerSeconds = mccUptimeSeconds();
