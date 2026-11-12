@@ -151,8 +151,43 @@ static uint32_t awdlCoexCountryLastStatus, awdlCoexCountryAnswerSeconds;
 static uint16_t awdlCoexCountryNotice, awdlCoexCountryAnswered;
 static uint8_t awdlCoexCountrySource, awdlCoexCountrySourceAnswered;
 static bool awdlCoexCountryPending, awdlCoexCountryLearned;
-// Bits 0-3: a beacon hint on 149, 153, 157, 161; bit 4: on 6 (ITLAWDLCoexBeaconHints).
+// Bits 0-3: a beacon hint on 149, 153, 157, 161; bit 4: on 6; bits 8-11: on 36, 40, 44, 48
+// (ITLAWDLCoexBeaconHints).
 static uint32_t awdlCoexBeaconHints;
+// Apple's AWDL 5 GHz channel, as the phone's own channel sequence (TLV 18) shows it: 149 where the country
+// allows it, else 44 (Japan, for example). The listener follows it, as a Mac would. 0 until a peer is heard.
+// It lapses after kAwdlCoexPeer5GLifeUS without a frame. It's kept across firmware restarts.
+static uint8_t awdlCoexPeer5G;
+static uint64_t awdlCoexPeer5GUS;
+static uint32_t awdlCoexPeer5GFrames, awdlCoexPeer5GChanges;
+constexpr uint64_t kAwdlCoexPeer5GLifeUS = 600000000ULL;
+// The phone's latest 16-slot channel sequence (TLV 18). Its infra channel shows up here too while it's on
+// Wi-Fi: Apple sends AWDL data on that channel when both ends are on it ("Infra Data").
+static uint8_t awdlCoexPeerSeq[16];
+// TLV 18 from a validated action frame without FCS, TLVs from byte 40: a 6-byte header, then 16 pairs of
+// channel and flags. Same layout as ItlAWDL::peerSlotsFromAction.
+static bool awdlCoexPeerSequence(const uint8_t *frame, size_t length, uint8_t out[16])
+{
+    if (!frame || length < 40) return false;
+    for (size_t i = 40; i + 3 <= length;) {
+        const size_t value = size_t(frame[i + 1]) | size_t(frame[i + 2]) << 8;
+        if (i + 3 + value > length) return false;
+        if (frame[i] == 18) {
+            if (value < 6 + 32) return false;
+            for (unsigned n = 0; n < 16; ++n) out[n] = frame[i + 3 + 6 + 2 * n];
+            return true;
+        }
+        i += 3 + value;
+    }
+    return false;
+}
+// The first channel of the 80 MHz block a listener channel belongs to: 149-161 or 36-48. 0 otherwise.
+static inline unsigned awdlCoex80BlockFirst(unsigned ch)
+{
+    if (ch >= 149 && ch <= 161 && (ch - 149) % 4 == 0) return 149;
+    if (ch >= 36 && ch <= 48 && ch % 4 == 0) return 36;
+    return 0;
+}
 static uint64_t awdlCoexLastMoveUS;
 // A move waits for the listener's ring to drain; nothing new is submitted meanwhile (iface129 review, 1).
 static bool awdlCoexMovePending;
@@ -5803,7 +5838,8 @@ unsigned itlAWDLChannelClass()
 {
     // The listener beside Wi-Fi: 80 MHz is advertised only while its own context really is at 80 MHz on 149
     // and no move is pending.
-    if (awdlCoexMultiActive && awdlCoexOwnWidth == 80 && !awdlCoexMovePending && awdlFixedChannel == 149) {
+    if (awdlCoexMultiActive && awdlCoexOwnWidth == 80 && !awdlCoexMovePending &&
+        (awdlFixedChannel == 149 || awdlFixedChannel == 44)) {
         ++awdlCoexAdvertise80Frames;
         return 128;
     }
@@ -6534,6 +6570,13 @@ static void awdlCoexPublish()
         root->setProperty("ITLAWDLCoexCountryLastStatus", awdlCoexCountryLastStatus, 32);
         root->setProperty("ITLAWDLCoexCountryLearned", awdlCoexCountryLearned);
         root->setProperty("ITLAWDLCoexBeaconHints", awdlCoexBeaconHints, 32);
+        root->setProperty("ITLAWDLCoexPeer5GHz", awdlCoexPeer5G, 32);
+        root->setProperty("ITLAWDLCoexPeer5GHzFrames", awdlCoexPeer5GFrames, 32);
+        root->setProperty("ITLAWDLCoexPeer5GHzChanges", awdlCoexPeer5GChanges, 32);
+        if (auto *o = OSData::withBytes(awdlCoexPeerSeq, sizeof(awdlCoexPeerSeq))) {
+            root->setProperty("ITLAWDLCoexPeerSequence", o);
+            o->release();
+        }
         root->setProperty("ITLAWDLCoexCountryFailures", awdlCoexCountryFailures, 32);
         root->setProperty("ITLAWDLCoexMoveDrainTimeouts", awdlCoexMoveDrainTimeouts, 32);
         root->setProperty("ITLAWDLCoexMovePending", awdlCoexMovePending);
@@ -7133,9 +7176,12 @@ static bool awdlCoexBlockIneligible(struct ieee80211com *ic, struct ieee80211_ch
         return true;
     if (!channel || channel != awdlCoexOwnChan || awdlCoexOwnWidth != 80)
         return false;
-    if (!(ic->ic_channels[149].ic_flags & IEEE80211_CHAN_VHT80))
+    // 149-161 or 36-48, whichever block the listener's primary is in.
+    const unsigned primary = ieee80211_chan2ieee(ic, channel);
+    const unsigned first = awdlCoex80BlockFirst(primary);
+    if (!first || !(ic->ic_channels[primary].ic_flags & IEEE80211_CHAN_VHT80))
         return true;
-    for (unsigned ch = 149; ch <= 161; ch += 4) {
+    for (unsigned ch = first; ch <= first + 12; ch += 4) {
         const auto &sub = ic->ic_channels[ch];
         if (!sub.ic_freq || !isset(ic->ic_chan_active, ch) || awdlCoexNoIr(ic, ch) ||
             (sub.ic_flags & (IEEE80211_CHAN_DFS | IEEE80211_CHAN_NOADHOC)))
@@ -8828,6 +8874,28 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                 const uint64_t heardUS = awdlUptimeUS();
                 const bool ourChannel = chanValid && unsigned(chanidx) == awdlCoexChannel;
                 const bool fromOwnAddr = awdlCoexAddrKnown && ItlAWDL::sameAddress(cf + 10, awdlCoexAddr);
+                // Which 5 GHz channel Apple uses here, from the peer's own channel sequence, heard on any
+                // channel: 149 wherever it appears, else 44. The channel picker follows it.
+                if (!(cf[10] & 1) && !fromOwnAddr &&
+                    (!awdlCoexBaPeerAdded || ItlAWDL::sameAddress(cf + 10, awdlCoexBaPeer))) {
+                    uint8_t seq[16];
+                    if (awdlCoexPeerSequence(cf, coexLen, seq)) {
+                        ++awdlCoexPeer5GFrames;
+                        // Diagnostic: the 5 GHz AWDL channel it names (149 wins), 0 if neither.
+                        uint8_t named = 0;
+                        for (unsigned n = 0; n < 16; ++n)
+                            if (seq[n] == 149 || (seq[n] == 44 && named != 149))
+                                named = seq[n];
+                        if (memcmp(seq, awdlCoexPeerSeq, sizeof(seq)) || !awdlCoexPeer5G) {
+                            if (awdlCoexPeer5G)
+                                ++awdlCoexPeer5GChanges;
+                            memcpy(awdlCoexPeerSeq, seq, sizeof(seq));
+                            awdlCoexPeer5G = named ? named : 1;
+                            awdlCoexPublish();
+                        }
+                        awdlCoexPeer5GUS = heardUS;
+                    }
+                }
                 if (!(cf[10] & 1) && ourChannel && !fromOwnAddr) {
                     awdlCoexPeerHeard(cf + 10, heardUS);
                     // The phone's schedule, from its sync frames, as dedicated mode tracks it: its BA peer
@@ -10491,10 +10559,10 @@ iwx_get_ctrl_pos(struct ieee80211com *ic, struct ieee80211_channel *c)
     // The listener's own context at 80 MHz is only ever in 149-161, centred on 155.
     if (awdlCoexPhyWidth == IWX_PHY_VHT_CHANNEL_MODE80 && awdlCoexMulti && awdlPhyBuildingId == kAwdlCoexPhyId) {
         switch (ieee80211_chan2ieee(ic, c)) {
-            case 149: return IWX_PHY_VHT_CTRL_POS_2_BELOW;
-            case 153: return IWX_PHY_VHT_CTRL_POS_1_BELOW;
-            case 157: return IWX_PHY_VHT_CTRL_POS_1_ABOVE;
-            case 161: return IWX_PHY_VHT_CTRL_POS_2_ABOVE;
+            case 149: case 36: return IWX_PHY_VHT_CTRL_POS_2_BELOW;
+            case 153: case 40: return IWX_PHY_VHT_CTRL_POS_1_BELOW;
+            case 157: case 44: return IWX_PHY_VHT_CTRL_POS_1_ABOVE;
+            case 161: case 48: return IWX_PHY_VHT_CTRL_POS_2_ABOVE;
             default: break;
         }
     }
@@ -15079,16 +15147,69 @@ awdlCoexPickOwn(struct iwx_softc *sc, uint8_t *width)
     for (unsigned ch = 149, bit = 1; ch <= 161; ch += 4, bit <<= 1)
         if (isset(ic->ic_beacon_hint, ch))
             hints |= bit;
+    for (unsigned ch = 36, bit = 256; ch <= 48; ch += 4, bit <<= 1)
+        if (isset(ic->ic_beacon_hint, ch))
+            hints |= bit;
     if (hints != awdlCoexBeaconHints) {
         awdlCoexBeaconHints = hints;
         awdlCoexPublish();
     }
-    if (awdlCoexWide80FailedGen != sc->sc_generation && (ic->ic_channels[149].ic_flags & IEEE80211_CHAN_VHT80)) {
-        bool all = true;
-        for (unsigned ch = 149; ch <= 161; ch += 4)
-            all = all && usable(ch);
-        if (all) {
-            *width = IWX_PHY_VHT_CHANNEL_MODE80;
+    // A channel the listener can take: 80 MHz over its whole block (149-161 or 36-48) when allowed, else
+    // 20 MHz on the channel itself; channel 6 at 20 MHz. Nothing else (radar channels never pass usable()).
+    auto tryChannel = [&](unsigned c, uint8_t *w) -> bool {
+        const unsigned f = awdlCoex80BlockFirst(c);
+        if (f && awdlCoexWide80FailedGen != sc->sc_generation && (ic->ic_channels[c].ic_flags & IEEE80211_CHAN_VHT80)) {
+            bool all = true;
+            for (unsigned ch = f; ch <= f + 12; ch += 4)
+                all = all && usable(ch);
+            if (all) {
+                *w = IWX_PHY_VHT_CHANNEL_MODE80;
+                return true;
+            }
+        }
+        if ((f || c == 6) && usable(c)) {
+            *w = IWX_PHY_VHT_CHANNEL_MODE20;
+            return true;
+        }
+        return false;
+    };
+    // Apple's choice, from the phone's own sequence: wherever it spends the most slots that we can use,
+    // its AWDL channel (149, or 44 where 149 isn't allowed) or its router's channel. The current channel
+    // gets 1.5 slots of bonus so a one-slot wobble doesn't move the listener.
+    const bool peerFresh = awdlCoexPeer5G && awdlUptimeUS() - awdlCoexPeer5GUS < kAwdlCoexPeer5GLifeUS;
+    if (peerFresh) {
+        unsigned bestChannel = 0, bestScore = 0;
+        uint8_t bestWidth = IWX_PHY_VHT_CHANNEL_MODE20;
+        for (unsigned k = 0; k < 16; ++k) {
+            const unsigned c = awdlCoexPeerSeq[k];
+            bool seen = !c;
+            for (unsigned j = 0; j < k && !seen; ++j)
+                seen = awdlCoexPeerSeq[j] == c;
+            if (seen)
+                continue;
+            unsigned count = 0;
+            for (unsigned j = k; j < 16; ++j)
+                count += awdlCoexPeerSeq[j] == c;
+            uint8_t w = IWX_PHY_VHT_CHANNEL_MODE20;
+            if (!tryChannel(c, &w))
+                continue;
+            const unsigned score = count * 2 + (c == awdlCoexChannel ? 3U : 0U);
+            if (score > bestScore) {
+                bestScore = score;
+                bestChannel = c;
+                bestWidth = w;
+            }
+        }
+        if (bestChannel) {
+            *width = bestWidth;
+            return int(bestChannel);
+        }
+    }
+    // No phone heard yet: 149 at 80 MHz as before, else 6.
+    {
+        uint8_t w = IWX_PHY_VHT_CHANNEL_MODE20;
+        if (tryChannel(149, &w) && w == IWX_PHY_VHT_CHANNEL_MODE80) {
+            *width = w;
             return 149;
         }
     }
@@ -15157,12 +15278,13 @@ awdlCoexRetarget(struct iwx_softc *sc)
     const int want = awdlCoexPickOwn(sc, &width);
     const int have = own->channel ? ieee80211_chan2ieee(ic, own->channel) : 0;
     const int haveWidth = awdlCoexOwnWidth;
-    if (!want || (want == have && (want != 149 || haveWidth == 80))) {
+    if (!want || (want == have && (width == IWX_PHY_VHT_CHANNEL_MODE80) == (haveWidth == 80))) {
         awdlCoexMovePending = false;
         return;
     }
     const uint64_t now = awdlUptimeUS();
-    if (want == 149 && awdlCoexLastMoveUS && now - awdlCoexLastMoveUS < 10000000ULL) {
+    // Up to 5 GHz (149 or 44) at most every 10 s; back to 6 at once.
+    if (want != 6 && awdlCoexLastMoveUS && now - awdlCoexLastMoveUS < 10000000ULL) {
         awdlCoexMovePending = false;
         return;
     }
