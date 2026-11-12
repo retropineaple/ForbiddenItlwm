@@ -154,6 +154,9 @@ static bool awdlCoexCountryPending, awdlCoexCountryLearned;
 // Bits 0-3: a beacon hint on 149, 153, 157, 161; bit 4: on 6; bits 8-11: on 36, 40, 44, 48
 // (ITLAWDLCoexBeaconHints).
 static uint32_t awdlCoexBeaconHints;
+// The country the current beacon hints were learned under. Unlike awdlCoexCountryAnswered it survives a new
+// generation, so a reconnect that answers the same country again keeps them.
+static uint16_t awdlCoexHintsCountry;
 // Apple's AWDL 5 GHz channel, as the phone's own channel sequence (TLV 18) shows it: 149 where the country
 // allows it, else 44 (Japan, for example). The listener follows it, as a Mac would. 0 until a peer is heard.
 // It lapses after kAwdlCoexPeer5GLifeUS without a frame. It's kept across firmware restarts.
@@ -15236,9 +15239,14 @@ awdlCoexCountryAnswer(struct iwx_softc *sc)
         awdlCoexPublish();
         return;
     }
-    // Beacon hints belong to the old country's rules; Linux drops them on a regulatory change too.
-    if (mcc != awdlCoexCountryAnswered)
-        memset(sc->sc_ic.ic_beacon_hint, 0, sizeof(sc->sc_ic.ic_beacon_hint));
+    // Beacon hints belong to the old country's rules; Linux drops them on a regulatory change too. Only a real
+    // change counts: re-answering the same country after a reconnect or firmware restart (which resets
+    // awdlCoexCountryAnswered) keeps them, and a world/unusable answer neither clears nor replaces them.
+    if (ItlAWDL::countryNoticeUsable(mcc, source) && mcc != awdlCoexHintsCountry) {
+        if (awdlCoexHintsCountry)
+            memset(sc->sc_ic.ic_beacon_hint, 0, sizeof(sc->sc_ic.ic_beacon_hint));
+        awdlCoexHintsCountry = mcc;
+    }
     awdlCoexCountryAnswered = mcc;
     awdlCoexCountrySourceAnswered = source;
     awdlCoexCountryAnswerSeconds = mccUptimeSeconds();
