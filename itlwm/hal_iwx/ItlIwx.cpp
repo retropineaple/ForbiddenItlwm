@@ -161,8 +161,8 @@ static uint8_t awdlCoexPeer5G;
 static uint64_t awdlCoexPeer5GUS;
 static uint32_t awdlCoexPeer5GFrames, awdlCoexPeer5GChanges;
 constexpr uint64_t kAwdlCoexPeer5GLifeUS = 600000000ULL;
-// The phone's latest 16-slot channel sequence (TLV 18). Its infra channel shows up here too while it's on
-// Wi-Fi: Apple sends AWDL data on that channel when both ends are on it ("Infra Data").
+// The phone's latest 16-slot channel sequence (TLV 18). The picker only looks for Apple's AWDL channel 44
+// in it; the phone's infra channel can appear here too but is never chosen.
 static uint8_t awdlCoexPeerSeq[16];
 // TLV 18 from a validated action frame without FCS, TLVs from byte 40: a 6-byte header, then 16 pairs of
 // channel and flags. Same layout as ItlAWDL::peerSlotsFromAction.
@@ -5839,7 +5839,7 @@ unsigned itlAWDLChannelClass()
     // The listener beside Wi-Fi: 80 MHz is advertised only while its own context really is at 80 MHz on 149
     // and no move is pending.
     if (awdlCoexMultiActive && awdlCoexOwnWidth == 80 && !awdlCoexMovePending &&
-        (awdlFixedChannel == 149 || awdlFixedChannel == 44)) {
+        awdlCoex80BlockFirst(awdlFixedChannel)) {
         ++awdlCoexAdvertise80Frames;
         return 128;
     }
@@ -15131,9 +15131,11 @@ awdlCoexMacSend(struct iwx_softc *sc, uint32_t action)
     return result;
 }
 
-// The listener's own channel: 149 at 80 MHz when the firmware's current channel map lets us start on all of
-// 149-161 (VHT80, no passive, no radar, ad hoc allowed), else 6 at 20 MHz under the same test, else none.
-// 80 MHz is not tried again in a generation where its PHY command failed.
+// The listener's own channel, in Apple's AWDL order: 149 at 80 MHz when the firmware's current channel map lets
+// us start on all of 149-161 (VHT80, no passive, no radar, ad hoc allowed), exactly as before. Only when 149 at
+// 80 MHz isn't usable (Japan, for example) does it follow the phone: 44 if the phone's sequence names it, at
+// 80 MHz over 36-48 or else 20 MHz on 44. Then 6 at 20 MHz. A 5 GHz block inside a 160 MHz station channel is
+// skipped. 80 MHz is not tried again in a generation where its PHY command failed.
 static int
 awdlCoexPickOwn(struct iwx_softc *sc, uint8_t *width)
 {
@@ -15156,7 +15158,17 @@ awdlCoexPickOwn(struct iwx_softc *sc, uint8_t *width)
     }
     // A channel the listener can take: 80 MHz over its whole block (149-161 or 36-48) when allowed, else
     // 20 MHz on the channel itself; channel 6 at 20 MHz. Nothing else (radar channels never pass usable()).
+    // A station at 160 MHz (or 80+80) covering the candidate's 160 MHz group (36-64, 100-128, 149-177): a
+    // listener inside it got the station disconnected during transfers (AX201, PR #21), so skip it.
+    auto group160 = [](unsigned ch) -> unsigned {
+        return ch >= 36 && ch <= 64 ? 1U : ch >= 100 && ch <= 128 ? 2U : ch >= 149 && ch <= 177 ? 3U : 0U;
+    };
+    const bool stationWide160 = ic->ic_state == IEEE80211_S_RUN && ic->ic_bss && ic->ic_bss->ni_chan &&
+        (ic->ic_bss->ni_chw == IEEE80211_CHAN_WIDTH_160 || ic->ic_bss->ni_chw == IEEE80211_CHAN_WIDTH_80P80);
+    const unsigned stationGroup = stationWide160 ? group160(ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan)) : 0U;
     auto tryChannel = [&](unsigned c, uint8_t *w) -> bool {
+        if (stationGroup && group160(c) == stationGroup)
+            return false;
         const unsigned f = awdlCoex80BlockFirst(c);
         if (f && awdlCoexWide80FailedGen != sc->sc_generation && (ic->ic_channels[c].ic_flags & IEEE80211_CHAN_VHT80)) {
             bool all = true;
@@ -15173,44 +15185,24 @@ awdlCoexPickOwn(struct iwx_softc *sc, uint8_t *width)
         }
         return false;
     };
-    // Apple's choice, from the phone's own sequence: wherever it spends the most slots that we can use,
-    // its AWDL channel (149, or 44 where 149 isn't allowed) or its router's channel. The current channel
-    // gets 1.5 slots of bonus so a one-slot wobble doesn't move the listener.
-    const bool peerFresh = awdlCoexPeer5G && awdlUptimeUS() - awdlCoexPeer5GUS < kAwdlCoexPeer5GLifeUS;
-    if (peerFresh) {
-        unsigned bestChannel = 0, bestScore = 0;
-        uint8_t bestWidth = IWX_PHY_VHT_CHANNEL_MODE20;
-        for (unsigned k = 0; k < 16; ++k) {
-            const unsigned c = awdlCoexPeerSeq[k];
-            bool seen = !c;
-            for (unsigned j = 0; j < k && !seen; ++j)
-                seen = awdlCoexPeerSeq[j] == c;
-            if (seen)
-                continue;
-            unsigned count = 0;
-            for (unsigned j = k; j < 16; ++j)
-                count += awdlCoexPeerSeq[j] == c;
-            uint8_t w = IWX_PHY_VHT_CHANNEL_MODE20;
-            if (!tryChannel(c, &w))
-                continue;
-            const unsigned score = count * 2 + (c == awdlCoexChannel ? 3U : 0U);
-            if (score > bestScore) {
-                bestScore = score;
-                bestChannel = c;
-                bestWidth = w;
-            }
-        }
-        if (bestChannel) {
-            *width = bestWidth;
-            return int(bestChannel);
-        }
-    }
-    // No phone heard yet: 149 at 80 MHz as before, else 6.
+    // 149 at 80 MHz wherever it works, unchanged.
     {
         uint8_t w = IWX_PHY_VHT_CHANNEL_MODE20;
         if (tryChannel(149, &w) && w == IWX_PHY_VHT_CHANNEL_MODE80) {
             *width = w;
             return 149;
+        }
+    }
+    // Otherwise Apple's other AWDL channel, 44, once the phone's own sequence names it.
+    const bool peerFresh = awdlCoexPeer5G && awdlUptimeUS() - awdlCoexPeer5GUS < kAwdlCoexPeer5GLifeUS;
+    bool peerNames44 = false;
+    for (unsigned k = 0; peerFresh && k < 16 && !peerNames44; ++k)
+        peerNames44 = awdlCoexPeerSeq[k] == 44;
+    if (peerNames44) {
+        uint8_t w = IWX_PHY_VHT_CHANNEL_MODE20;
+        if (tryChannel(44, &w)) {
+            *width = w;
+            return 44;
         }
     }
     if (usable(6)) {
