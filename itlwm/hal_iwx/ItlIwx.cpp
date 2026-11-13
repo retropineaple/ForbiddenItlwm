@@ -157,6 +157,16 @@ static uint32_t awdlCoexBeaconHints;
 // The country the current beacon hints were learned under. Unlike awdlCoexCountryAnswered it survives a new
 // generation, so a reconnect that answers the same country again keeps them.
 static uint16_t awdlCoexHintsCountry;
+// Apple-style coexistence: router entries in the advertised sequence (with the listener silent in them) and a
+// relaxed beacon-miss threshold while AWDL data moves.
+static bool awdlAppleSlots = true, awdlAppleBmiss = true, awdlAppleMsch = true;
+static uint64_t awdlInfraRxPkts, awdlInfraTxPkts, awdlInfraRxBytes, awdlInfraTxBytes;
+static uint64_t awdlInfraSampleUS, awdlInfraPrevPkts, awdlInfraPrevBytes, awdlInfraLastPps, awdlInfraLastAvg;
+static uint8_t awdlInfraClass;            // Apple's codes: 0 idle, 2 streaming, 3 data.
+static uint32_t awdlInfraClassChanges;
+static bool awdlOwnPlanActive;
+static uint8_t awdlOwnPlanChannel[16], awdlOwnPlanClass[16];
+static uint32_t awdlOwnPlanFrames, awdlOwnPlanChanges, awdlAppleBmissRelaxed, awdlAppleSyncYield;
 // Apple's AWDL 5 GHz channel, as the phone's own channel sequence (TLV 18) shows it: 149 where the country
 // allows it, else 44 (Japan, for example). The listener follows it, as a Mac would. 0 until a peer is heard.
 // It lapses after kAwdlCoexPeer5GLifeUS without a frame. It's kept across firmware restarts.
@@ -6576,6 +6586,21 @@ static void awdlCoexPublish()
         root->setProperty("ITLAWDLCoexPeer5GHz", awdlCoexPeer5G, 32);
         root->setProperty("ITLAWDLCoexPeer5GHzFrames", awdlCoexPeer5GFrames, 32);
         root->setProperty("ITLAWDLCoexPeer5GHzChanges", awdlCoexPeer5GChanges, 32);
+        root->setProperty("ITLAWDLAppleFlags", uint32_t((awdlAppleSlots ? 1 : 0) | (awdlAppleBmiss ? 2 : 0) |
+                                                         (awdlAppleMsch ? 16 : 0)), 32);
+        root->setProperty("ITLAWDLAppleInfraClass", awdlInfraClass, 32);
+        root->setProperty("ITLAWDLAppleInfraPps", uint32_t(awdlInfraLastPps), 32);
+        root->setProperty("ITLAWDLAppleInfraAvgBytes", uint32_t(awdlInfraLastAvg), 32);
+        root->setProperty("ITLAWDLAppleInfraClassChanges", awdlInfraClassChanges, 32);
+        root->setProperty("ITLAWDLApplePlanActive", awdlOwnPlanActive);
+        root->setProperty("ITLAWDLApplePlanFrames", awdlOwnPlanFrames, 32);
+        root->setProperty("ITLAWDLApplePlanChanges", awdlOwnPlanChanges, 32);
+        if (auto *o = OSData::withBytes(awdlOwnPlanChannel, sizeof(awdlOwnPlanChannel))) {
+            root->setProperty("ITLAWDLApplePlan", o);
+            o->release();
+        }
+        root->setProperty("ITLAWDLAppleBmissRelaxed", awdlAppleBmissRelaxed, 32);
+        root->setProperty("ITLAWDLAppleSyncYield", awdlAppleSyncYield, 32);
         if (auto *o = OSData::withBytes(awdlCoexPeerSeq, sizeof(awdlCoexPeerSeq))) {
             root->setProperty("ITLAWDLCoexPeerSequence", o);
             o->release();
@@ -7270,6 +7295,8 @@ awdlCoexTxTask(void *arg)
         that->awdlCoexCountryAnswer(sc);
     if (running && !awdlStopping && awdlCoexAdded && awdlCoexGeneration == sc->sc_generation)
         that->awdlCoexRetarget(sc);
+    if (running && !awdlStopping)
+        that->awdlAppleTick(sc);
     if (running && awdlCoexAdded && awdlCoexGeneration == sc->sc_generation) {
         if (!awdlCoexTxStaAdded && awdlCoexTxSetupTried < kAwdlCoexTxSetupTries &&
             awdlCoexBrokenGeneration != sc->sc_generation) {
@@ -9221,6 +9248,10 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                      m, BPF_DIRECTION_IN);
     }
 #endif
+    if (ni == ic->ic_bss && mbuf_len(m) >= 24 && (mtod(m, const uint8_t *)[0] & 0x0c) == 0x08) {
+        ++awdlInfraRxPkts;
+        awdlInfraRxBytes += mbuf_pkthdr_len(m);
+    }
     ieee80211_inputm(IC2IFP(ic), m, ni, rxi, ml);
     ieee80211_release_node(ic, ni);
 }
@@ -10450,7 +10481,15 @@ iwx_rx_bmiss(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
     //        sizeof(*mbn), BUS_DMASYNC_POSTREAD);
     
     missed = le32toh(mbn->consec_missed_beacons_since_last_rx);
-    if (missed > ic->ic_bmissthres && ic->ic_mgt_timer == 0) {
+    uint32_t bmissThreshold = ic->ic_bmissthres;
+    // AWDL data takes the radio away from the AP for whole entries, so beacons are missed
+    // in runs that don't mean the AP is gone. Relax the threshold while AWDL data is moving.
+    if (awdlAppleBmiss && awdlCoexAdded && awdlCoexLastDataUS && awdlUptimeUS() - awdlCoexLastDataUS < 10000000ULL) {
+        bmissThreshold = ic->ic_bmissthres * 4;
+        if (missed > ic->ic_bmissthres && missed <= bmissThreshold)
+            ++awdlAppleBmissRelaxed;
+    }
+    if (missed > bmissThreshold && ic->ic_mgt_timer == 0) {
         if (ic->ic_if.if_flags & IFF_DEBUG) {
             XYLog("%s: receiving no beacons from %s; checking if "
                   "this AP is still responding to probe requests\n",
@@ -11791,6 +11830,11 @@ int ItlIwx::iwx_tx_monitor_frame(struct iwx_softc *sc, mbuf_t packet, struct iee
 int ItlIwx::
 iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac, int monitorQueue)
 {
+    if (monitorQueue < 0 && !awdlRx && ni && ni == sc->sc_ic.ic_bss && mbuf_len(m) >= 24 &&
+        (mtod(m, const uint8_t *)[0] & 0x0c) == 0x08) {
+        ++awdlInfraTxPkts;
+        awdlInfraTxBytes += mbuf_pkthdr_len(m);
+    }
     // Receive/queue-allocation experiments must not submit even incidental
     // network traffic to a newly allocated firmware queue.
     if (!awdlRx && awdlCoexData && monitorQueue >= 0 && monitorQueue == awdlCoexBaTxQueue) {
@@ -15215,6 +15259,106 @@ awdlCoexPickOwn(struct iwx_softc *sc, uint8_t *width)
     return 0;
 }
 
+// ---- Apple-style coexistence ----------------------------------------------------------
+// Router entries per Apple's _channelSeqSlotTypes rows: Data + Infra Data (7) and Data + Infra Stream (6) give
+// the router their type-9 entries. Entries 6, 7, 14 and 15 are always the router's here: they are type 6 in
+// Apple's data tables and the router's in its FollowsInfra mode, and an Intel station needs them to keep
+// hearing beacons while AWDL data moves (Apple's chips do that in firmware). Idle therefore keeps 4 of 16.
+static const uint8_t kAppleInfraIdle[16] = {0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1};
+static const uint8_t kAppleInfraData[16] = {0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1};
+static const uint8_t kAppleInfraStream[16] = {0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1};
+
+uint64_t itlAWDLUptimeUS() { return awdlUptimeUS(); }
+
+// For AirportItlwmV2's frame builders: per-entry channels and classes plus the phone's timing (our sync TLV
+// adopts its AW counter, so our entries line up with its own). False when no router entries are planned.
+bool itlAWDLSlotPlan(uint64_t nowUS, uint8_t channels[16], uint8_t classes[16], uint16_t *awCounter,
+                     uint16_t *downTU, uint16_t *awPeriodTU)
+{
+    if (!awdlOwnPlanActive || !channels || !classes || !awCounter || !downTU || !awPeriodTU)
+        return false;
+    const auto &s = awdlCoexPeerSchedule;
+    if (!s.fresh(nowUS) || !s.eawUS)
+        return false;
+    uint64_t into = 0;
+    const uint32_t eaw = s.eawAt(nowUS, &into);
+    const uint64_t awUS = s.eawUS / 4;
+    if (!awUS)
+        return false;
+    *awPeriodTU = uint16_t(awUS / 1024);
+    *awCounter = uint16_t(eaw * 4 + uint32_t(into / awUS));
+    const uint64_t leftTU = (s.eawUS - into + 1023) / 1024;
+    *downTU = uint16_t(leftTU ? leftTU : 1);
+    memcpy(channels, awdlOwnPlanChannel, 16);
+    memcpy(classes, awdlOwnPlanClass, 16);
+    ++awdlOwnPlanFrames;
+    return true;
+}
+
+// Every coex task tick (~113 ms): router traffic class (once a second) and the router-entry plan.
+void ItlIwx::
+awdlAppleTick(struct iwx_softc *sc)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    const uint64_t now = awdlUptimeUS();
+    const bool associated = ic->ic_state == IEEE80211_S_RUN && ic->ic_bss && ic->ic_bss->ni_chan;
+
+    // Router traffic class, Apple's rules (currentInfraTrafficType / setScheduleState): streaming when packets
+    // average >= 1401 bytes, data when more than 100 packets a second, else idle.
+    if (!awdlInfraSampleUS || now - awdlInfraSampleUS >= 1000000ULL) {
+        const uint64_t pkts = awdlInfraRxPkts + awdlInfraTxPkts, bytes = awdlInfraRxBytes + awdlInfraTxBytes;
+        const uint64_t dp = pkts - awdlInfraPrevPkts, db = bytes - awdlInfraPrevBytes;
+        const uint64_t elapsed = awdlInfraSampleUS ? now - awdlInfraSampleUS : 1000000ULL;
+        awdlInfraPrevPkts = pkts;
+        awdlInfraPrevBytes = bytes;
+        awdlInfraSampleUS = now;
+        awdlInfraLastPps = elapsed ? dp * 1000000ULL / elapsed : 0;
+        awdlInfraLastAvg = dp ? db / dp : 0;
+        uint8_t cls = 0;
+        if (dp >= 6 && awdlInfraLastAvg >= 1401)
+            cls = 2;
+        else if (awdlInfraLastPps > 100)
+            cls = 3;
+        if (cls != awdlInfraClass) {
+            awdlInfraClass = cls;
+            ++awdlInfraClassChanges;
+        }
+    }
+
+    // The plan. Router entries only while the listener and the station are on different channels (or the
+    // station is 160 MHz wide), the router channel can be described, and the router is busy.
+    uint8_t away[16] = {};
+    bool active = false;
+    const unsigned listener = awdlCoexChannel;
+    const unsigned station = associated ? ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan) : 0;
+    if (awdlAppleSlots && associated && awdlCoexAdded && listener && station <= 255 &&
+        ItlAWDL::fixedScheduleChannel(uint8_t(station)) && ItlAWDL::fixedScheduleChannel(uint8_t(listener)) &&
+        station > 14 && (station != listener || ic->ic_bss->ni_chw == IEEE80211_CHAN_WIDTH_160)) {
+        // A 2.4 GHz station keeps 0 router entries, as Apple's sdbModeAnd24Infra state does: on the AX201 a
+        // 2.4 GHz station beside a 5 GHz listener held up in every test.
+        memcpy(away, awdlInfraClass == 2 ? kAppleInfraStream : awdlInfraClass == 3 ? kAppleInfraData :
+               kAppleInfraIdle, sizeof(away));
+        active = true;
+    }
+    uint8_t planChannel[16], planClass[16];
+    const uint8_t listenerClass = uint8_t(itlAWDLChannelClass() ? itlAWDLChannelClass() :
+                                          ItlAWDL::globalOperatingClass20(uint8_t(listener)));
+    for (unsigned k = 0; k < 16; ++k) {
+        planChannel[k] = uint8_t(away[k] ? station : listener);
+        planClass[k] = away[k] ? ItlAWDL::globalOperatingClass20(uint8_t(station)) : listenerClass;
+    }
+    if (active != awdlOwnPlanActive || memcmp(planChannel, awdlOwnPlanChannel, 16) ||
+        memcmp(away, awdlCoexPeerSchedule.ownAway, 16)) {
+        memcpy(awdlOwnPlanChannel, planChannel, 16);
+        memcpy(awdlOwnPlanClass, planClass, 16);
+        memcpy(awdlCoexPeerSchedule.ownAway, away, 16);
+        awdlOwnPlanActive = active;
+        ++awdlOwnPlanChanges;
+        awdlCoexPublish();
+    }
+
+}
+
 // Station mode: the firmware's country notice answered with its own country and source, and its channel map
 // applied, as dedicated mode and Linux do. Nothing is invented: the firmware's reply is the map.
 void ItlIwx::
@@ -15874,6 +16018,19 @@ awdlCoexTxSend(struct iwx_softc *sc)
         if (!awdlCoexChannelEligible(ic, awdlCoexMultiActive ? sc->sc_phyctxt[kAwdlCoexPhyId].channel :
                                      in->in_phyctxt->channel, "before-build", gen))
             return;
+    }
+    if (awdlAppleMsch && awdlOwnPlanActive) {
+        // In our router entries the listener stays silent, so the
+        // firmware's dynamic quota gives that airtime to the station.
+        const uint64_t yieldNow = awdlUptimeUS();
+        const auto &ps = awdlCoexPeerSchedule;
+        if (ps.fresh(yieldNow) && ps.eawUS) {
+            const uint32_t eaw = ps.eawAt(yieldNow, nullptr);
+            if (ps.ownAway[eaw % ItlAWDL::kPeerSeqEntries]) {
+                ++awdlAppleSyncYield;
+                return;
+            }
+        }
     }
     mbuf_t packet = nullptr;
     const IOReturn built = itlAWDLBuildSyncProbe(getController(), &packet, awdlUptimeUS());
@@ -20153,6 +20310,9 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         awdlCoexGate = !PE_parse_boot_argn("-itlawdlcoexnogate", &dummy, sizeof(dummy));
         awdlCoexAssumeZero = !PE_parse_boot_argn("-itlawdlcoexcalwait", &dummy, sizeof(dummy));
         awdlCoexPeerSchedule.assumeZero = awdlCoexAssumeZero;
+        awdlAppleSlots = !PE_parse_boot_argn("-itlawdlnoinfraslots", &dummy, sizeof(dummy));
+        awdlAppleBmiss = !PE_parse_boot_argn("-itlawdlnobmissrelax", &dummy, sizeof(dummy));
+        awdlAppleMsch = awdlAppleSlots && !PE_parse_boot_argn("-itlawdlnomsch", &dummy, sizeof(dummy));
         if (awdlCoexData) {
             // What made dedicated mode fast and quick to connect, for the listener beside Wi-Fi too:
             // the service-record merge (iface81), AW-timed idle sync frames (iface106), and shorter

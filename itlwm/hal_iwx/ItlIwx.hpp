@@ -460,6 +460,7 @@ public:
     void   awdlCoexTxSend(struct iwx_softc *);
     void   awdlCoexCountryAnswer(struct iwx_softc *);
     void   awdlCoexRetarget(struct iwx_softc *);
+    void   awdlAppleTick(struct iwx_softc *);
     void   awdlCoexDataPump(struct iwx_softc *, unsigned budget = ~0U);
     void   awdlCoexBaHandle(struct iwx_softc *);
     int    awdlCoexBaRemovePeer(struct iwx_softc *);

@@ -193,6 +193,10 @@ void ItlAWDLInterface::storeMasterIndication(const apple80211_awdl_oob_request *
 
 extern unsigned itlAWDLFixedChannel();
 extern unsigned itlAWDLChannelClass();
+// Apple-style schedule: per-entry channels/classes and the peer's timing, when router entries are planned.
+extern bool itlAWDLSlotPlan(uint64_t nowUS, uint8_t channels[16], uint8_t classes[16], uint16_t *awCounter,
+                            uint16_t *downTU, uint16_t *awPeriodTU);
+extern uint64_t itlAWDLUptimeUS();
 extern bool itlAWDLBuildAllowed();
 extern const char *itlAWDLBuildStatus();
 // With -itlawdlcaps the driver reports two HT streams and VHT to macOS; our TLV 7 says the same.
@@ -217,9 +221,15 @@ bool ItlAWDLInterface::copyMasterIndication(uint8_t *output, size_t capacity, si
     if (!scratch)
         return false;
     size_t length = 0;
+    uint8_t planChannels[16], planClasses[16];
+    uint16_t planCounter = 0, planDown = 0, planPeriod = 0;
+    const bool planned = itlAWDLSlotPlan(itlAWDLUptimeUS(), planChannels, planClasses, &planCounter, &planDown,
+                                         &planPeriod);
     const bool built = ItlAWDL::buildMasterIndicationTLVs(masterIndication, masterIndicationLength, localFrameAddress,
                                                           scratch, capacity, &length, uint8_t(itlAWDLFixedChannel()),
-                                                          uint8_t(itlAWDLChannelClass()), itlAWDLTwoStreams());
+                                                          uint8_t(itlAWDLChannelClass()), itlAWDLTwoStreams(),
+                                                          planned ? planChannels : nullptr,
+                                                          planned ? planClasses : nullptr);
     if (built && length <= capacity) {
         memcpy(output, scratch, length);
         *written = length;
@@ -1051,11 +1061,16 @@ IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
         }
         off += 3+count;
     }
+    // Apple-style schedule: router entries and the peer's AW counter, when the driver plans them.
+    uint8_t planChannels[16], planClasses[16];
+    uint16_t planCounter = 0, planDown = 0, planPeriod = 0;
+    const bool planned = itlAWDLSlotPlan(nowUS, planChannels, planClasses, &planCounter, &planDown, &planPeriod);
     // After the check above, which still refuses a native channel-sequence TLV.
     if (valid && !isMI && awdlExtendFrames &&
         !ItlAWDL::extendWithPeerTLVs(snapshot->staticTLVs, &snapshot->templateLength,
                                      sizeof(snapshot->staticTLVs), snapshot->address, uint8_t(itlAWDLFixedChannel()),
-                                     uint8_t(itlAWDLChannelClass()), itlAWDLTwoStreams()))
+                                     uint8_t(itlAWDLChannelClass()), itlAWDLTwoStreams(),
+                                     planned ? planChannels : nullptr, planned ? planClasses : nullptr))
     {
         setProperty("ItlwmAWDLPeerTLVs", "not-added");
         ++awdlSyncPeerTLVsRefused;
@@ -1064,8 +1079,12 @@ IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
     const uint8_t fixedChannel = uint8_t(itlAWDLFixedChannel());
     ItlAWDL::SyncPrefix settings = {fixedChannel,fixedChannel,0,0,16,110,0x1000,16,16,0,3,3,3,3,{}};
     memcpy(settings.master, snapshot->address, 6);
-    const auto schedule = ItlAWDL::buildLocalFixedSchedule(settings, 0, nowUS, 0,
-        sync, sizeof(sync), &syncLength);
+    if (planned && planPeriod)
+        settings.awPeriod = planPeriod;
+    const auto schedule = planned ?
+        ItlAWDL::buildLocalPlannedSchedule(settings, planCounter, planDown, planChannels, sync, sizeof(sync),
+                                           &syncLength) :
+        ItlAWDL::buildLocalFixedSchedule(settings, 0, nowUS, 0, sync, sizeof(sync), &syncLength);
     mbuf_t result = nullptr;
     // Each way a frame can fail has its own stage and return code, so one snapshot shows which.
     IOReturn error = kIOReturnBadArgument;
