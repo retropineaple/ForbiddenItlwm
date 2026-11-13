@@ -8,8 +8,8 @@ ioreg -l -w0 | grep -E '"ItlwmAWDL(InterfaceBuild|BuildCheck)"|"ITLAWDLCoex(Adde
 
 | Key | Healthy value |
 | --- | --- |
-| `ItlwmAWDLInterfaceBuild` | `forbidden-0.5.1-test1`, `forbidden-0.5.1-test1-sequoia` or `forbidden-0.5.1-test1-sonoma` |
-| `ItlwmAWDLBuildCheck` | `verified`, or on Sequoia 15.8.1 `expected: macOS 15.8.x kernel not checked offline`. Anything starting with `blocked` means AirDrop is off on this macOS build: see below |
+| `ItlwmAWDLInterfaceBuild` | `forbidden-0.5.3-test1`, `forbidden-0.5.3-test1-sequoia` or `forbidden-0.5.3-test1-sonoma` |
+| `ItlwmAWDLBuildCheck` | `verified` (`expected: …` on a 15.8.x kernel that wasn't checked offline). Anything starting with `blocked` means AirDrop is off on this macOS build: see below |
 | `ITLAWDLCoexAdded` | Yes: the AirDrop listener exists |
 | `ITLAWDLCoexChannel`, `ITLAWDLCoexOwnWidth` | 149 and 80 |
 | `ITLAWDLCoexCountryLearned` | Yes |
@@ -22,7 +22,7 @@ The driver's log doesn't reach the unified log, so its state is only in the I/O 
 
 ## `ItlwmAWDLBuildCheck` says blocked
 
-The driver only starts AirDrop on macOS builds whose Wi-Fi stack was checked: Tahoe 26.7.1 to 26.7.3, Sequoia 15.8 to 15.8.3 (15.8.2 shares 15.8.3's kernel; 15.8.1 starts as "expected"), and Sonoma 14.8.9.
+The driver only starts AirDrop on macOS builds whose Wi-Fi stack was checked: Tahoe 26.7.1 to 26.7.3, Sequoia 15.8 to 15.8.3 (15.8.1 and 15.8.2 run checked kernels; any other 15.8.x kernel starts as "expected"), and Sonoma 14.8.9.
 - **Nothing at all, and no ForbiddenItlwm keys:** check that you used the kexts for your macOS version. A ForbiddenItlwm built for another macOS version refuses to start, and logs `this kext is for macOS …`.
 - **`blocked: unverified macOS build`:** your build isn't on the list yet. Normal Wi-Fi still works. Please open an issue with your build (`sw_vers -buildVersion`) so it can be checked. `-itlawdlanybuild` forces AirDrop on anyway, at the risk of a kernel panic.
 - **`blocked: IO80211AWDLProtocol table differs`:** the Wi-Fi stack isn't the one the driver was checked against. If you applied OpenCore Legacy Patcher's "Modern Wireless" root patches, revert them. Otherwise Apple changed the part of its Wi-Fi stack the driver plugs into. Starting AirDrop would likely panic, so no flag overrides this. Please report your build.
@@ -49,7 +49,7 @@ The firmware opens channel 149 only after a nearby network tells it the country.
 
 ## Sequoia: the devices list each other, but transfers stay on "Waiting"
 
-Fixed in 0.5.1-test1 ([#7](https://github.com/retropineaple/ForbiddenItlwm/issues/7), [#13](https://github.com/retropineaple/ForbiddenItlwm/issues/13), found in [#19](https://github.com/retropineaple/ForbiddenItlwm/issues/19)). Up to 0.5.0 the driver created its AirDrop packet pools in a mode that Sequoia's kernel refuses for a network interface, so `awdl0` was never created: `ifconfig awdl0` said the interface doesn't exist, and `ItlwmAWDLSyncProbeStage` stayed `snapshot-not-ready`. Update to 0.5.1-test1 or later. Then `ifconfig awdl0` should show the interface, and `ItlwmAWDLPoolType` should be 1. Confirmed working on 15.8.2 (#7) and 15.6 (#19).
+Fixed in 0.5.1-test1 ([#7](https://github.com/retropineaple/ForbiddenItlwm/issues/7), [#13](https://github.com/retropineaple/ForbiddenItlwm/issues/13), found in [#19](https://github.com/retropineaple/ForbiddenItlwm/issues/19)). Up to 0.5.0 the driver created its AirDrop packet pools in a mode that Sequoia's kernel refuses for a network interface, so `awdl0` was never created: `ifconfig awdl0` said the interface doesn't exist, and `ItlwmAWDLSyncProbeStage` stayed `snapshot-not-ready`. Update to 0.5.1-test1 or later. Then `ifconfig awdl0` should show the interface, and `ItlwmAWDLPoolType` should be 1. Confirmed working on 15.8.1 (#13, #22), 15.8.2 (#7), 15.8.3 (#16) and 15.6 (#19).
 
 **Which keys show it works:** `ifconfig awdl0` lists the interface, `ItlwmAWDLClientEvents` has an `open` and a `prepare-bsd` but no `close`, `ItlwmAWDLSyncProbeStage` is `frame-built`, and `ITLAWDLCoexTxSubmitted` and `ItlwmAWDLDataDelivered` rise. Up to 0.5.1, three keys looked like failures even when it worked: `ItlwmAWDLTransportReady` (always No), `ITLAWDLCoexLastBuildResult` (kept the error from before macOS sent its template) and `ItlwmAWDLDataCopyAttempts`/`Success` (only count an optional probe). Ignore them.
 
@@ -60,7 +60,9 @@ This is the main known problem. The time goes into the iPhone finding the Mac's 
 ## Transfers are slower than expected
 
 - **Check the iPhone's Wi-Fi first.** AirDrop gets the share of the iPhone's radio time that its own Wi-Fi leaves over. If the iPhone isn't on Wi-Fi, or is on channel 149, it gets 15 of 16 slots (about 22 MB/s). On a quiet network on another channel it gets 11 (about 15 MB/s), on a busy one 7 (about 6 MB/s). `ITLAWDLCoexPeerPresentEntries` shows the current number.
-- **Check the channel:** on 6, everything is very slow.
+- **Check the channel:** on 6, everything is very slow. The listener can drop to 6 for a while when the firmware briefly loses the country (`ITLAWDLCoexCountryLearned` No).
+- **Mac → iPhone much slower than iPhone → Mac:** a known open problem on some setups (#22, #24): the iPhone never accepts block ack (`ITLAWDLCoexBaTxStateName` stays `asking`), so every frame goes out singly. It happens when the Mac's own Wi-Fi is on the same channel as the AirDrop listener (usually 149) (#24). **Workaround:** put your router (or the Mac's network) on another channel, such as 36–48 or 157; AirDrop stays on 149 and block ack then forms within a second. 0.5.3-test1 has two test flags for this case, `-itlawdlbaaskshared` and `-itlawdlhideinfra` (see [BOOT-FLAGS.md](BOOT-FLAGS.md)).
+- **Measure it:** `bash tools/compat/airdrop_measure.sh` prints the speed and connect times macOS logs for each transfer.
 - **The very first send after boot** is often slower while rate control settles.
 
 ## Wi-Fi is off or greyed out, and there's no `en0`
@@ -75,6 +77,7 @@ The kext can be loaded (`kmutil` lists it) while the driver itself failed to sta
 
 - Remove any flag listed under "Don't use" in [BOOT-FLAGS.md](BOOT-FLAGS.md).
 - A fast-rising `ITLAWDLCoexCountryNotices`, with `ITLAWDLCoexAdded` flipping between Yes and No, means the firmware is restarting around the listener. Boot without the `-itlawdl*` flags to confirm the station works on its own, then report it.
+- **Wi-Fi keeps dropping and reconnecting while the AirDrop flags are on:** remove `-itlawdlcoexmulti` and keep the rest. The listener then stays on your Wi-Fi network's channel instead of its own: AirDrop is slower, but Wi-Fi stays stable (#16). It happened on an AX201 while the Mac's Wi-Fi was on 2.4 GHz and the listener on 149. `ITLAWDLCoexAddsAfterRestart` rising means the firmware is restarting underneath.
 - Use USB tethering from the iPhone to get online while you test.
 
 ## iMessage or other Apple services don't work over Wi-Fi

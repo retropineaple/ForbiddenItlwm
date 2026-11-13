@@ -36,6 +36,7 @@ static void mbuf_freem(mbuf_t p) { assert(p && !p->frees);++p->frees; }
 struct Loop { bool gated=true; bool inGate() { return gated; } };
 static Loop loop; static Loop *_fWorkloop=&loop;
 static bool awdlExtendFrames=false;
+static bool awdlHideInfra=false;
 struct ItlAWDLInterface {
     struct FrameConfiguration {
         struct { unsigned availability_window_length=16,availability_window_period=16; } parameters;

@@ -8,11 +8,11 @@
 #
 # Usage: bash check_compat.sh
 #
-# The verdict is an estimate. Only the AX211 (firmware so-a0-gf-a0-68) on macOS 26.7.1 (25G241) has
-# been tested on hardware; 26.7.2 (25G332) and 26.7.3 (25G342) were verified offline. On Sequoia,
-# 15.8 (24H23) and 15.8.3 (24H241) were verified offline for the separate Sequoia kexts, and other
-# 15.8.x builds are expected to work. Everything else is predicted from the firmware's capabilities
-# and the driver's code.
+# The verdict is an estimate. The project tests the AX211 (firmware so-a0-gf-a0-68) on macOS 26.7.1
+# (25G241); 26.7.2 (25G332) and 26.7.3 (25G342) were verified offline. On Sequoia, 15.8 (24H23) and 15.8.3
+# (24H241) were verified offline for the separate Sequoia kexts; 15.8.1 (24H32) and 15.8.2 (24H232) run
+# verified kernels. Users report AirDrop working with the AX201, AX200, AX210 and AX411 class (see
+# docs/TESTED-HARDWARE.md). Everything else is predicted from the firmware's capabilities and the code.
 
 set -u
 export LC_ALL=C
@@ -62,11 +62,11 @@ elif [ -n "$OS_BUILD" ] && echo " $OFFLINE_BUILDS " | grep -q " $OS_BUILD "; the
     pass "the driver depends on it. See the bluetoothd pattern check below for the Bluetooth side. Please report your result."
 elif [ "${OS_MAJOR:-0}" = "15" ]; then
     # The Sequoia kexts (ForbiddenItlwm and BTLEAdvFixup for Sequoia), not the Tahoe ones.
-    SEQ_VERIFIED="24H23 24H232 24H241"   # 24H232 (15.8.2) runs 24H241's kernel
+    SEQ_VERIFIED="24H23 24H32 24H232 24H241"   # 24H32 (15.8.1) and 24H232 (15.8.2) run verified kernels
     OS_MINOR=$(echo "$OS_VER" | cut -d. -f2)
     if echo " $SEQ_VERIFIED " | grep -q " $OS_BUILD "; then
-        pass "macOS $OS_VER ($OS_BUILD): supported by the Sequoia kexts. Their Wi-Fi stack was checked offline, but Sequoia"
-        pass "isn't confirmed working on hardware yet, so please report your result. Use the Sequoia ForbiddenItlwm and BTLEAdvFixup."
+        pass "macOS $OS_VER ($OS_BUILD): supported by the Sequoia kexts. Users report AirDrop working on 15.8.1 to 15.8.3"
+        pass "with 0.5.1-test1 or later. Use the Sequoia ForbiddenItlwm and BTLEAdvFixup."
     elif [ "${OS_MINOR:-0}" = "8" ]; then
         warn "macOS $OS_VER ($OS_BUILD): expected to work with the Sequoia kexts (same 15.8 kernel family), but this build"
         warn "wasn't checked offline. The driver still checks Apple's Wi-Fi tables at boot. Please report your result."
@@ -88,7 +88,7 @@ elif [ "${OS_MAJOR:-0}" = "26" ]; then
     warn "unless you add -itlawdlanybuild, which risks a kernel panic. Please report this build so it can be checked."
     BLOCKERS=$((BLOCKERS + 1))
 else
-    fail "AirDrop is only built for macOS 26 (Tahoe) and macOS 15.8 (Sequoia). Tested on $TESTED_VERSION ($TESTED_BUILD)."
+    fail "AirDrop is only built for macOS 26 (Tahoe), 15.8 (Sequoia) and 14.8.9 (Sonoma). Tested on $TESTED_VERSION ($TESTED_BUILD)."
     BLOCKERS=$((BLOCKERS + 1))
 fi
 
@@ -149,12 +149,12 @@ classify_device() { # family from the PCI device ID alone
 describe_firmware() { # the firmware the Wi-Fi driver loaded says which radio is on the card
     case "$1" in
         iwlwifi-so-a0-gf-a0-*)  CARD_TIER=tested;      TEXT="AX211. The tested card.";;
-        iwlwifi-ty-a0-gf-a0-*)  CARD_TIER=likely;      TEXT="AX210. Same family and firmware generation as the tested AX211; untested.";;
-        iwlwifi-so-a0-gf4-a0-*) CARD_TIER=likely;      TEXT="AX411. Same family; its firmware also runs two radios at once (CDB), a code path never run here.";;
+        iwlwifi-ty-a0-gf-a0-*)  CARD_TIER=reported;    TEXT="AX210. Users report AirDrop working (Tahoe 26.7.2 and 26.7.3, Sequoia 15.8.1).";;
+        iwlwifi-so-a0-gf4-a0-*) CARD_TIER=reported;    TEXT="AX411 class (AX1690i). Users report AirDrop working on Tahoe 26.7.2. Its firmware can run two radios at once (CDB), which the driver doesn't use.";;
         iwlwifi-so-a0-hr-b0-*)  CARD_TIER=likely;      TEXT="Wi-Fi 6 HR radio (AX201/AX203 class) on an Alder Lake or newer platform. Same family as AX211. Users report an AX201 working on Tahoe 26.7.1.";;
         iwlwifi-so-a0-jf-b0-*)  CARD_TIER=likely;      TEXT="Wi-Fi 5 JF radio (9560/9462/9461 class) on an Alder Lake or newer platform. Same family; untested. 9461/9462 have one antenna.";;
-        iwlwifi-cc-a0-*)        CARD_TIER=needs-fixes; TEXT="AX200. Older family (22000): those code paths exist but have never run with AirDrop.";;
-        iwlwifi-Qu*-hr-*)       CARD_TIER=needs-fixes; TEXT="Wi-Fi 6 HR radio (AX201, or the one-antenna AX101) on Ice, Comet or Tiger Lake. Older family (22000). Users report an AX201 working on Tahoe 26.7.1, platform not stated.";;
+        iwlwifi-cc-a0-*)        CARD_TIER=reported;    TEXT="AX200. Older family (22000). Users report AirDrop working on Sequoia 15.6.";;
+        iwlwifi-Qu*-hr-*)       CARD_TIER=reported;    TEXT="Wi-Fi 6 HR radio (AX201, or the one-antenna AX101) on Ice, Comet or Tiger Lake. Users report the AX201 working on Tahoe 26.7.1 and 26.7.3 and on Sequoia 15.8.1 to 15.8.3. The AX101 is untested.";;
         iwlwifi-Qu*-jf-*)       CARD_TIER=needs-fixes; TEXT="Wi-Fi 5 JF radio (9560, or one-antenna 9461/9462) on Ice or Comet Lake. Older family (22000), untested.";;
         iwlwifi-SoSnj-*|iwlwifi-ma-*|iwlwifi-QuQnj-*)
                                 CARD_TIER=unsupported; TEXT="Needs firmware ($1) that this driver doesn't bundle, so even normal Wi-Fi won't start.";;
@@ -171,17 +171,18 @@ else
         info "Wi-Fi driver loaded firmware: $WIFI_FW"
         describe_firmware "$WIFI_FW"
         case "$CARD_TIER" in
-            tested) pass "$TEXT";;
+            tested|reported) pass "$TEXT";;
             likely) warn "$TEXT";;
             needs-fixes) warn "$TEXT";;
             *) fail "$TEXT";;
         esac
     else
         case "$FAMILY" in
-            ax200)  CARD_TIER=needs-fixes; warn "AX200 (by device ID). Older family (22000), untested with AirDrop.";;
-            qu)     CARD_TIER=needs-fixes; warn "Ice/Comet/Tiger Lake CNVi card (AX201, AX101 or 9560/9461/9462 class). Older family (22000), untested.";;
+            ax200)  CARD_TIER=reported; pass "AX200 (by device ID). Users report AirDrop working on Sequoia 15.6.";;
+            qu)     CARD_TIER=likely; warn "Ice/Comet/Tiger Lake CNVi card (AX201, AX101 or 9560/9461/9462 class). Users report the AX201 working; the others are untested."
+                    info "Load ForbiddenItlwm (or AirportItlwm) and run this again to tell which radio it is.";;
             qnj)    CARD_TIER=unsupported; fail "Discrete 22000 card whose firmware (QuQnj) isn't bundled.";;
-            ax210-family-discrete) CARD_TIER=likely; warn "AX210 (by device ID). Same family as the tested AX211; untested.";;
+            ax210-family-discrete) CARD_TIER=reported; pass "AX210 (by device ID). Users report AirDrop working (Tahoe 26.7.2 and 26.7.3, Sequoia 15.8.1).";;
             so-cnvi) CARD_TIER=likely; warn "Alder Lake or newer CNVi slot. It could hold an AX211 (tested), AX201/AX203 or 9560-class radio."
                      info "Load ForbiddenItlwm (or AirportItlwm) and run this again to tell which radio it is.";;
             snj)    CARD_TIER=unsupported; fail "Device 0x2726 needs SoSnj firmware, which isn't bundled.";;
@@ -441,7 +442,8 @@ fi
 head1 "Verdict"
 case "$CARD_TIER" in
     tested)      CARD_TEXT="Your card is the tested one (AX211).";;
-    likely)      CARD_TEXT="Your card is a close relative of the tested AX211 and should work as is, but nobody has tried it yet.";;
+    reported)    CARD_TEXT="Users report AirDrop working with your card. Results vary between machines; please report yours.";;
+    likely)      CARD_TEXT="Your card is a close relative of the tested AX211 and should work as is, but nobody has reported it yet.";;
     needs-fixes) CARD_TEXT="Your card is in the older Wi-Fi 6 family. It will probably need small driver fixes; your test results would help.";;
     port)        CARD_TEXT="Your card would need a large port of the driver. Not supported.";;
     unsupported) CARD_TEXT="Your card isn't supported.";;
@@ -457,7 +459,7 @@ if [ "$BLOCKERS" -gt 0 ]; then
     echo "  ${RED}$BLOCKERS blocker(s) above stop it working on this Mac regardless of the card.${RST}"
 fi
 case "$CARD_TIER" in
-    tested|likely|needs-fixes)
+    tested|reported|likely|needs-fixes)
         if [ "$BLOCKERS" -eq 0 ]; then echo "  ${GRN}Worth testing.${RST} Use a separate USB with a backed-up EFI."; fi;;
 esac
 echo

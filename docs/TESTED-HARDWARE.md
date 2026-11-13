@@ -49,6 +49,25 @@ The laptop also loads kexts for its own hardware (graphics, audio, touchscreen, 
 - **Transfers:** mostly 100 MB files, plus iPhone sysdiagnose files of up to about 500 MB, in both directions.
 - **When:** November 2026.
 
+## macOS builds
+
+Which macOS builds AirDrop starts on, and what is known about each. Each macOS version has its own kexts.
+
+| macOS | Build | Status |
+| --- | --- | --- |
+| Tahoe | 26.7.1 (25G241) | Tested on hardware |
+| Tahoe | 26.7.3 (25G342) | Reported working by a user (AX210). Wi-Fi side verified offline from Apple's Kernel Debug Kit, BTLEAdvFixup's patterns from Apple's installer |
+| Tahoe | 26.7.2 (25G332) | Reported working by a user (AX210). Wi-Fi side verified offline from Apple's Kernel Debug Kit. BTLEAdvFixup's patterns are the same bytes as 26.7.3's |
+| Sequoia | 15.8 (24H23) | Verified offline from Apple's Kernel Debug Kit. AirDrop needs 0.5.1-test1 or later; not yet confirmed by a user on this build |
+| Sequoia | 15.8.1 (24H32) | Runs a verified kernel, so the build check passes. **AirDrop works both ways with 0.5.1-test1**, reported by users (AX201, AX210; [#13](https://github.com/retropineaple/ForbiddenItlwm/issues/13), [#22](https://github.com/retropineaple/ForbiddenItlwm/issues/22)) |
+| Sequoia | 15.8.2 (24H232) | Same kernel as 15.8.3, so the build check passes. BTLEAdvFixup's patterns match. **AirDrop works both ways with 0.5.1-test1**, reported by a user (AX201, [issue #7](https://github.com/retropineaple/ForbiddenItlwm/issues/7)). Earlier versions didn't send |
+| Sequoia | 15.8.3 (24H241) | Wi-Fi side verified offline from Apple's Kernel Debug Kit, BTLEAdvFixup's patterns from Apple's installer. **AirDrop works both ways with 0.5.1-test1**, reported by a user (AX201, [#16](https://github.com/retropineaple/ForbiddenItlwm/issues/16)) |
+| Sonoma | 14.8.9 (23J631) | Test builds from 0.5.0-test1. Wi-Fi side verified offline from Apple's Kernel Debug Kit, BTLEAdvFixup's patterns from Apple's installer. Not tested on hardware yet |
+| Sonoma | Other 14.4 to 14.8.x builds | The Sonoma kext runs as plain Wi-Fi; AirDrop stays off |
+| Any other build | | AirDrop stays off and normal Wi-Fi works |
+
+The driver checks the build itself when it starts. On a build it doesn't know, it keeps AirDrop off instead of risking a kernel panic. BTLEAdvFixup's patterns are exact bytes from specific `bluetoothd` builds (26.7.1, and 26.7.2 and 26.7.3, which share theirs, on Tahoe; 15.8, 15.8.2 and 15.8.3 on Sequoia; 14.8.9 on Sonoma). On other builds, `tools/compat/check_compat.sh` shows whether they still match.
+
 ## User reports
 
 Users on Reddit and GitHub have reported:
@@ -64,6 +83,11 @@ Users on Reddit and GitHub have reported:
 | Intel AX201 (CNVi) | macOS Sequoia 15.8.3, with 0.3.0-beta1: Wi-Fi works, AirDrop transfers don't (fixed in 0.5.1). 0.4.x didn't start (issue #16, fixed in 0.5.0) |
 | Intel AX210 (AMD Ryzen 7 5700X desktop) | macOS 26.7.3, with 0.5.0-test1: Wi-Fi and AirDrop work, listener on 149 at 80 MHz (issue #14) |
 | Intel AX200 (AMD Ryzen 5 5600H laptop) | macOS Sequoia 15.6, with 0.4.1-beta1 plus local fixes, including the 0.5.1 pool-type fix: AirDrop works both ways on 149 at 80 MHz (issue #19) |
+| Intel AX201 (Comet Lake-H, HP) | macOS Sequoia 15.8.3, with 0.5.1-test1: AirDrop works both ways (issue #16) |
+| Intel AX201 (Comet Lake-H, MSI) | macOS Sequoia 15.8.1, with 0.5.1: AirDrop works both ways (issue #13) |
+| Intel AX210 (AMD Ryzen 7 5800H laptop) | macOS Sequoia 15.8.1, with 0.5.1-test1: AirDrop works both ways; Mac → iPhone slower (issue #22) |
+| Intel AX210 (Xiaomi Mi Notebook Pro) | macOS 26.7.2, with 0.5.0-test1: AirDrop works both ways, listener on 149 at 80 MHz in China (issue #18) |
+| Intel AX201 (Tiger Lake-H, Dell G15) | macOS 26.7.3, with 0.5.0-test1: AirDrop works both ways; on channel 6 in Japan (issue #23) |
 | Intel AX411 class (AX1690i) | macOS 26.7.2, with 0.4.1-beta1: AirDrop works both ways, on channel 6 (issue #15) |
 
 The project hasn't verified these reports. The platforms, and which features were tried, vary between them.

@@ -1,12 +1,13 @@
 # Will AirDrop work on my Intel Wi-Fi card?
 
-These scripts are for testers. All three are read-only: they change nothing on your computer, need no extra software, and send nothing anywhere. The two collectors each write one text file that you read first and then share with the project.
+These scripts are for testers. All four are read-only: they change nothing on your computer, need no extra software, and send nothing anywhere. The two collectors each write one text file that you read first and then share with the project.
 
 | Script | Runs on | What it does |
 | --- | --- | --- |
 | `check_compat.sh` | macOS | Checks the macOS build, your Intel Wi-Fi and Bluetooth hardware and the kexts you have loaded, and says how likely the driver is to work |
 | `collect_hw_macos.sh` | macOS | Writes a hardware report for adding or debugging support |
 | `collect_hw_linux.sh` | Linux | Writes a richer hardware report, from a Linux live USB on the same laptop, for cards the driver doesn't support yet |
+| `airdrop_measure.sh` | macOS | Measures AirDrop transfer speed and connect times in both directions, from macOS's own AirDrop log |
 
 ## 1. Check
 
@@ -38,22 +39,37 @@ What the verdict means:
 | Verdict | Cards | Meaning |
 | --- | --- | --- |
 | Tested | AX211 | The card this was developed on |
-| Close relative | AX210, AX411, and AX201/AX203 or 9560-class radios on Alder Lake and newer | Same family and firmware generation as the AX211. Should work as is. Users report the AX210 and an AX1690i (AX411 class) working |
-| Older family | AX200, and AX201/AX101 or 9560/9461/9462 on Ice, Comet or Tiger Lake | Untested code paths. Will probably need small fixes. One-antenna cards (AX101, 9461, 9462) need more |
+| Reported working | AX210, AX411 class (AX1690i), AX201 on Ice, Comet or Tiger Lake, AX200 | Users report AirDrop working (see [docs/TESTED-HARDWARE.md](../../docs/TESTED-HARDWARE.md#user-reports)) |
+| Close relative | AX201/AX203 or 9560-class radios on Alder Lake and newer | Same family and firmware generation as the AX211. Should work as is, but nobody has reported it yet |
+| Older family | AX101, and 9560/9461/9462 on Ice, Comet or Tiger Lake | Untested code paths. Will probably need small fixes. One-antenna cards (AX101, 9461, 9462) need more |
 | Large port | 7260, 7265, 3160, 3165, 3168, 8260, 8265, 9260, and the 9560/9461/9462 on Coffee and Cannon Lake | Not supported |
 | Unsupported | Pre-2013 cards, Wi-Fi 7 (BE200, BE201), Meteor Lake CNVi | Not supported |
 
 Two things stop it working whatever the card:
-- **The macOS build.** With the Tahoe kexts, AirDrop starts on macOS 26.7.1 (25G241), 26.7.2 (25G332) and 26.7.3 (25G342). With the Sequoia kexts, on 15.8 (24H23), 15.8.2 (24H232, 15.8.3's kernel) and 15.8.3 (24H241), and as "expected" on other 15.8.x builds. With the Sonoma kexts (test build), on 14.8.9 (23J631). On other builds the driver keeps AirDrop off and works as plain Wi-Fi. The check also tests whether BTLEAdvFixup's patterns for your macOS version (taken from 26.7.1, 26.7.3, 15.8.3 or 14.8.9; the Sequoia set also matches 15.8 and 15.8.2) match your `bluetoothd`.
+- **The macOS build.** With the Tahoe kexts, AirDrop starts on macOS 26.7.1 (25G241), 26.7.2 (25G332) and 26.7.3 (25G342). With the Sequoia kexts, on 15.8 (24H23), 15.8.1 (24H32) and 15.8.2 (24H232), which run checked kernels, and 15.8.3 (24H241), and as "expected" on other 15.8.x builds. With the Sonoma kexts (test build), on 14.8.9 (23J631). On other builds the driver keeps AirDrop off and works as plain Wi-Fi. The check also tests whether BTLEAdvFixup's patterns for your macOS version (taken from 26.7.1, 26.7.3, 15.8.3 or 14.8.9; the Sequoia set also matches 15.8 and 15.8.2) match your `bluetoothd`.
 - **Bluetooth.** AirDrop finds devices over Bluetooth LE first, so it needs a working Intel Bluetooth controller.
 
 A good card can still be slow. The firmware opens channel 149, the fast mode, only after a nearby network tells it which country it is in. Until then the driver falls back to channel 6, which is very slow. Most home and office routers advertise their country. In the project's tests, an iPhone's Personal Hotspot switched on nearby (without joining it) also taught the firmware. Where the firmware marks 149 to 161 passive (China, for example), 0.5.0 uses them once it has heard a network's beacon there, as Linux does. Otherwise the driver follows the firmware's choice, and setting `itlwm_cc` doesn't help: it only changes the code macOS displays.
 
-**User reports:** users have reported the Tahoe kext working with an AX201 and with AX211s in other machines (26.7.1), the AX210 (26.7.2, 26.7.3) and an AX1690i (26.7.2), and Wi-Fi working with the Sequoia kext on AX201s. These reports aren't verified, and the table above is unchanged. See [docs/TESTED-HARDWARE.md](../../docs/TESTED-HARDWARE.md#user-reports).
+**User reports:** users have reported AirDrop working with the AX201 (Tahoe 26.7.1 and 26.7.3, Sequoia 15.8.1 to 15.8.3), AX211s in other machines (26.7.1), the AX210 (26.7.2, 26.7.3, Sequoia 15.8.1), an AX1690i (26.7.2) and the AX200 (Sequoia 15.6). The project hasn't verified these reports. See [docs/TESTED-HARDWARE.md](../../docs/TESTED-HARDWARE.md#user-reports).
 
 On a CNVi laptop (Alder Lake and newer) the PCI ID alone can't tell an AX211 from an AX201 or a 9560. Load ForbiddenItlwm (or AirportItlwm) and run the check again: the firmware it loads names the radio.
 
-## 2. Collect
+## 2. Measure
+
+```bash
+bash airdrop_measure.sh
+```
+
+Leave it running, then send and receive files with AirDrop. For each transfer it prints the direction, the size, the speed macOS measured, and the connect times; press Ctrl-C to stop. `bash airdrop_measure.sh --last 2h` reads transfers you already did, and `--csv results.csv` also saves one line per transfer.
+
+- **Mac → iPhone:** macOS's own timings for the connection (HELLO) and the request (ASK, which includes the iPhone accepting), and the total time.
+- **iPhone → Mac:** the time from the first connection the iPhone opens to its request, and from the request to the end of the data. The moment you tap the Mac on the iPhone isn't visible on the Mac, so the time before that first connection isn't counted.
+- With ForbiddenItlwm's AirDrop build running, it also prints the listener's channel, the block-ack state and how many of the iPhone's 16 time slots it spends on our channel.
+
+It prints and saves only sizes, speeds and timings: no file names, device names or addresses.
+
+## 3. Collect
 
 On macOS:
 
