@@ -1,12 +1,12 @@
 # Installing ForbiddenItlwm
 
-This beta has been tested on one hackintosh: an HP Envy x360 13-bf with an Intel AX211, on macOS 26.7.1 (25G241), booted with OpenCore 1.0.8, with an iPhone 11. Users report it working on 26.7.2 (25G332) and 26.7.3 (25G342). The Sequoia build (15.8.x) was verified offline. Users report Wi-Fi working on it. AirDrop needs 0.5.1-test1 or later; users confirmed it working on 15.8.2 and 15.6. The Sonoma build (14.8.9, test build) was verified offline only. The details are in [TESTED-HARDWARE.md](TESTED-HARDWARE.md). Read the whole page before you start.
+This beta has been tested on one hackintosh: an HP Envy x360 13-bf with an Intel AX211, on macOS 26.7.1 (25G241), booted with OpenCore 1.0.8, with an iPhone 11. Users report it working on 26.7.2 (25G332) and 26.7.3 (25G342). The Sequoia build (15.8.x) was verified offline. Users report Wi-Fi working on it. AirDrop needs 0.5.1-test1 or later; users confirmed it working on 15.8.1, 15.8.2, 15.8.3 and 15.6. The Sonoma build (14.8.9, test build) was verified offline only. The details are in [TESTED-HARDWARE.md](TESTED-HARDWARE.md). Read the whole page before you start.
 
 ## Before you start
 
 - **Check your macOS build:** `sw_vers -buildVersion`.
   - **Tahoe:** `25G241`, `25G332` or `25G342`. Use the Tahoe kexts.
-  - **Sequoia:** `24H23` (15.8) and `24H241` (15.8.3) were checked offline, and `24H232` (15.8.2) has 15.8.3's kernel; `24H32` (15.8.1) is expected to work. Use the Sequoia kexts. AirDrop transfers on Sequoia need 0.5.1-test1 or later.
+  - **Sequoia:** `24H23` (15.8) and `24H241` (15.8.3) were checked offline, and `24H32` (15.8.1) and `24H232` (15.8.2) run those verified kernels. Use the Sequoia kexts. AirDrop transfers on Sequoia need 0.5.1-test1 or later.
   - **Sonoma (test build):** `23J631` (14.8.9) was checked offline. Use the Sonoma kexts. On other Sonoma 14.4+ builds the Sonoma kext runs as plain Wi-Fi.
   - On any other build the driver keeps AirDrop off and works as plain Wi-Fi.
 - **Use the kexts for your macOS version.** ForbiddenItlwm and BTLEAdvFixup are built separately for Tahoe, Sequoia and Sonoma. A ForbiddenItlwm built for the other version refuses to start, and BTLEAdvFixup's patterns won't match.
@@ -115,7 +115,7 @@ All of this goes on the **USB stick's** EFI.
    ioreg -l -w0 | grep -E '"ItlwmAWDL(InterfaceBuild|BuildCheck)"|"ITLAWDLCoex(Added|Channel|CountryLearned)"'
    ```
 
-   You should see `forbidden-0.5.1-test1` (`forbidden-0.5.1-test1-sequoia` on Sequoia, `forbidden-0.5.1-test1-sonoma` on Sonoma), `BuildCheck` `verified` (or `expected: …` on 15.8.1), `Added` Yes, `Channel` 149 and `CountryLearned` Yes. `Channel` 6 means the firmware hasn't opened channel 149: see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+   You should see `forbidden-0.5.3-test1` (`forbidden-0.5.3-test1-sequoia` on Sequoia, `forbidden-0.5.3-test1-sonoma` on Sonoma), `BuildCheck` `verified`, `Added` Yes, `Channel` 149 and `CountryLearned` Yes. `Channel` 6 means the firmware hasn't opened channel 149: see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 4. Or run `bash tools/compat/check_compat.sh` again. It now also reads the listener's state.
 5. Turn on AirDrop on both devices. Contacts Only works when the iPhone and the Mac share an Apple Account or know each other as contacts. Otherwise use Everyone for 10 Minutes.
@@ -123,7 +123,7 @@ All of this goes on the **USB stick's** EFI.
 
 ## Before a macOS update
 
-Boot once without `-btleadv` (or with BTLEAdvFixup disabled), then update. While BTLEAdvFixup is active, `bluetoothd`'s patched pages are what the system reads, and an incremental update that checks the file can fail. Then check that the new build is supported before turning `-btleadv` back on: see the [requirements](../README.md#requirements).
+Boot once without `-btleadv` (or with BTLEAdvFixup disabled), then update. While BTLEAdvFixup is active, `bluetoothd`'s patched pages are what the system reads, and an incremental update that checks the file can fail. Then check that the new build is supported before turning `-btleadv` back on: see [the macOS builds](TESTED-HARDWARE.md#macos-builds).
 
 ## Uninstalling
 

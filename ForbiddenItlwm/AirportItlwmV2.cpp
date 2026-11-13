@@ -1008,7 +1008,7 @@ IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
 {
 #if defined(ITL_AWDL_NATIVE)
     static uint32_t awdlSyncMIBuilt, awdlSyncPSFBuilt, awdlSyncFallbackBuilt, awdlSyncMIWanted, awdlSyncMIMissing,
-        awdlSyncPeerTLVsRefused, awdlSyncFailed;
+        awdlSyncPeerTLVsRefused, awdlSyncFailed, awdlSyncInfraStripped;
     if (!packet || *packet) return kIOReturnBadArgument;
     if (!awdlInterfaceTest || !_fWorkloop || !_fWorkloop->inGate() ||
         !awdlManagementInputEnabled || !fAWDLInterface) {
@@ -1061,6 +1061,11 @@ IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
         }
         off += 3+count;
     }
+    // -itlawdlhideinfra: macOS's Data Path State TLV names the Mac's Wi-Fi network and channel. With the
+    // Mac's Wi-Fi on the listener's channel, the iPhone never answered our Block Ack request (#24); this
+    // test leaves that information out, in both the template and the master indication.
+    if (valid && awdlHideInfra && ItlAWDL::stripDataPathInfra(snapshot->staticTLVs, &snapshot->templateLength))
+        ++awdlSyncInfraStripped;
     // Apple-style schedule: router entries and the peer's AW counter, when the driver plans them.
     uint8_t planChannels[16], planClasses[16];
     uint16_t planCounter = 0, planDown = 0, planPeriod = 0;
@@ -1135,6 +1140,8 @@ IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
         setProperty("ItlwmAWDLSyncMIMissing", awdlSyncMIMissing, 32);
         setProperty("ItlwmAWDLSyncPeerTLVsRefused", awdlSyncPeerTLVsRefused, 32);
         setProperty("ItlwmAWDLSyncFailed", awdlSyncFailed, 32);
+        if (awdlHideInfra)
+            setProperty("ItlwmAWDLSyncInfraStripped", awdlSyncInfraStripped, 32);
     }
     return error;
 #else
@@ -1391,6 +1398,8 @@ bool AirportItlwm::init(OSDictionary *properties)
     setProperty("ItlwmAWDLBuildCheck", itlAWDLBuildStatus());
     awdlRawSamples = PE_parse_boot_argn("-itlawdlsamples", &awdlBootValue, sizeof(awdlBootValue));
     awdlExtendFrames = PE_parse_boot_argn("-itlawdlelicit", &awdlBootValue, sizeof(awdlBootValue));
+    awdlHideInfra = PE_parse_boot_argn("-itlawdlhideinfra", &awdlBootValue, sizeof(awdlBootValue));
+    setProperty("ItlwmAWDLHideInfra", awdlHideInfra);
     awdlCreateRequests = 0;
     awdlManagementInputEnabled = false;
     awdlManagementActive = 0;

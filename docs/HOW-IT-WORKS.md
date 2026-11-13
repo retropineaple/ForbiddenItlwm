@@ -67,7 +67,7 @@ Intel firmware starts in world mode, where channels 149 to 161 are listen-only. 
 ### 7. Which macOS builds AirDrop starts on
 
 Each macOS version has its own build (`tools/build.py --target tahoe|sequoia|sonoma`), with that version's IO80211 class declarations, and refuses to start on any other macOS version. `ForbiddenItlwm/AWDLBuildGuard.cpp` then decides once, at startup, and only lets AirDrop start when both of these hold:
-- **The kernel is one whose Wi-Fi stack was verified.** Tahoe: 26.7.1 on hardware, and 26.7.2 and 26.7.3 offline (users have since reported both working). Sequoia: 15.8 and 15.8.3 offline (15.8.2 runs 15.8.3's kernel), and other 15.8.x kernels as "expected". Sonoma: 14.8.9 offline, with no "expected" range. For 26.7.2 and 26.7.3, the Kernel Debug Kits showed the following matching 26.7.1:
+- **The kernel is one whose Wi-Fi stack was verified.** Tahoe: 26.7.1 on hardware, and 26.7.2 and 26.7.3 offline (users have since reported both working). Sequoia: 15.8 and 15.8.3 offline (15.8.1 and 15.8.2 run those kernels), and other 15.8.x kernels as "expected". Sonoma: 14.8.9 offline, with no "expected" range. For 26.7.2 and 26.7.3, the Kernel Debug Kits showed the following matching 26.7.1:
   - IOSkywalkFamily is identical.
   - IO80211Family's AWDL, interface, buffer and registration code is instruction for instruction the same.
   - All 568, 505 and 461 slots of the three virtual tables match.

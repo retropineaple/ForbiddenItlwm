@@ -272,6 +272,8 @@ public:
     IO80211VirtualInterface *fAWDLInterface;
     bool awdlInterfaceTest;
     bool awdlExtendFrames;
+    // -itlawdlhideinfra (test, #24): sync frames leave out the Mac's Wi-Fi network and channel.
+    bool awdlHideInfra;
     uint16_t awdlProbeSequence = 0;
     bool awdlManagementInputEnabled;
     UInt32 awdlManagementActive;
