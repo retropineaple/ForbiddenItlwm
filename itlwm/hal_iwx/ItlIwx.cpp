@@ -181,6 +181,13 @@ static int awdlCoexOrphanQueue = -1;
 static uint32_t awdlReclaimRefused; // Completion boundaries refused by iwx_txq_reclaim_ok.
 static uint32_t awdlCoexSetupToken;
 static int awdlCoexSetupGen = -1;
+// Covers station creation through queue allocation and any cancellation rollback.
+static int awdlCoexTxSettingUpGen = -1;
+static uint32_t awdlCoexTxSettingUpOwner, awdlCoexTxSettingUpNext;
+// Station eligibility is published only after net80211 commits a successful RUN.
+// A failed transition leaves it withdrawn until a later successful RUN/restart.
+static int awdlCoexStationReadyGen = -1, awdlCoexStationTransitionGen = -1;
+static uint32_t awdlCoexStationTransitionOwner, awdlCoexStationTransitionNext;
 static bool awdlCoexSetupCurrent(int generation);
 static bool awdlCoexBaQueueCurrent(int generation, uint32_t listener, uint32_t peer);
 // Where its last queue allocation stopped, and the number the firmware gave.
@@ -256,6 +263,7 @@ detach(IOPCIDevice *device)
             timeout_del(&that->com.sc_ic.ic_bgscan_timeout);
             that->com.sc_flags |= IWX_FLAG_SHUTDOWN;
             that->com.sc_generation++;
+            that->getMainCommandGate()->commandWakeup(&awdlCoexAddingGen);
             pci->setBusMasterEnable(false);
             auto intr = that->com.ih;
             if (intr && intr->intr)
@@ -15181,9 +15189,8 @@ iwx_run(struct iwx_softc *sc)
               DEVNAME(sc), err);
         return err;
     }
-    // The probe's failure is recorded, never passed on: Wi-Fi carries on without the listener.
-    if (awdlCoexProbe && awdlCoexWant)
-        (void)awdlCoexListener(sc, true);
+    // Listener restoration follows the RUN commit in iwx_newstate_task: until
+    // then the station transition still excludes the periodic coex cycle task.
     return 0;
 }
 
@@ -15483,6 +15490,53 @@ awdlCoexRetarget(struct iwx_softc *sc)
 int ItlIwx::
 awdlCoexListener(struct iwx_softc *sc, bool add)
 {
+    const int gen = sc->sc_generation;
+    if (add) {
+        if (awdlCoexStationTransitionGen == gen)
+            return EBUSY;
+        if (awdlCoexBrokenGeneration == gen)
+            return EIO;
+        if (awdlCoexStationReadyGen != gen || sc->sc_ic.ic_state != IEEE80211_S_RUN || awdlStopping ||
+            (sc->sc_flags & IWX_FLAG_SHUTDOWN))
+            return ECANCELED;
+    }
+    if (!add) {
+        // Cancellation is not completion: listener/TX setup sleeping in a firmware
+        // command must finish rollback before any listener or station context goes.
+        if (awdlCoexAddingGen == gen || awdlCoexTxSettingUpGen == gen) {
+            awdlCoexRemoveRequested = true;
+            ++awdlCoexToken;
+        }
+        AbsoluteTime deadline;
+        clock_interval_to_deadline(5, kSecondScale, reinterpret_cast<uint64_t *>(&deadline));
+        while (awdlCoexAddingGen == gen || awdlCoexRemovingGen == gen || awdlCoexTxSettingUpGen == gen) {
+            const int result = getMainCommandGate()->commandSleep(&awdlCoexAddingGen, deadline, THREAD_UNINT);
+            if (gen != sc->sc_generation || (sc->sc_flags & IWX_FLAG_SHUTDOWN))
+                return ECANCELED;
+            if (result != THREAD_AWAKENED) {
+                awdlCoexBrokenGeneration = gen;
+                return ETIMEDOUT;
+            }
+        }
+        if (awdlCoexBrokenGeneration == gen)
+            return EIO;
+        // A TX station can outlive the listener's published state. It still
+        // owns a firmware queue, but there is no MAC/binding to remove here.
+        if (!awdlCoexAdded && awdlCoexTxStaAdded && awdlCoexGeneration == gen) {
+            ++awdlCoexToken;
+            awdlCoexRemovingGen = gen;
+            const int err = awdlCoexTxTeardown(sc);
+            if (gen != sc->sc_generation)
+                return ECANCELED;
+            awdlCoexRemovingGen = -1;
+            getMainCommandGate()->commandWakeup(&awdlCoexAddingGen);
+            if (err) {
+                ++awdlCoexTeardownErrors;
+                awdlCoexBrokenGeneration = gen;
+            }
+            return err;
+        }
+    }
     struct ieee80211com *ic = &sc->sc_ic;
     struct iwx_node *in = (struct iwx_node *)ic->ic_bss;
     if (!in || !in->in_phyctxt)
@@ -15520,27 +15574,18 @@ awdlCoexListener(struct iwx_softc *sc, bool add)
         awdlCoexGeneration = sc->sc_generation;
         ++awdlCoexToken;
     }
-    // A removal while an add waits on the firmware: the add sees this and undoes what it made.
-    if (!add && awdlCoexAddingGen == sc->sc_generation) {
-        awdlCoexRemoveRequested = true;
-        ++awdlCoexToken;
-        return 0;
-    }
     if (add == awdlCoexAdded)
         return 0;
-    const int gen = sc->sc_generation;
     if (awdlCoexRemovingGen == gen || (add && awdlCoexAddingGen == gen))
         return EBUSY;
     // Anything that was waiting on the firmware for the old state sees this and stops.
     const uint32_t tok = ++awdlCoexToken;
-    // After a failed teardown the firmware may still hold our context or station.
-    if (add && awdlCoexBrokenGeneration == sc->sc_generation)
-        return EIO;
     // While adding: no second add, and a removal request makes this add roll back. Cleared on every return.
     struct AddingScope {
         bool on;
         uint32_t owner;
-        explicit AddingScope(bool a, int g) : on(a), owner(0) {
+        ItlIwx *driver;
+        explicit AddingScope(bool a, int g, ItlIwx *d) : on(a), owner(0), driver(d) {
             if (on) {
                 owner = ++awdlCoexAddingNext;
                 awdlCoexAddingOwner = owner;
@@ -15553,9 +15598,10 @@ awdlCoexListener(struct iwx_softc *sc, bool add)
             if (on && awdlCoexAddingOwner == owner) {
                 awdlCoexAddingGen = -1;
                 awdlCoexAddingOwner = 0;
+                driver->getMainCommandGate()->commandWakeup(&awdlCoexAddingGen);
             }
         }
-    } addingScope(add, gen);
+    } addingScope(add, gen, this);
     // Each firmware command can sleep in the gate. After each, the add goes on only for the same listener
     // operation, firmware and association, with no removal or detach meanwhile; the BSS node is fetched again.
     // The association this add is for: its node, the station's PHY context, and the station's MAC id.
@@ -15568,9 +15614,10 @@ awdlCoexListener(struct iwx_softc *sc, bool add)
         in = (struct iwx_node *)ic->ic_bss;
         if (!in || in->in_phyctxt != addStationPhy || IWX_FW_CMD_ID_AND_COLOR(in->in_id, in->in_color) != addStationMac)
             return false;
-        // Not ic_state: the add runs inside iwx_run, before net80211 commits RUN. A RUN exit arrives as a
-        // removal request, which changes the token.
-        return tok == awdlCoexToken && gen == sc->sc_generation && !awdlStopping && !awdlCoexRemoveRequested &&
+        // A station transition withdraws eligibility before sleeping; removal
+        // also changes the token so this add rolls back before the station goes.
+        return tok == awdlCoexToken && gen == sc->sc_generation && awdlCoexStationReadyGen == gen &&
+            awdlCoexStationTransitionGen != gen && !awdlStopping && !awdlCoexRemoveRequested &&
             in && in->in_phyctxt;
     };
     // Its own context on channel 6 when asked for and allowed (the firmware marks 6 active, no radar, and
@@ -15794,6 +15841,7 @@ awdlCoexListener(struct iwx_softc *sc, bool add)
         // The host can't take the context back by itself, so it forgets it either way; but after any
         // failure nothing is added again until the firmware restarts.
         awdlCoexRemovingGen = -1;
+        getMainCommandGate()->commandWakeup(&awdlCoexAddingGen);
         ++awdlCoexRemoves;
         if (!err)
             err = macErr;
@@ -15813,6 +15861,31 @@ awdlCoexListener(struct iwx_softc *sc, bool add)
 int ItlIwx::
 awdlCoexTxSetup(struct iwx_softc *sc)
 {
+    const int gen = sc->sc_generation;
+    if (awdlCoexStationTransitionGen == gen || awdlCoexTxSettingUpGen == gen || awdlCoexRemovingGen == gen)
+        return EBUSY;
+    if (awdlCoexStationReadyGen != gen || sc->sc_ic.ic_state != IEEE80211_S_RUN ||
+        !awdlCoexAdded || awdlCoexGeneration != gen || awdlCoexRemoveRequested || awdlStopping ||
+        (sc->sc_flags & IWX_FLAG_SHUTDOWN) || awdlCoexBrokenGeneration == gen)
+        return ECANCELED;
+    // Removal waits for this entire operation, including the unpublished station's
+    // rollback. Neither setup nor its queue allocator calls listener removal.
+    struct SetupScope {
+        ItlIwx *driver;
+        uint32_t owner;
+        explicit SetupScope(ItlIwx *d, int g) : driver(d), owner(++awdlCoexTxSettingUpNext) {
+            awdlCoexTxSettingUpOwner = owner;
+            awdlCoexTxSettingUpGen = g;
+        }
+        ~SetupScope() {
+            // A stale setup must not clear a newer generation's operation.
+            if (awdlCoexTxSettingUpOwner == owner) {
+                awdlCoexTxSettingUpGen = -1;
+                awdlCoexTxSettingUpOwner = 0;
+                driver->getMainCommandGate()->commandWakeup(&awdlCoexAddingGen);
+            }
+        }
+    } setupScope(this, gen);
     struct iwx_add_sta_cmd cmd;
     memset(&cmd, 0, sizeof(cmd));
     cmd.sta_id = IWX_MONITOR_STA_ID;
@@ -15825,9 +15898,9 @@ awdlCoexTxSetup(struct iwx_softc *sc)
     // Who this setup is for. Each firmware command can sleep in the gate, and on return the listener
     // may be gone, the association changed, the firmware restarted or the driver detaching.
     const uint32_t token = awdlCoexToken;
-    const int gen = sc->sc_generation;
     auto stillOurs = [&]() {
-        return token == awdlCoexToken && gen == sc->sc_generation && awdlCoexAdded && !awdlStopping;
+        return token == awdlCoexToken && gen == sc->sc_generation && awdlCoexStationReadyGen == gen &&
+            awdlCoexStationTransitionGen != gen && awdlCoexAdded && !awdlStopping;
     };
     struct iwx_rm_sta_cmd rm;
     memset(&rm, 0, sizeof(rm));
@@ -16243,7 +16316,29 @@ iwx_newstate_task(void *psc)
         splx(s);
         return;
     }
-    
+    // Own the complete station transition, not just listener teardown. Firmware
+    // waits below leave ic_state at RUN until the final net80211 commit, so the
+    // cycle task must not use that old state to recreate a listener meanwhile.
+    if (awdlCoexStationTransitionGen == generation) {
+        splx(s);
+        return;
+    }
+    struct StationTransitionScope {
+        uint32_t owner;
+        explicit StationTransitionScope(int gen) : owner(++awdlCoexStationTransitionNext) {
+            awdlCoexStationTransitionOwner = owner;
+            awdlCoexStationTransitionGen = gen;
+            awdlCoexStationReadyGen = -1;
+        }
+        void finish() {
+            if (awdlCoexStationTransitionOwner == owner) {
+                awdlCoexStationTransitionGen = -1;
+                awdlCoexStationTransitionOwner = 0;
+            }
+        }
+        ~StationTransitionScope() { finish(); }
+    } stationTransition(generation);
+
     if (ostate == IEEE80211_S_SCAN) {
         if (nstate == ostate) {
             if (sc->sc_flags & IWX_FLAG_SCANNING) {
@@ -16259,9 +16354,23 @@ iwx_newstate_task(void *psc)
     if (nstate <= ostate) {
         switch (ostate) {
             case IEEE80211_S_RUN:
-                if (awdlCoexProbe)
-                    (void)that->awdlCoexListener(sc, false);
+                // Reassociation must not inherit a listener that is still owned by the
+                // previous station context.  Use the actual listener state rather than
+                // only the boot-time probe flag: an in-flight add or queue can survive
+                // the flag's intended lifetime and block the next association.
+                if (awdlCoexAdded || awdlCoexAddingGen == sc->sc_generation || awdlCoexTxStaAdded ||
+                    awdlCoexRemovingGen == sc->sc_generation || awdlCoexTxSettingUpGen == sc->sc_generation) {
+                    err = that->awdlCoexListener(sc, false);
+                    // Listener commands and completion waits drop the gate. Never
+                    // stop the new firmware generation's station on their return.
+                    if (generation != sc->sc_generation || (sc->sc_flags & IWX_FLAG_SHUTDOWN))
+                        goto out;
+                    if (err)
+                        goto out;
+                }
                 err = that->iwx_run_stop(sc);
+                if (generation != sc->sc_generation || (sc->sc_flags & IWX_FLAG_SHUTDOWN))
+                    goto out;
                 if (err)
                     goto out;
                 /* FALLTHROUGH */
@@ -16321,8 +16430,19 @@ out:
     if (generation == sc->sc_generation && (sc->sc_flags & IWX_FLAG_SHUTDOWN) == 0) {
         if (err)
             task_add(systq, &sc->init_task);
-        else
+        else {
             sc->sc_newstate(ic, nstate, arg);
+            if (nstate == IEEE80211_S_RUN && ic->ic_state == IEEE80211_S_RUN &&
+                generation == sc->sc_generation && !(sc->sc_flags & IWX_FLAG_SHUTDOWN) &&
+                awdlCoexStationTransitionOwner == stationTransition.owner) {
+                awdlCoexStationReadyGen = generation;
+                stationTransition.finish();
+                // Probe failure never fails Wi-Fi. A concurrent exit cancels and
+                // waits for this add just like any other listener operation.
+                if (awdlCoexProbe && awdlCoexWant)
+                    (void)that->awdlCoexListener(sc, true);
+            }
+        }
     }
     //    refcnt_rele_wake(&sc->task_refs);
     splx(s);
@@ -17469,6 +17589,7 @@ iwx_stop(struct _ifnet *ifp)
     
     sc->sc_flags |= IWX_FLAG_SHUTDOWN; /* Disallow new tasks. */
     sc->sc_generation++;
+    getMainCommandGate()->commandWakeup(&awdlCoexAddingGen);
     getMainCommandGate()->commandWakeup(&sc->sc_uc.uc_intr);
     getMainCommandGate()->commandWakeup(&sc->sc_init_complete);
     getMainCommandGate()->commandWakeup(&ic->ic_state);
