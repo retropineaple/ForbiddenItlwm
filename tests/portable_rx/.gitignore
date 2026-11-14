@@ -1,0 +1,11 @@
+*.cpp
+!test-channel-lease.cpp
+!fixtures/*.cpp
+*.log
+*.dSYM/
+test-picker
+test-beacon-hints
+test-parser-country
+test-sequence-observation
+test-channel-commands
+test-retarget

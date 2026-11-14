@@ -62,7 +62,7 @@ __attribute__((visibility("hidden"))) int _kext_apple_cc=__APPLE_CC__;
         # The inherited driver stays at -w. This project's own files get warnings, and
         # the two classes that hide memory bugs (sign mixing, uninitialised reads) fail the build.
         if src.is_relative_to(R/'ForbiddenItlwm'):extra+=PROJECT_WARNINGS
-        cmd=base+extra
+        cmd=base+extra+['-MD','-Xclang','-sys-header-deps','-MF',str(o.with_suffix('.d'))]
         if PROJECT_WARNINGS[0] in extra:cmd=[x for x in cmd if x!='-w']
         r=subprocess.run(cmd+['-c',str(src),'-o',str(o)],capture_output=True,text=True)
         if not r.returncode and r.stderr.strip():print(f'--- warnings in {src.relative_to(R)}\n{r.stderr[-3000:]}')

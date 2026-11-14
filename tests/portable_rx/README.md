@@ -1,0 +1,7 @@
+# portable-rx host regressions
+
+Run `python3 tests/portable_rx/run.py` on macOS with Python3 and Xcode Command Line Tools. No root, network probes or driver loading. Tests extract current production C++ where appropriate and use ASan/UBSan, injected firmware failures and frozen pre-change oracle excerpts. `fixtures/` are source excerpts from earlier local stages derived from the same ForbiddenItlwm baseline, used only for byte/guard equivalence; they are not built into the Kext. `rx_handoff_delta.py` identifies the separately tested challenger-recording delta.
+
+The runner orders fixture generators before dependent tests and writes generated harnesses/binaries only in ignored paths or temporary folders. It covers region/picker/parser/retarget checks, short-TCP ownership and bounded windows, current-channel leases, filter restoration, lifecycle/defaults, idle receive handoff and single-frame rate guards. It does not certify RF behavior or prove the known discovery fault cured.
+
+For this upstream port, the frozen RX oracle includes the upstream `69e88fa` received-byte DMA-copy change. The peer-sequence test checks both the retained upstream diagnostic counters and regional freshness tracking. Country tests preserve current upstream behavior on the first usable country; the picker test retains the upstream same-band override. Fixtures remain host-only and are not linked into the Kext.
