@@ -15422,13 +15422,20 @@ awdlCoexPickOwn(struct iwx_softc *sc, uint8_t *width)
 }
 
 // ---- Apple-style coexistence ----------------------------------------------------------
-// Router entries per Apple's _channelSeqSlotTypes rows: Data + Infra Data (7) and Data + Infra Stream (6) give
-// the router their type-9 entries. Entries 6, 7, 14 and 15 are always the router's here: they are type 6 in
-// Apple's data tables and the router's in its FollowsInfra mode, and an Intel station needs them to keep
-// hearing beacons while AWDL data moves (Apple's chips do that in firmware). Idle therefore keeps 4 of 16.
-static const uint8_t kAppleInfraIdle[16] = {0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1};
-static const uint8_t kAppleInfraData[16] = {0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1};
-static const uint8_t kAppleInfraStream[16] = {0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1};
+// Router entries exactly as Apple's _channelSeqSlotTypes rows (IO80211Family, Tahoe 26.7.3), by state:
+//  - AWDL data, router idle    (state 8, "Data + Infra Idle"):   none in Apple's table; we keep entry 15 for
+//    the router (one of its usual router entries), so the station hears its AP at least once a cycle;
+//  - AWDL data, router data    (state 7, "Data + Infra Data"):   entries 4, 5, 12-15;
+//  - AWDL data, router stream  (state 6, "Data + Infra Stream"): entries 4, 5, 11-15;
+//  - no AWDL data              (state 3, "Idle"):                entries 6, 7, 14, 15.
+// State 3 also turns the radio off in entries 3-5 and 11-13; we keep listening there (that's only power
+// saving on Apple's side). The relaxed beacon miss covers the station while AWDL data takes most entries.
+static const uint8_t kAppleDataInfraIdle[16] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+static const uint8_t kAppleDataInfraData[16] = {0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1};
+static const uint8_t kAppleDataInfraStream[16] = {0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1};
+static const uint8_t kAppleIdle[16] = {0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1};
+// AWDL counts as moving data this long after the last data frame (macOS leaves data mode on a similar timer).
+constexpr uint64_t kAppleDataHoldUS = 3000000ULL;
 
 uint64_t itlAWDLUptimeUS() { return awdlUptimeUS(); }
 
@@ -15499,8 +15506,9 @@ awdlAppleTick(struct iwx_softc *sc)
         station > 14 && (station != listener || ic->ic_bss->ni_chw == IEEE80211_CHAN_WIDTH_160)) {
         // A 2.4 GHz station keeps 0 router entries, as Apple's sdbModeAnd24Infra state does: on the AX201 a
         // 2.4 GHz station beside a 5 GHz listener held up in every test.
-        memcpy(away, awdlInfraClass == 2 ? kAppleInfraStream : awdlInfraClass == 3 ? kAppleInfraData :
-               kAppleInfraIdle, sizeof(away));
+        const bool awdlData = awdlCoexLastDataUS && now - awdlCoexLastDataUS < kAppleDataHoldUS;
+        memcpy(away, !awdlData ? kAppleIdle : awdlInfraClass == 2 ? kAppleDataInfraStream :
+               awdlInfraClass == 3 ? kAppleDataInfraData : kAppleDataInfraIdle, sizeof(away));
         active = true;
     }
     uint8_t planChannel[16], planClass[16];
