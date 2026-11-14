@@ -12,12 +12,17 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/usb/IOUSBHostDevice.h>
 #include "BTLEAdvPatches.hpp"
+#if !defined(BTLEADV_SEQUOIA) && !defined(BTLEADV_SONOMA)
+#include "BTLEAdvExtraPatches.hpp"
+extern "C" char osversion[];
+#endif
 #include "BTLEAdvHci.hpp"
 
 // Patches bluetoothd's pages as they're validated, the same way BlueToolFixup does.
 // Lilu's onProcLoad route was tried first and didn't apply to this process.
 static mach_vm_address_t orig_cs_validate {};
 static bool patchScanning {};
+static bool patchExtras {};
 
 static void patched_cs_validate_page(vnode_t vp, memory_object_t pager, memory_object_offset_t page_offset,
                                      const void *data, int *validated_p, int *tainted_p, int *nx_p) {
@@ -31,6 +36,14 @@ static void patched_cs_validate_page(vnode_t vp, memory_object_t pager, memory_o
         if (!patch.scanningOnly || patchScanning)
             KernelPatcher::findAndReplace(const_cast<void *>(data), PAGE_SIZE, patch.find, patch.size,
                                           patch.replace, patch.size);
+#if !defined(BTLEADV_SEQUOIA) && !defined(BTLEADV_SONOMA)
+    if (patchExtras) {
+        // The extra set is intentionally opt-in and only has validated Tahoe tables.
+        // The normal four-patch table and unconditional HCI route remain independent.
+        BTLEAdv::applyExtraPatches(osversion, true, patchScanning,
+                                   const_cast<uint8_t *>(static_cast<const uint8_t *>(data)), PAGE_SIZE);
+    }
+#endif
 }
 
 // bluetoothd talks to the controller over USB control requests. Commands it doesn't send in
@@ -295,6 +308,7 @@ PluginConfiguration ADDPR(config) {
             return;
         // Advertising alone, to compare with both.
         patchScanning = !checkKernelArgument("-btlenoscan");
+        patchExtras = checkKernelArgument("-btleadvextra");
         lilu.onPatcherLoadForce([](void *, KernelPatcher &patcher) {
             KernelPatcher::RouteRequest route("_cs_validate_page", patched_cs_validate_page, orig_cs_validate);
             if (!patcher.routeMultipleLong(KernelPatcher::KernelID, &route, 1))
