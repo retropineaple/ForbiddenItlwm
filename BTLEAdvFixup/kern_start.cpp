@@ -12,7 +12,10 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/usb/IOUSBHostDevice.h>
 #include "BTLEAdvPatches.hpp"
+#include "BTLEAdvEventMask.hpp"
 #include "BTLEAdvHci.hpp"
+
+extern "C" char osversion[];
 
 // Patches bluetoothd's pages as they're validated, the same way BlueToolFixup does.
 // Lilu's onProcLoad route was tried first and didn't apply to this process.
@@ -31,6 +34,8 @@ static void patched_cs_validate_page(vnode_t vp, memory_object_t pager, memory_o
         if (!patch.scanningOnly || patchScanning)
             KernelPatcher::findAndReplace(const_cast<void *>(data), PAGE_SIZE, patch.find, patch.size,
                                           patch.replace, patch.size);
+    BTLEAdv::applyEventMask(osversion, patchScanning,
+                           static_cast<uint8_t *>(const_cast<void *>(data)), PAGE_SIZE);
 }
 
 // bluetoothd talks to the controller over USB control requests. Commands it doesn't send in

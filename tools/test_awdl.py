@@ -31,7 +31,9 @@ with tempfile.TemporaryDirectory(prefix="forbiddenitlwm-tests-") as directory:
 subprocess.run(["python3", str(root / "tests/monitor_tx_ownership.py")], check=True)
 subprocess.run(["python3", str(root / "tests/monitor_channel.py")], check=True)
 subprocess.run(["python3", str(root / "tests/monitor_probe.py")], check=True)
-subprocess.run(["python3", str(root / "tests/btleadv_patterns.py")], check=True)
+build = subprocess.check_output(["sw_vers", "-buildVersion"], text=True).strip()
+pattern_set = {"25G241": "2671", "25G332": "2672", "25G342": "2673"}.get(build, "2671")
+subprocess.run(["python3", str(root / "tests/btleadv_patterns.py"), "--set", pattern_set], check=True)
 # The Sonoma set needs a 14.8.9 bluetoothd. Point this at one to check it.
 if os.environ.get("FORBIDDEN_SONOMA_BLUETOOTHD"):
     subprocess.run(["python3", str(root / "tests/btleadv_patterns.py"), "--target", "sonoma",
@@ -48,3 +50,12 @@ subprocess.run(["python3", str(root / "tests/awdl_snapshot.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_bridge.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_pool_lease.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_rx_copy.py")], check=True)
+with tempfile.TemporaryDirectory(prefix="forbidden-event-mask-") as directory:
+    for target in ("TAHOE", "SEQUOIA", "SONOMA"):
+        output = str(Path(directory) / target)
+        subprocess.run(["xcrun", "clang++", "-std=c++14", "-fsanitize=address,undefined",
+                        "-DBTLEADV_" + target, str(root / "tests/btleadv_event_mask.cpp"),
+                        "-o", output], check=True)
+        subprocess.run([output], check=True)
+if build == "25G342":
+    subprocess.run(["python3", str(root / "tests/btleadv_event_mask_patterns.py")], check=True)
