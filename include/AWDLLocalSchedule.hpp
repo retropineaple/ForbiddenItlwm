@@ -47,4 +47,39 @@ inline BuildResult buildLocalFixedSchedule(const SyncPrefix &settings,
     *written = 73;
     return BuildResult::Ready;
 }
+// Like buildLocalFixedSchedule, but with the AW counter and extended-AW down counter given (adopted from the
+// peer we follow, as an AWDL non-master does) and one channel per entry. Every channel must be describable.
+inline BuildResult buildLocalPlannedSchedule(const SyncPrefix &settings, uint16_t counter, uint16_t downTU,
+        const uint8_t channels[16], uint8_t *output, size_t available, size_t *written)
+{
+    if (!output || !written || !channels || !fixedScheduleChannel(settings.nextChannel) ||
+        settings.masterChannel != settings.nextChannel ||
+        !settings.awPeriod || settings.awPeriod > 16383 ||
+        settings.commonLength > settings.awPeriod)
+        return BuildResult::Invalid;
+    for (unsigned i = 0; i < 16; ++i)
+        if (!fixedScheduleChannel(channels[i])) return BuildResult::Invalid;
+    const uint32_t extendedTU = uint32_t(settings.awPeriod) * 4;
+    if (!downTU || downTU > extendedTU) return BuildResult::Invalid;
+    if (available < 73) return BuildResult::NoSpace;
+    const uint32_t phaseTU = extendedTU - downTU;
+    SyncPrefix p = settings;
+    p.txDownCounter = downTU;
+    p.remainingAW = phaseTU < p.commonLength ? uint16_t(p.commonLength - phaseTU) : 0;
+    uint8_t payload[73] = {};
+    size_t prefixLength;
+    const auto result = buildSyncPrefix(p, payload, sizeof(payload), &prefixLength);
+    if (result != BuildResult::Ready) return result;
+    payload[27] = 4;
+    write16(payload+29, counter);
+    payload[33] = 15; payload[34] = 1; payload[36] = 3;
+    payload[37] = 0xff; payload[38] = 0xff;
+    for (unsigned i = 0; i < 16; ++i) {
+        payload[39+2*i] = legacySlotFlags(channels[i]);
+        payload[40+2*i] = channels[i];
+    }
+    for (unsigned i = 0; i < 73; ++i) output[i] = payload[i];
+    *written = 73;
+    return BuildResult::Ready;
+}
 } // namespace ItlAWDL
