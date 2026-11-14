@@ -45,6 +45,17 @@ static void *hciOwner {};
 // An added command never waits longer than this, even when the caller's request had no timeout.
 static constexpr uint32_t kExtraTimeoutMS = 1000;
 
+// The LE Data Length Change fix (OpenIntelWireless#514) needs the controller's interrupt IN pipe,
+// which is only reachable through IOUSBHostPipe: the pipe is remembered when it's created.
+static mach_vm_address_t orig_pipe_io {};
+static mach_vm_address_t orig_init_pipe {};
+static mach_vm_address_t orig_init_pipe_config {};
+static void *interruptPipe {};
+// Written when a command goes out, read when its completion arrives on the USB workloop, so no
+// lock: a missed rewrite only leaves bluetoothd on a timeout it already had.
+static BTLEAdv::DataLengthState lengthState {};
+static uint32_t lengthRewrites {}, lengthFailures {};
+
 static IOReturn patched_device_request(void *that, IOService *provider, StandardUSB::DeviceRequest &request, void *data,
                                        IOMemoryDescriptor *descriptor, unsigned int &length,
                                        IOUSBHostCompletion *completion, uint32_t timeout);
@@ -107,6 +118,7 @@ static IOReturn patched_device_request(void *that, IOService *provider, Standard
         }
     }
     bool legacyScanAddress = false;
+    unsigned remoteReads = 0;
     BTLEAdv::Action action {};
     if (hciLength) {
         IOLockLock(hciLock);
@@ -118,6 +130,16 @@ static IOReturn patched_device_request(void *that, IOService *provider, Standard
         legacyScanAddress = BTLEAdv::wantsLegacyScanAddress(hciState, hci, hciLength);
         action = BTLEAdv::onCommand(hciState, hci, hciLength, patchScanning);
         IOLockUnlock(hciLock);
+        remoteReads = BTLEAdv::extraRemoteReads(lengthState, hci, hciLength);
+    }
+    for (unsigned i = 0; i < remoteReads; ++i) {
+        // Sent before the real command, as IntelBTPatcher does: the three completions carry the
+        // same features, so the first one reaches bluetoothd unchanged and the other two are
+        // rewritten into the events it's missing.
+        if (sendExtra(that, provider, request, hci, hciLength, timeout) != kIOReturnSuccess) {
+            BTLEAdv::forgetRemoteRead(lengthState);
+            noteHook("BTLEAdvLengthFailures", ++lengthFailures);
+        }
     }
     if (legacyScanAddress) {
         // IntelBTPatcher's workaround, sent before the scan command like the original.
@@ -151,6 +173,94 @@ static IOReturn patched_device_request(void *that, IOService *provider, Standard
         }
     }
     return result;
+}
+
+// The controller's events arrive on its interrupt IN pipe, and only the pipe object can be used
+// to wrap them, so it's remembered when it's created. Anything else on the bus is left alone.
+static void captureInterruptPipe(void *that, StandardUSB::EndpointDescriptor const *descriptor, IOUSBHostDevice *device) {
+    if (!descriptor || !device || !isIntelBluetooth(device))
+        return;
+    // The endpoint is picked apart by hand: StandardUSB::getEndpointType/getEndpointDirection are
+    // exports of IOUSBHostFamily, and OpenCore's prelinker resolves them to 0 (RIP-relative
+    // overflow), which makes injection fail. The descriptor is the 7-byte USB layout:
+    // bEndpointAddress (offset 2, bit 7 = direction in), bmAttributes (offset 3, bits 0-1 = type).
+    auto *bytes = reinterpret_cast<const uint8_t *>(descriptor);
+    if (bytes[2] & 0x80 && (bytes[3] & 0x03) == 0x03)
+        interruptPipe = that;
+}
+
+// The pipe is created through one of two overloads, depending on the macOS version.
+static int patched_init_pipe(void *that, StandardUSB::EndpointDescriptor const *descriptor,
+                             StandardUSB::SuperSpeedEndpointCompanionDescriptor const *companion, void *controller,
+                             IOUSBHostDevice *device, void *interface, unsigned char a7, unsigned short a8) {
+    const int result = FunctionCast(patched_init_pipe, orig_init_pipe)(that, descriptor, companion, controller, device,
+                                                                       interface, a7, a8);
+    captureInterruptPipe(that, descriptor, device);
+    return result;
+}
+
+static int patched_init_pipe_config(void *that, StandardUSB::EndpointDescriptor const *descriptor,
+                                    StandardUSB::ConfigurationDescriptor const *config, void *controller,
+                                    IOUSBHostDevice *device, void *interface, unsigned char a7, unsigned short a8) {
+    const int result = FunctionCast(patched_init_pipe_config, orig_init_pipe_config)(that, descriptor, config, controller,
+                                                                                     device, interface, a7, a8);
+    captureInterruptPipe(that, descriptor, device);
+    return result;
+}
+
+// A completion owns the caller's closure, so the original one is kept here while ours runs.
+struct DelayedCompletion {
+    IOUSBHostCompletion original;
+    IOMemoryDescriptor *buffer;
+};
+
+static void rewriteCompletion(void *owner, void *parameter, IOReturn status, uint32_t bytesTransferred) {
+    auto *delayed = static_cast<DelayedCompletion *>(owner);
+    IOMemoryDescriptor *buffer = delayed->buffer;
+    // Tahoe hands over the buffer the stack already prepared, so prepare() is refused there and
+    // the bytes are read directly, the way IntelBTPatcher does it. Only a hold this call took is
+    // released again: when prepare() is refused the hold belongs to the USB stack, and completing
+    // it here would release that one instead.
+    if (status == kIOReturnSuccess && buffer && bytesTransferred >= 6 &&
+        buffer->getLength() >= BTLEAdv::kDataLengthEventLength) {
+        const IOReturn prepared = buffer->prepare(kIODirectionInOut);
+        uint8_t event[32] = {};
+        const size_t size = min(size_t(bytesTransferred), sizeof(event));
+        buffer->readBytes(0, event, size);
+        const size_t rewritten = BTLEAdv::rewriteEvent(lengthState, event, size);
+        // writeBytes returns the number of bytes written, not an IOReturn. The shrunk size may only
+        // be claimed when every rewritten byte is really in the buffer: forwarding the original
+        // size leaves stale feature bytes behind, which the stack parses as garbage events and
+        // bluetoothd takes the parser desync as fatal (reason 607).
+        if (rewritten != size) {
+            if (buffer->writeBytes(0, event, rewritten) == rewritten) {
+                bytesTransferred = uint32_t(rewritten);
+                noteHook("BTLEAdvLengthRewrites", ++lengthRewrites);
+            } else {
+                noteHook("BTLEAdvLengthFailures", ++lengthFailures);
+            }
+        }
+        if (prepared == kIOReturnSuccess)
+            buffer->complete(kIODirectionInOut);
+    }
+    const IOUSBHostCompletion original = delayed->original;
+    IOFree(delayed, sizeof(*delayed));
+    if (original.action)
+        original.action(original.owner, parameter, status, bytesTransferred);
+}
+
+static IOReturn patched_pipe_io(void *that, IOMemoryDescriptor *dataBuffer, uint32_t bytesTransferred,
+                                IOUSBHostCompletion *completion, uint32_t completionTimeoutMs) {
+    if (completion && dataBuffer && that == interruptPipe && lengthState.outstanding) {
+        auto *delayed = static_cast<DelayedCompletion *>(IOMalloc(sizeof(DelayedCompletion)));
+        if (delayed) {
+            delayed->original = *completion;
+            delayed->buffer = dataBuffer;
+            completion->action = rewriteCompletion;
+            completion->owner = delayed;
+        }
+    }
+    return FunctionCast(patched_pipe_io, orig_pipe_io)(that, dataBuffer, bytesTransferred, completion, completionTimeoutMs);
 }
 
 static const char *usbHostPaths[] {"/System/Library/Extensions/IOUSBHostFamily.kext/Contents/MacOS/IOUSBHostFamily"};
@@ -203,6 +313,29 @@ PluginConfiguration ADDPR(config) {
                 patcher.clearError();
             }
             noteHook("BTLEAdvHookRouted", routed ? 1 : 0);
+            // The LE Data Length Change fix also needs the pipe object and its completions.
+            KernelPatcher::RouteRequest ioRoute("__ZN13IOUSBHostPipe2ioEP18IOMemoryDescriptorjP19IOUSBHostCompletionj",
+                                                patched_pipe_io, orig_pipe_io);
+            const bool ioRouted = patcher.routeMultiple(index, &ioRoute, 1, address, size);
+            if (!ioRouted) {
+                SYSLOG("btleadv", "failed to route pipe io");
+                patcher.clearError();
+            }
+            // 26.5 and later take the configuration descriptor where older builds take the
+            // endpoint companion one. Only one of the two exists, so a miss is not an error.
+            KernelPatcher::RouteRequest configRoute("__ZN13IOUSBHostPipe28initWithDescriptorsAndOwnersEPKN11StandardUSB18EndpointDescriptorEPKNS0_23ConfigurationDescriptorEP22AppleUSBHostControllerP15IOUSBHostDeviceP18IOUSBHostInterfaceht",
+                                                    patched_init_pipe_config, orig_init_pipe_config);
+            const bool configRouted = patcher.routeMultiple(index, &configRoute, 1, address, size);
+            if (!configRouted)
+                patcher.clearError();
+            KernelPatcher::RouteRequest initRoute("__ZN13IOUSBHostPipe28initWithDescriptorsAndOwnersEPKN11StandardUSB18EndpointDescriptorEPKNS0_37SuperSpeedEndpointCompanionDescriptorEP22AppleUSBHostControllerP15IOUSBHostDeviceP18IOUSBHostInterfaceht",
+                                                  patched_init_pipe, orig_init_pipe);
+            const bool initRouted = patcher.routeMultiple(index, &initRoute, 1, address, size);
+            if (!initRouted)
+                patcher.clearError();
+            if (!configRouted && !initRouted)
+                SYSLOG("btleadv", "failed to route pipe creation");
+            noteHook("BTLEAdvPipeHooks", (configRouted ? 1U : 0U) | (initRouted ? 2U : 0U) | (ioRouted ? 4U : 0U));
         });
     }
 };
@@ -214,7 +347,7 @@ extern kern_return_t _start(kmod_info_t *, void *);
 extern kern_return_t _stop(kmod_info_t *, void *);
 extern kern_return_t BTLEAdvFixup_kern_start(kmod_info_t *, void *);
 extern kern_return_t BTLEAdvFixup_kern_stop(kmod_info_t *, void *);
-__attribute__((visibility("default"))) KMOD_EXPLICIT_DECL(org.forbiddenitlwm.BTLEAdvFixup, "0.9.0", _start, _stop)
+__attribute__((visibility("default"))) KMOD_EXPLICIT_DECL(org.forbiddenitlwm.BTLEAdvFixup, "0.9.1", _start, _stop)
 __attribute__((visibility("hidden"))) kmod_start_func_t *_realmain = BTLEAdvFixup_kern_start;
 __attribute__((visibility("hidden"))) kmod_stop_func_t *_antimain = BTLEAdvFixup_kern_stop;
 __attribute__((visibility("hidden"))) int _kext_apple_cc = __APPLE_CC__;

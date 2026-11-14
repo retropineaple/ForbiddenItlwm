@@ -4,13 +4,12 @@ What's being worked on, what comes next, and what's planned further out. These a
 
 ## Now
 
-- **Faster Mac → iPhone transfers** ([#22](https://github.com/retropineaple/ForbiddenItlwm/issues/22), [#24](https://github.com/retropineaple/ForbiddenItlwm/issues/24)). On some setups the iPhone never accepts block ack, so the Mac sends one frame at a time: a few MB/s instead of about 20. It seems to depend on whether the Mac and the iPhone are on the same Wi-Fi channel. The diagnostics in 0.5.2-test1 are meant to find out exactly why.
+- **Faster Mac → iPhone transfers** ([#22](https://github.com/retropineaple/ForbiddenItlwm/issues/22), [#24](https://github.com/retropineaple/ForbiddenItlwm/issues/24)). On some setups the iPhone never accepts block ack, so the Mac sends one frame at a time: a few MB/s instead of about 20. It seems to depend on whether the Mac and the iPhone are on the same Wi-Fi channel. Neither of 0.5.3's test flags fixed it; the cause is still being investigated.
 - **Channel 44 where 149 isn't allowed** ([#17](https://github.com/retropineaple/ForbiddenItlwm/issues/17), [PR #21](https://github.com/retropineaple/ForbiddenItlwm/pull/21)). In Japan and other countries without channel 149, iPhones use channel 44 for AirDrop, but the driver falls back to channel 6, which is slow. A tester's patch moves the listener to 44 at 80 MHz; it needs two safety rules (see the PR) before it can ship.
 - **Stable Wi-Fi when the Mac is on 2.4 GHz** ([#16](https://github.com/retropineaple/ForbiddenItlwm/issues/16)). With the listener on its own channel, one AX201 kept dropping its normal Wi-Fi while that was on 2.4 GHz. 0.5.2-test1 has a test flag (`-itlawdlsameband`) for it.
 
 ## Next
 
-- **Bring in laobamac's later fixes.** ForbiddenItlwm's history is now joined to laobamac/itlwm, the code it started from. The 26 fixes laobamac made since then (transmit queues, rate-control locking, joins, scanning, VT-d) can now come in with their authorship kept. They need their own test build.
 - **Wi-Fi reconnects without losing AirDrop** ([PR #12](https://github.com/retropineaple/ForbiddenItlwm/pull/12)): restoring the listener cleanly after the Mac's Wi-Fi reconnects or switches networks.
 - **Fewer boot flags.** The beta needs a long list of flags. They should become sensible defaults, with flags only for testing.
 - **Faster normal Wi-Fi while AirDrop is on.** The Mac's own Wi-Fi loses about 30 to 45% of its speed while AirDrop's listener runs, because the two share the radio. Giving the listener less airtime while nothing is being sent should win most of that back.
@@ -40,6 +39,7 @@ These also use Apple's peer-to-peer Wi-Fi. None has been tried yet, so whether t
 
 ## Done recently
 
+- **0.5.4:** laobamac's later fixes to the base driver ([#36](https://github.com/retropineaple/ForbiddenItlwm/pull/36)); block ack without `-itlawdlcoexmulti` ([#16](https://github.com/retropineaple/ForbiddenItlwm/issues/16)); new LE mice and keyboards pair again with BTLEAdvFixup 0.9.1 ([#31](https://github.com/retropineaple/ForbiddenItlwm/pull/31)).
 - **0.5.1:** AirDrop works on Sequoia ([#7](https://github.com/retropineaple/ForbiddenItlwm/issues/7), [#13](https://github.com/retropineaple/ForbiddenItlwm/issues/13), [#19](https://github.com/retropineaple/ForbiddenItlwm/issues/19)).
 - **0.5.0:** Wi-Fi starts again on machines where 0.4.x didn't ([#14](https://github.com/retropineaple/ForbiddenItlwm/issues/14), [#16](https://github.com/retropineaple/ForbiddenItlwm/issues/16)); channel 149 in China ([#11](https://github.com/retropineaple/ForbiddenItlwm/issues/11)); a Sonoma 14.8.9 test build.
 - **0.2.0:** iMessage and other push services over Wi-Fi.

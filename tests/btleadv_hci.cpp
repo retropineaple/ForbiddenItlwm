@@ -72,5 +72,47 @@ int main(){
         // Reset forgets per-set addresses too.
         uint8_t rst[3]={3,0xc,0};onCommand(r,rst,3,true);assert(!r.knownSetAddresses);
     }
+    // LE Data Length Change (OpenIntelWireless#514): two extra copies of LE Read Remote
+    // Features, and the two duplicate completions become PHY Update, then Data Length Change.
+    {
+        DataLengthState d{};uint8_t readFeatures[3]={0x16,0x20,0x02};
+        assert(extraRemoteReads(d,readFeatures,3)==2&&d.outstanding==2&&d.stage==0);
+        // Only that command, and only whole ones.
+        assert(extraRemoteReads(d,em,11)==0&&d.outstanding==2);
+        assert(extraRemoteReads(d,readFeatures,2)==0&&d.outstanding==2);
+        assert(extraRemoteReads(d,nullptr,0)==0);
+        // A copy that couldn't be sent produces no event, so it isn't waited for.
+        forgetRemoteRead(d);assert(d.outstanding==1);
+        // A controller start forgets a command still in flight.
+        uint8_t rst[3]={0x03,0x0c,0x00};
+        assert(extraRemoteReads(d,rst,3)==0&&!d.outstanding&&!d.stage);
+        forgetRemoteRead(d);assert(!d.outstanding);
+
+        // The real completion (status 0, handle 0x0053, all-zero features) passes through.
+        const uint8_t real[14]={0x3e,12,0x04,0x00,0x53,0x00,0x01,0,0,0,0,0,0,0};
+        uint8_t ev[14];memcpy(ev,real,14);
+        assert(extraRemoteReads(d,readFeatures,3)==2);
+        assert(rewriteEvent(d,ev,14)==14&&!memcmp(ev,real,14)&&d.stage==1&&d.outstanding==2);
+        // Anything else is left alone while a duplicate is expected.
+        const uint8_t other[8]={0x3e,6,0x0c,0x00,0x53,0x00,0x01,0x01};
+        memcpy(ev,other,8);assert(rewriteEvent(d,ev,8)==8&&!memcmp(ev,other,8));
+        const uint8_t disconn[7]={0x05,3,0x16,0x00,0x53,0x00,0x13};
+        memcpy(ev,disconn,7);assert(rewriteEvent(d,ev,7)==7&&!memcmp(ev,disconn,7));
+        // First duplicate: PHY Update Complete, both directions 2M, 8 bytes.
+        memcpy(ev,real,14);
+        assert(rewriteEvent(d,ev,14)==8&&d.stage==2&&d.outstanding==1);
+        const uint8_t phy[8]={0x3e,6,0x0c,0x00,0x53,0x00,0x02,0x02};assert(!memcmp(ev,phy,8));
+        // Second: LE Data Length Change, 27 octets and 328 us each way, 13 bytes.
+        memcpy(ev,real,14);
+        assert(rewriteEvent(d,ev,14)==13&&!d.stage&&!d.outstanding);
+        const uint8_t len[13]={0x3e,11,0x07,0x53,0x00,0x1b,0x00,0x48,0x01,0x1b,0x00,0x48,0x01};
+        assert(!memcmp(ev,len,13));
+        // Nothing expected any more: the same completion is a plain pass-through.
+        memcpy(ev,real,14);assert(rewriteEvent(d,ev,14)==14&&!memcmp(ev,real,14));
+        // Short and null events are never touched.
+        uint8_t tiny[5]={0x3e,3,0x04,0x00,0x53};
+        extraRemoteReads(d,readFeatures,3);
+        assert(rewriteEvent(d,tiny,5)==5&&rewriteEvent(d,nullptr,14)==14);
+    }
     puts("BTLEAdvFixup HCI decisions: passed (host only)");
 }

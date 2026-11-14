@@ -2,6 +2,7 @@
 """Check a BTLEAdvFixup patch table against a real bluetoothd.
 
 Default: the Tahoe 26.7.1 set against this Mac's /usr/sbin/bluetoothd.
+  --set 2672 --binary <path>          the single 26.7.2 extendedConnection pattern against a 26.7.2 bluetoothd
   --set 2673 --binary <path>          the Tahoe 26.7.3 set against a 26.7.3 bluetoothd
   --target sequoia --binary <path>   the Sequoia set against a 15.8, 15.8.2 or 15.8.3 bluetoothd
 For Tahoe it also checks that the other Tahoe set matches nothing in the binary.
@@ -15,7 +16,7 @@ root=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser()
 parser.add_argument('--target',choices=('tahoe','sequoia','sonoma'),default='tahoe')
 parser.add_argument('--binary',type=Path,default=Path('/usr/sbin/bluetoothd'))
-parser.add_argument('--set',choices=('2671','2673'),default='2671',help='Tahoe only: which build set to check')
+parser.add_argument('--set',choices=('2671','2672','2673'),default='2671',help='Tahoe only: which build set to check')
 args=parser.parse_args()
 whole=(root/'BTLEAdvFixup/BTLEAdvPatches.hpp').read_text()
 body=whole.split('#if !defined(BTLEADV_SEQUOIA) && !defined(BTLEADV_SONOMA)',1)[1]
@@ -38,6 +39,26 @@ for i in range(int.from_bytes(raw[4:8],'big')):
     if int.from_bytes(entry[:4],'big')==0x1000007:
         offset=int.from_bytes(entry[8:12],'big');binary=raw[offset:offset+int.from_bytes(entry[12:16],'big')]
 assert binary,'no x86_64 slice'
+# 26.7.2 (25G332) has one site of its own, and its window is longer than the other patterns, so
+# the bytes identify that build without a build string. 26.7.1 and 26.7.3 have their own
+# extendedConnection patterns, so this one must match nothing there.
+if args.set=='2672':
+    find,replace=table('extendedConnectionFind','2672'),table('extendedConnectionReplace','2672')
+    if binary.count(find)==0 and binary.count(replace)==1:
+        binary=binary.replace(replace,find)
+        print('extendedConnection2672: this read returned the patched page, checked against the original bytes')
+    if binary.count(find)!=1:
+        raise SystemExit('2672 pattern matches %d times: not a 26.7.2 bluetoothd'%binary.count(find))
+    assert len(find)==len(replace)
+    offset=binary.index(find)
+    assert offset//4096==(offset+len(find)-1)//4096,'pattern crosses a page, Lilu may miss it'
+    assert binary.count(replace)==0
+    changed=[i for i in range(len(find)) if find[i]!=replace[i]]
+    # Only the movzx and the two padding bytes change; the calls around it stay.
+    assert changed==list(range(12,19)),changed
+    assert find[12:19]==bytes.fromhex('0fb6bd76ffffff') and replace[12:19]==bytes.fromhex('bf010000009090')
+    print('BTLEAdvFixup 26.7.2 extendedConnection pattern: passed against %s (no controller test)'%args.binary)
+    raise SystemExit
 # With the kext loaded, a read can return pages it already patched, from the page cache.
 # Put those back so the rest of this check always sees the original bytes.
 for name in ('advertising','scanning','randomAddress','extendedConnection'):

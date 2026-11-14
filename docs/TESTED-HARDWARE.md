@@ -21,7 +21,7 @@ Kexts used with ForbiddenItlwm:
 | Kext | Version |
 | --- | --- |
 | ForbiddenItlwm | 0.1.0-beta1, 0.2.0-beta1, 0.4.0-beta1's changes in development builds, and 0.5.0-test1 (Tahoe) |
-| BTLEAdvFixup | 0.8.0, 0.8.2's changes in a development build, and 0.9.0 (Tahoe) |
+| BTLEAdvFixup | 0.8.0, 0.8.2's changes in a development build, 0.9.0 and 0.9.1 (Tahoe) |
 | Lilu | 1.7.2 |
 | IntelBluetoothFirmware | 2.5.1 |
 | BlueToolFixup | 2.7.3 |
@@ -88,6 +88,8 @@ Users on Reddit and GitHub have reported:
 | Intel AX210 (AMD Ryzen 7 5800H laptop) | macOS Sequoia 15.8.1, with 0.5.1-test1: AirDrop works both ways; Mac → iPhone slower (issue #22) |
 | Intel AX210 (Xiaomi Mi Notebook Pro) | macOS 26.7.2, with 0.5.0-test1: AirDrop works both ways, listener on 149 at 80 MHz in China (issue #18) |
 | Intel AX201 (Tiger Lake-H, Dell G15) | macOS 26.7.3, with 0.5.0-test1: AirDrop works both ways; on channel 6 in Japan (issue #23) |
+| Intel AX201 (Tiger Lake, dynabook G83) | macOS Sequoia 15.8.3, with 0.5.3-test1: AirDrop works both ways, also with an iPad, and iPad → Mac AirPlay works. On a network without 149, Mac → iPad works only without `-itlawdlcoexmulti` (issue #29) |
+| Intel AX210 (Dell Precision 5540) | macOS 26.7.3, with 0.5.3-test1: Mac → iPhone works; iPhone → Mac stalls on large photos and videos (issue #26, open) |
 | Intel AX411 class (AX1690i) | macOS 26.7.2, with 0.4.1-beta1: AirDrop works both ways, on channel 6 (issue #15) |
 
 The project hasn't verified these reports. The platforms, and which features were tried, vary between them.

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.4-beta.2
+
+- **BTLEAdvFixup 0.9.1: new Bluetooth LE mice and keyboards pair again ([#27](https://github.com/retropineaple/ForbiddenItlwm/issues/27), [#31](https://github.com/retropineaple/ForbiddenItlwm/pull/31), thanks to CreateRan).** With IntelBTPatcher disabled, a new LE mouse or keyboard connected but never finished pairing, because BTLEAdvFixup didn't include IntelBTPatcher's fix for it. It does now, including lshbluesky's LE Data Length Change fix for Tahoe. Devices that were already paired weren't affected.
+- **BTLEAdvFixup 0.9.1 also patches a second spot in macOS 26.7.2's `bluetoothd`** (25G332), whose bytes differ from 26.7.3's there.
+- The Wi-Fi driver is the same code as 0.5.4-beta.1; only its build name changed.
+- **Tested on the project's hackintosh** (Tahoe 26.7.1): BTLEAdvFixup 0.9.1 loads with all its hooks, Bluetooth and paired devices work, AirDrop at about 20 MB/s both ways. The pairing fix itself was tested by CreateRan on 26.7.2 with an AX200 (a new LE mouse pairs and stays connected).
+
+## 0.5.4-beta.1
+
+The first release with the new names: **beta** means everything in it was tested on the project's hackintosh. (Up to 0.5.3, `-test1` was used for what is now called alpha.)
+
+- **laobamac's later fixes to the base driver ([#36](https://github.com/retropineaple/ForbiddenItlwm/pull/36), thanks to alikaylan).** The 21 commits laobamac made to itlwm/AirportItlwm after ForbiddenItlwm started, merged with their authorship kept. They mostly affect normal Wi-Fi:
+  - transmit queues and TX completion handling, rate-control locking (laobamac #22), and queue checks for newer firmware;
+  - joins: link authorization before RUN (laobamac #21), "fast lane" QoS requests, no VHT on 2.4 GHz, a clean fallback from invalid 160 MHz channels, and the last piece of the WPA2/WPA3 transition fix (mingww64);
+  - scanning: macOS's scan timing, and passive channels no longer cut short during a scan while connected;
+  - VT-d: only the bytes the card wrote are copied, and an unplugged card is detected properly;
+  - macOS integration: native channel information, traffic counters and link quality for iMessage and other iServices.
+- **Block ack without `-itlawdlcoexmulti` ([#16](https://github.com/retropineaple/ForbiddenItlwm/issues/16)).** When the AirDrop listener shares your Wi-Fi's channel (without `-itlawdlcoexmulti`, or when its own channel isn't available), the driver now answers the iPhone's block-ack requests. iPhone → Mac goes from about 1 MB/s to about 5 MB/s there. Mac → iPhone is still sent frame by frame in that setup, because the iPhone doesn't answer our request on that channel (#24). `-itlawdlnosharedba` turns it off, for comparison. `-itlawdlbaaskshared` now works there too.
+- **Block-ack requests pause while AirDrop is idle.** After 30 s without data, the driver stops asking the iPhone for block ack, instead of asking for up to 10 minutes after a transfer. The next transfer starts asking again straight away. `ITLAWDLCoexBaTxIdleHolds` counts the pauses.
+- **Tools:** `airdrop_measure.sh` shows the listener's width when it shares your Wi-Fi's channel. `check_compat.sh` recognises IntelBTUnified and warns that it can't be used with BTLEAdvFixup ([#32](https://github.com/retropineaple/ForbiddenItlwm/issues/32)).
+- **Tested on the project's hackintosh** (Tahoe 26.7.1, AX211): Wi-Fi works, AirDrop at 17–24 MB/s iPhone → Mac and 21–26 MB/s Mac → iPhone. The Sequoia and Sonoma builds are built and checked offline, as before.
+- BTLEAdvFixup is unchanged (0.9.0).
+
 ## 0.5.3-test1 (test build)
 
 Two test flags for slow Mac → iPhone transfers (#22, #24). When the Mac's own Wi-Fi is on the same channel as the AirDrop listener (usually 149), the iPhone never accepts block ack, so frames go out one at a time. On any other channel it accepts within a second. These flags test two explanations; neither is on by default:

@@ -8,7 +8,7 @@ ioreg -l -w0 | grep -E '"ItlwmAWDL(InterfaceBuild|BuildCheck)"|"ITLAWDLCoex(Adde
 
 | Key | Healthy value |
 | --- | --- |
-| `ItlwmAWDLInterfaceBuild` | `forbidden-0.5.3-test1`, `forbidden-0.5.3-test1-sequoia` or `forbidden-0.5.3-test1-sonoma` |
+| `ItlwmAWDLInterfaceBuild` | `forbidden-0.5.4-beta.2`, `forbidden-0.5.4-beta.2-sequoia` or `forbidden-0.5.4-beta.2-sonoma` |
 | `ItlwmAWDLBuildCheck` | `verified` (`expected: …` on a 15.8.x kernel that wasn't checked offline). Anything starting with `blocked` means AirDrop is off on this macOS build: see below |
 | `ITLAWDLCoexAdded` | Yes: the AirDrop listener exists |
 | `ITLAWDLCoexChannel`, `ITLAWDLCoexOwnWidth` | 149 and 80 |
@@ -61,9 +61,13 @@ This is the main known problem. The time goes into the iPhone finding the Mac's 
 
 - **Check the iPhone's Wi-Fi first.** AirDrop gets the share of the iPhone's radio time that its own Wi-Fi leaves over. If the iPhone isn't on Wi-Fi, or is on channel 149, it gets 15 of 16 slots (about 22 MB/s). On a quiet network on another channel it gets 11 (about 15 MB/s), on a busy one 7 (about 6 MB/s). `ITLAWDLCoexPeerPresentEntries` shows the current number.
 - **Check the channel:** on 6, everything is very slow. The listener can drop to 6 for a while when the firmware briefly loses the country (`ITLAWDLCoexCountryLearned` No).
-- **Mac → iPhone much slower than iPhone → Mac:** a known open problem on some setups (#22, #24): the iPhone never accepts block ack (`ITLAWDLCoexBaTxStateName` stays `asking`), so every frame goes out singly. It happens when the Mac's own Wi-Fi is on the same channel as the AirDrop listener (usually 149) (#24). **Workaround:** put your router (or the Mac's network) on another channel, such as 36–48 or 157; AirDrop stays on 149 and block ack then forms within a second. 0.5.3-test1 has two test flags for this case, `-itlawdlbaaskshared` and `-itlawdlhideinfra` (see [BOOT-FLAGS.md](BOOT-FLAGS.md)).
+- **Mac → iPhone much slower than iPhone → Mac:** a known open problem on some setups (#22, #24): the iPhone never accepts block ack (`ITLAWDLCoexBaTxStateName` stays `asking`), so every frame goes out singly. It happens when the Mac's own Wi-Fi is on the same channel as the AirDrop listener (usually 149) (#24). **Workaround:** put your router (or the Mac's network) on another channel, such as 36–48 or 157; AirDrop stays on 149 and block ack then forms within a second. Neither of 0.5.3's test flags (`-itlawdlbaaskshared`, `-itlawdlhideinfra`) fixed it; the cause is still being investigated.
 - **Measure it:** `bash tools/compat/airdrop_measure.sh` prints the speed and connect times macOS logs for each transfer.
 - **The very first send after boot** is often slower while rate control settles.
+
+## A new Bluetooth LE mouse or keyboard won't pair
+
+Fixed in BTLEAdvFixup 0.9.1 (from 0.5.4-beta.2, #27). Earlier versions, with IntelBTPatcher disabled, let a new LE mouse or keyboard connect but never finish pairing; devices paired before kept working. Update BTLEAdvFixup. If a device still won't pair with 0.9.1, check `ioreg -l -w0 -d 1 | grep -E '"BTLEAdv(PipeHooks|LengthRewrites|LengthFailures)"'` while pairing (`PipeHooks` should be 5, and `LengthRewrites` should go up) and report it.
 
 ## Wi-Fi is off or greyed out, and there's no `en0`
 
@@ -77,7 +81,7 @@ The kext can be loaded (`kmutil` lists it) while the driver itself failed to sta
 
 - Remove any flag listed under "Don't use" in [BOOT-FLAGS.md](BOOT-FLAGS.md).
 - A fast-rising `ITLAWDLCoexCountryNotices`, with `ITLAWDLCoexAdded` flipping between Yes and No, means the firmware is restarting around the listener. Boot without the `-itlawdl*` flags to confirm the station works on its own, then report it.
-- **Wi-Fi keeps dropping and reconnecting while the AirDrop flags are on:** remove `-itlawdlcoexmulti` and keep the rest. The listener then stays on your Wi-Fi network's channel instead of its own: AirDrop is slower, but Wi-Fi stays stable (#16). It happened on an AX201 while the Mac's Wi-Fi was on 2.4 GHz and the listener on 149. `ITLAWDLCoexAddsAfterRestart` rising means the firmware is restarting underneath.
+- **Wi-Fi keeps dropping and reconnecting while the AirDrop flags are on, or channel 149 isn't available on your network:** remove `-itlawdlcoexmulti` and keep the rest. The listener then stays on your Wi-Fi network's channel instead of its own. Wi-Fi stays stable (#16), and AirDrop works where 149 can't be used (#29). From 0.5.4, iPhone → Mac still uses block ack in this setup (about 5 MB/s); Mac → iPhone is slower. `ITLAWDLCoexAddsAfterRestart` rising means the firmware is restarting underneath.
 - Use USB tethering from the iPhone to get online while you test.
 
 ## iMessage or other Apple services don't work over Wi-Fi

@@ -448,6 +448,9 @@ struct ieee80211com {
     uint8_t ic_wcl_scan_ssid[32];
     bool ic_wcl_scan_restricted;
     uint8_t ic_wcl_scan_channels[32];
+    uint32_t ic_wcl_scan_away_time_ms;
+    uint64_t ic_wcl_tx_packets[4];
+    uint64_t ic_wcl_rx_packets[4];
 #endif
     void            (*ic_event_handler)(struct ieee80211com *, int, void *);
 	CTimeout*		ic_bgscan_timeout;
@@ -583,6 +586,17 @@ struct ieee80211com {
 };
 #define	ic_if		ic_ac.ac_if
 #define	ic_softc	ic_if.if_softc
+
+#ifdef AIRPORT_WCL
+static inline unsigned ieee80211_wcl_ac(unsigned tid)
+{
+    static const unsigned categories[8] = {
+        EDCA_AC_BE, EDCA_AC_BK, EDCA_AC_BK, EDCA_AC_BE,
+        EDCA_AC_VI, EDCA_AC_VI, EDCA_AC_VO, EDCA_AC_VO
+    };
+    return tid < 8 ? categories[tid] : EDCA_AC_BE;
+}
+#endif
 
 /* list of APs we want to automatically use */
 /* all data is copied from struct ieee80211com */

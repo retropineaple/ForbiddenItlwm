@@ -6,7 +6,7 @@
 
 **AirDrop for Intel Wi-Fi cards on macOS.** ForbiddenItlwm is a fork of AirportItlwm that adds AWDL, the peer-to-peer Wi-Fi link AirDrop runs on. Apple's own Wi-Fi stack does the rest. Normal Wi-Fi stays connected while AirDrop works.
 
-> **Public beta. Newest release: [0.5.3-test1](https://github.com/retropineaple/ForbiddenItlwm/releases/latest).** Works on macOS Tahoe 26.7.x and Sequoia 15.8.x, with a Sonoma 14.8.9 test build. Each macOS version has its own kexts. Fixes come out often: before reporting a problem, update to the newest release (**Watch → Custom → Releases** to be notified).
+> **Public beta. Newest release: [0.5.4-beta.2](https://github.com/retropineaple/ForbiddenItlwm/releases/latest).** Works on macOS Tahoe 26.7.x and Sequoia 15.8.x, with a Sonoma 14.8.9 test build. Each macOS version has its own kexts. Fixes come out often: before reporting a problem, update to the newest release (**Watch → Custom → Releases** to be notified).
 
 ## ⚠️ Read this first
 
@@ -43,7 +43,7 @@ Speed depends on the iPhone's own Wi-Fi: full speed when it's off Wi-Fi or on ch
 
 On any other build the driver keeps AirDrop off and works as plain Wi-Fi. [docs/TESTED-HARDWARE.md](docs/TESTED-HARDWARE.md) has every build and report.
 
-**Cards:** Intel cards AirportItlwm supports. The project tests the AX211; users report the AX201, AX210, AX200 and an AX1690i working.
+**Cards:** Intel Wi-Fi 6 and 6E cards. The project tests the AX211; users report the AX201, AX210, AX200 and an AX1690i working. Older 7000, 8000 and 9000-series cards (such as the 9560, 9462 and 9260) run on a part of the driver without AirDrop code, so they get normal Wi-Fi only.
 
 **No OCLP Wi-Fi patches.** ForbiddenItlwm needs macOS's own Wi-Fi stack. If you used OpenCore Legacy Patcher's "Modern Wireless" root patch for an older AirportItlwm, revert it, and also remove what it added to `config.plist` (see [INSTALL](docs/INSTALL.md#before-you-start)). Left in place, they stop Wi-Fi from starting.
 

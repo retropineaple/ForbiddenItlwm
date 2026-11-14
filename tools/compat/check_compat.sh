@@ -254,8 +254,16 @@ BTLEADV=$(kext_version org.forbiddenitlwm.BTLEAdvFixup)
 [ -z "$BTLEADV" ] && BTLEADV=$(kext_version org.itlwmawdl.BTLEAdvFixup)
 IBTPATCH=$(kext_version com.zxystd.IntelBTPatcher)
 LILU=$(kext_version as.vit9696.Lilu)
-[ -n "$IBTFW" ] && pass "IntelBluetoothFirmware $IBTFW is loaded." || warn "IntelBluetoothFirmware isn't loaded."
-[ -n "$BTFIX" ] && pass "BlueToolFixup $BTFIX is loaded." || warn "BlueToolFixup isn't loaded (needed for third-party Bluetooth on recent macOS)."
+# IntelBTUnified (laguillo) combines IntelBluetoothFirmware, IntelBTPatcher and BlueToolFixup. Its bundle ID
+# depends on how it was built (local.IntelBTUnified by default), so it's matched by name.
+IBTUNI=$(printf '%s\n' "$KEXTS" | awk '$1 ~ /IntelBTUnified$/ { gsub(/[()]/, "", $2); print $2; exit }')
+if [ -n "$IBTUNI" ]; then
+    info "IntelBTUnified $IBTUNI is loaded. It replaces IntelBluetoothFirmware, IntelBTPatcher and BlueToolFixup."
+    warn "IntelBTUnified includes IntelBTPatcher's USB hook, which BTLEAdvFixup also uses with -btleadv, and Lilu panics when two plugins hook the same function. For AirDrop, use IntelBluetoothFirmware, BlueToolFixup and BTLEAdvFixup instead."
+else
+    [ -n "$IBTFW" ] && pass "IntelBluetoothFirmware $IBTFW is loaded." || warn "IntelBluetoothFirmware isn't loaded."
+    [ -n "$BTFIX" ] && pass "BlueToolFixup $BTFIX is loaded." || warn "BlueToolFixup isn't loaded (needed for third-party Bluetooth on recent macOS)."
+fi
 [ -n "$LILU" ] && pass "Lilu $LILU is loaded." || warn "Lilu isn't loaded (BTLEAdvFixup is a Lilu plugin)."
 if [ -n "$BTLEADV" ]; then pass "BTLEAdvFixup $BTLEADV is loaded."; else info "BTLEAdvFixup isn't loaded. It's part of the AirDrop package."; fi
 [ -n "$IBTPATCH" ] && [ -n "$BTLEADV" ] && warn "IntelBTPatcher and BTLEAdvFixup are both loaded. The tested setup disables IntelBTPatcher, as both hook the same USB requests."

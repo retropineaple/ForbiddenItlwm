@@ -106,4 +106,71 @@ inline Action onCommand(State &s, const uint8_t *hci, size_t length, bool extend
     }
     return a;
 }
+// Intel Bluetooth controllers never send an LE Data Length Change event on Tahoe, so bluetoothd
+// stays at LE_READY_WAIT_FOR_LENGTH after the link encrypts and a new BLE HID device (a mouse, a
+// keyboard) never binds: "No database exists". Already bonded devices skip GATT discovery, which
+// is why they still work. IntelBTPatcher's fix is to send LE Read Remote Features twice more and
+// rewrite the two duplicate completions into the events bluetoothd is waiting for. Lilu panics if
+// two plugins hook the same function, so with this kext active that job is here instead.
+// OpenIntelWireless/IntelBluetoothFirmware#514.
+enum : uint16_t { kOpLeReadRemoteFeatures = 0x2016 };
+enum : uint8_t { kEvtLeMeta = 0x3e, kLeMetaReadRemoteFeaturesComplete = 0x04 };
+// The link is up and encrypted when this runs, so the two events describe that link: the handle
+// comes from the completion being replaced. Values are IntelBTPatcher's: 27 octets, 328 us.
+enum : size_t { kPhyUpdateEventLength = 8, kDataLengthEventLength = 13 };
+struct DataLengthState {
+    uint32_t outstanding;  // duplicate commands whose completion hasn't been rewritten yet
+    unsigned stage;        // 0: the real completion, 1: fake PHY update, 2: fake data length
+};
+// How many copies of this command to send after it. Only LE Read Remote Features, and a
+// controller start forgets any command still in flight.
+inline unsigned extraRemoteReads(DataLengthState &s, const uint8_t *hci, size_t length) {
+    if (!hci || length < 3)
+        return 0;
+    const uint16_t op = uint16_t(hci[0] | hci[1] << 8);
+    if (op == kOpReset) {
+        s = DataLengthState{};
+        return 0;
+    }
+    if (op != kOpLeReadRemoteFeatures)
+        return 0;
+    s.stage = 0;
+    s.outstanding += 2;
+    return 2;
+}
+// A copy that couldn't be sent never produces an event, so it's not waited for.
+inline void forgetRemoteRead(DataLengthState &s) {
+    if (s.outstanding && !--s.outstanding)
+        s.stage = 0;
+}
+// Rewrites one incoming event in place and returns its new size. Everything except a duplicate
+// LE Read Remote Features Complete passes through untouched; the first of the two duplicates
+// becomes PHY Update Complete, the second LE Data Length Change, as in IntelBTPatcher.
+inline size_t rewriteEvent(DataLengthState &s, uint8_t *event, size_t length) {
+    if (!event || length < 6 || !s.outstanding || event[0] != kEvtLeMeta ||
+        event[2] != kLeMetaReadRemoteFeaturesComplete)
+        return length;
+    if (s.stage == 0) {  // the real completion goes to bluetoothd as it is
+        s.stage = 1;
+        return length;
+    }
+    // Status 0, both directions 2M.
+    const uint8_t handleLow = event[4], handleHigh = event[5];
+    if (s.stage == 1) {
+        const uint8_t fake[kPhyUpdateEventLength] = {kEvtLeMeta, 6, 0x0c, 0x00, handleLow, handleHigh, 0x02, 0x02};
+        for (unsigned i = 0; i < kPhyUpdateEventLength; ++i)
+            event[i] = fake[i];
+        s.stage = 2;
+        --s.outstanding;
+        return kPhyUpdateEventLength;
+    }
+    // A Data Length Change has no status byte, so the handle moves to parameter 0.
+    const uint8_t fake[kDataLengthEventLength] = {kEvtLeMeta, 11, 0x07, handleLow, handleHigh,
+                                                  0x1b, 0x00, 0x48, 0x01, 0x1b, 0x00, 0x48, 0x01};
+    for (unsigned i = 0; i < kDataLengthEventLength; ++i)
+        event[i] = fake[i];
+    s.stage = 0;
+    --s.outstanding;
+    return kDataLengthEventLength;
+}
 }

@@ -32,11 +32,16 @@ PRED='process == "sharingd" AND (category == "AirDropNW" OR category == "Metrics
 driver_state() {
     # One line of the listener's state, or nothing when the AirDrop build isn't running.
     { ioreg -l -w0 -d 1 -k ITLAWDLCoexChannel; ioreg -l -w0 -r -c ItlAWDLInterface -d 1; } 2>/dev/null | awk -F' = ' '
-        /"ITLAWDLCoexChannel"/ {ch=$2} /"ITLAWDLCoexOwnWidth"/ {w=$2}
+        /"ITLAWDLCoexChannel"/ {ch=$2} /"ITLAWDLCoexOwnWidth"/ {w=$2} /"ITLAWDLCoexBaPeerWidth"/ {pw=$2}
+        /"ITLAWDLCoexMultiState"/ {ms=$2; gsub(/"/,"",ms)}
         /"ITLAWDLCoexBaTxStateName"/ {gsub(/"/,"",$2); ba=$2}
         /"ITLAWDLCoexPeerPresentEntries"/ {pe=$2}
         /"ItlwmAWDLTxDropped"/ {dr=$2}
-        END { if (ch != "") printf "listener %s/%s MHz, block ack %s, iPhone on our channel %s/16 slots, TX dropped %s\n", ch, w, (ba==""?"-":ba), (pe==""?"-":pe), (dr==""?"-":dr) }'
+        END { # Sharing the Wi-Fi channel (no -itlawdlcoexmulti, or its fallback), the listener has no width
+              # of its own (OwnWidth reads -1); the width of the peer station is the one that counts there.
+              shared = (ms == "off" || ms == "fallback-same" || w + 0 < 0 || w + 0 > 1000)
+              if (shared) w = (pw == "" || pw + 0 == 0) ? "?" : pw
+              if (ch != "") printf "listener %s/%s MHz%s, block ack %s, iPhone on our channel %s/16 slots, TX dropped %s\n", ch, w, (shared ? " (shared with Wi-Fi)" : ""), (ba==""?"-":ba), (pe==""?"-":pe), (dr==""?"-":dr) }'
 }
 export -f driver_state 2>/dev/null
 
