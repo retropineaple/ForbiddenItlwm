@@ -155,8 +155,9 @@ static bool awdlCoexCountryPending, awdlCoexCountryLearned;
 // (ITLAWDLCoexBeaconHints).
 static uint32_t awdlCoexBeaconHints;
 // Apple-style coexistence: router entries in the advertised sequence (with the listener silent in them) and a
-// relaxed beacon-miss threshold while AWDL data moves.
-static bool awdlAppleSlots = true, awdlAppleBmiss = true, awdlAppleMsch = true;
+// relaxed beacon-miss threshold while AWDL data moves. Opt-in: the whole plan is off unless -itlawdlcoexplan
+// is set, so it can't slow down setups that work today (retropineaple/ForbiddenItlwm#30).
+static bool awdlAppleSlots = false, awdlAppleBmiss = false, awdlAppleMsch = false;
 static uint64_t awdlInfraRxPkts, awdlInfraTxPkts, awdlInfraRxBytes, awdlInfraTxBytes;
 static uint64_t awdlInfraSampleUS, awdlInfraPrevPkts, awdlInfraPrevBytes, awdlInfraLastPps, awdlInfraLastAvg;
 static uint8_t awdlInfraClass;            // Apple's codes: 0 idle, 2 streaming, 3 data.
@@ -20359,8 +20360,11 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         awdlCoexGate = !PE_parse_boot_argn("-itlawdlcoexnogate", &dummy, sizeof(dummy));
         awdlCoexAssumeZero = !PE_parse_boot_argn("-itlawdlcoexcalwait", &dummy, sizeof(dummy));
         awdlCoexPeerSchedule.assumeZero = awdlCoexAssumeZero;
-        awdlAppleSlots = !PE_parse_boot_argn("-itlawdlnoinfraslots", &dummy, sizeof(dummy));
-        awdlAppleBmiss = !PE_parse_boot_argn("-itlawdlnobmissrelax", &dummy, sizeof(dummy));
+        // Opt-in master switch: the coexistence plan (router entries, silent listener in them, relaxed
+        // beacon miss) stays off unless -itlawdlcoexplan is set. The -itlawdlno* flags still disable parts.
+        const bool awdlCoexPlan = PE_parse_boot_argn("-itlawdlcoexplan", &dummy, sizeof(dummy));
+        awdlAppleSlots = awdlCoexPlan && !PE_parse_boot_argn("-itlawdlnoinfraslots", &dummy, sizeof(dummy));
+        awdlAppleBmiss = awdlCoexPlan && !PE_parse_boot_argn("-itlawdlnobmissrelax", &dummy, sizeof(dummy));
         awdlAppleMsch = awdlAppleSlots && !PE_parse_boot_argn("-itlawdlnomsch", &dummy, sizeof(dummy));
         if (awdlCoexData) {
             // What made dedicated mode fast and quick to connect, for the listener beside Wi-Fi too:
