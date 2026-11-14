@@ -15488,13 +15488,14 @@ awdlAppleTick(struct iwx_softc *sc)
     }
 
     // The plan. Router entries only while the listener and the station are on different channels (or the
-    // station is 160 MHz wide), the router channel can be described, and the router is busy.
+    // station is 160 MHz wide) and the router channel can be described. A router on a radar channel (52-64,
+    // 100-144) is fine here: its entries only say we're away there, the listener itself stays off radar channels.
     uint8_t away[16] = {};
     bool active = false;
     const unsigned listener = awdlCoexChannel;
     const unsigned station = associated ? ieee80211_chan2ieee(ic, ic->ic_bss->ni_chan) : 0;
     if (awdlAppleSlots && associated && awdlCoexAdded && listener && station <= 255 &&
-        ItlAWDL::fixedScheduleChannel(uint8_t(station)) && ItlAWDL::fixedScheduleChannel(uint8_t(listener)) &&
+        ItlAWDL::routerEntryChannel(uint8_t(station)) && ItlAWDL::fixedScheduleChannel(uint8_t(listener)) &&
         station > 14 && (station != listener || ic->ic_bss->ni_chw == IEEE80211_CHAN_WIDTH_160)) {
         // A 2.4 GHz station keeps 0 router entries, as Apple's sdbModeAnd24Infra state does: on the AX201 a
         // 2.4 GHz station beside a 5 GHz listener held up in every test.
@@ -15507,7 +15508,7 @@ awdlAppleTick(struct iwx_softc *sc)
                                           ItlAWDL::globalOperatingClass20(uint8_t(listener)));
     for (unsigned k = 0; k < 16; ++k) {
         planChannel[k] = uint8_t(away[k] ? station : listener);
-        planClass[k] = away[k] ? ItlAWDL::globalOperatingClass20(uint8_t(station)) : listenerClass;
+        planClass[k] = away[k] ? ItlAWDL::routerOperatingClass20(uint8_t(station)) : listenerClass;
     }
     if (active != awdlOwnPlanActive || memcmp(planChannel, awdlOwnPlanChannel, 16) ||
         memcmp(away, awdlCoexPeerSchedule.ownAway, 16)) {

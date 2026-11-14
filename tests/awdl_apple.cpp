@@ -15,8 +15,20 @@ int main() {
     for (unsigned i = 0; i < 16; ++i) assert(out[40 + 2*i] == ch[i] && out[39 + 2*i] == 0x1b);
     assert(buildLocalPlannedSchedule(s, 1, 0, ch, out, sizeof(out), &n) == BuildResult::Invalid);   // down 0
     assert(buildLocalPlannedSchedule(s, 1, 65, ch, out, sizeof(out), &n) == BuildResult::Invalid);  // > 4 AWs
-    uint8_t bad[16]; for (unsigned i = 0; i < 16; ++i) bad[i] = 52;  // radar channel can't be described
+    uint8_t bad[16]; for (unsigned i = 0; i < 16; ++i) bad[i] = 68;  // not a Wi-Fi channel we can describe
     assert(buildLocalPlannedSchedule(s, 1, 10, bad, out, sizeof(out), &n) == BuildResult::Invalid);
+    // A router on a radar channel: its entries are allowed, the listener's own channel never is.
+    uint8_t dfs[16]; for (unsigned i = 0; i < 16; ++i) dfs[i] = (i == 6 || i == 7 || i == 14 || i == 15) ? 100 : 44;
+    assert(buildLocalPlannedSchedule(s, 1, 10, dfs, out, sizeof(out), &n) == BuildResult::Ready);
+    assert(out[40 + 2*6] == 100 && out[39 + 2*6] == 0x1b && out[40 + 2*5] == 44);
+    for (unsigned i = 0; i < 16; ++i) dfs[i] = 52;
+    assert(buildLocalPlannedSchedule(s, 1, 10, dfs, out, sizeof(out), &n) == BuildResult::Ready);
+    SyncPrefix onRadar = s; onRadar.nextChannel = onRadar.masterChannel = 100;
+    assert(buildLocalPlannedSchedule(onRadar, 1, 10, dfs, out, sizeof(out), &n) == BuildResult::Invalid);
+    assert(routerEntryChannel(100) && routerEntryChannel(144) && routerEntryChannel(52) && routerEntryChannel(44) &&
+           !routerEntryChannel(68) && !routerEntryChannel(102) && !fixedScheduleChannel(100));
+    assert(routerOperatingClass20(52) == 118 && routerOperatingClass20(100) == 121 && routerOperatingClass20(144) == 121 &&
+           routerOperatingClass20(44) == 115 && routerOperatingClass20(149) == 124 && routerOperatingClass20(68) == 0);
 
     // Own-away entries pause sending but not calibration; they survive reset().
     PeerSchedule ps{}; ps.assumeZero = true;

@@ -48,7 +48,8 @@ inline BuildResult buildLocalFixedSchedule(const SyncPrefix &settings,
     return BuildResult::Ready;
 }
 // Like buildLocalFixedSchedule, but with the AW counter and extended-AW down counter given (adopted from the
-// peer we follow, as an AWDL non-master does) and one channel per entry. Every channel must be describable.
+// peer we follow, as an AWDL non-master does) and one channel per entry. Entries on our own channel must be
+// fixed-schedule channels; the others are router entries and may also be radar channels (routerEntryChannel).
 inline BuildResult buildLocalPlannedSchedule(const SyncPrefix &settings, uint16_t counter, uint16_t downTU,
         const uint8_t channels[16], uint8_t *output, size_t available, size_t *written)
 {
@@ -58,7 +59,7 @@ inline BuildResult buildLocalPlannedSchedule(const SyncPrefix &settings, uint16_
         settings.commonLength > settings.awPeriod)
         return BuildResult::Invalid;
     for (unsigned i = 0; i < 16; ++i)
-        if (!fixedScheduleChannel(channels[i])) return BuildResult::Invalid;
+        if (channels[i] != settings.nextChannel && !routerEntryChannel(channels[i])) return BuildResult::Invalid;
     const uint32_t extendedTU = uint32_t(settings.awPeriod) * 4;
     if (!downTU || downTU > extendedTU) return BuildResult::Invalid;
     if (available < 73) return BuildResult::NoSpace;
