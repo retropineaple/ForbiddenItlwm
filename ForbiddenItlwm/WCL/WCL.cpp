@@ -684,10 +684,10 @@ void AirportItlwmSkywalkInterface::handleWCLLink(bool up)
     if (wclStopping)
         return;
     portAuthorized = up;
-    if (!up && wclLinkQualityReported) {
-        itlReportLinkQuality(static_cast<IOSkywalkNetworkInterface *>(this), uint32_t(kLinkQualityOff));
-        wclLinkQualityReported = 0;
-    }
+    if (!up)
+        AirportWCL::resetLinkQuality(wclLinkQualityReported, [this](int32_t quality) {
+            itlReportLinkQuality(static_cast<IOSkywalkNetworkInterface *>(this), uint32_t(quality));
+        });
     if (!up && wclLinkIndicated) {
         AirportWCL::LinkStatusEvent event = {};
         memcpy(event.bssid, joinBSSID, sizeof(event.bssid));
@@ -735,6 +735,9 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                 finishWCLScan(ic->ic_wcl_mac_reconfig ? kIOReturnAborted : kIOReturnOffline);
                 finishWCLJoin(1, 0, kIOReturnOffline);
                 portAuthorized = false;
+                AirportWCL::resetLinkQuality(wclLinkQualityReported, [this](int32_t quality) {
+                    itlReportLinkQuality(static_cast<IOSkywalkNetworkInterface *>(this), uint32_t(quality));
+                });
                 updateWCLLinkQuality(true);
                 ic->ic_wcl_join_requested = false;
                 clearWCLPMKSA();
@@ -799,6 +802,15 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                         if (getRSSI(&rssi) == kIOReturnSuccess && rssi.aggregate_rssi < 0) {
                             update.rssiValid = 1;
                             update.rssi = rssi.aggregate_rssi;
+#if __IO80211_TARGET == __MAC_26_0
+                            // Zero means no measurement; do not invent a noise floor.
+                            if (fHalService && fHalService->getDriverInfo()) {
+                                int16_t noise = fHalService->getDriverInfo()->getBSSNoise();
+                                if (noise > 0)
+                                    noise = -noise;
+                                AirportWCL::setBeaconRadio(update, rssi.aggregate_rssi, noise);
+                            }
+#endif
                         }
                         instance->postMessage(this, AirportWCL::LqmUpdate,
                             &update, sizeof(update), true);
