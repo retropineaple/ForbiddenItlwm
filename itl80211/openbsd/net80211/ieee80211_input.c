@@ -1943,6 +1943,22 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, mbuf_t m,
                 if (!(ic->ic_channels[c].ic_flags & IEEE80211_CHAN_DFS))
                     setbit(ic->ic_beacon_hint, c);
         }
+        /*
+         * The same for 36-48 (VHT centre 42), the block Apple's AWDL uses at
+         * 80 MHz on channel 44 where 149 isn't allowed (Japan, for example).
+         * A 160 MHz AP on 36-64 signals centre 42 with a second segment of 50,
+         * or, in the older form, width 2 with centre 50; either covers 36-48.
+         */
+        if (vhtopmode != NULL && chan >= 36 && chan <= 48) {
+            const struct ieee80211_ie_vht_operation *op =
+                (const struct ieee80211_ie_vht_operation *)vhtopmode;
+            if ((op->chan_width == 1 && op->center_freq_seg1_idx == 42) ||
+                (op->chan_width == 2 && op->center_freq_seg1_idx == 50)) {
+                for (unsigned c = 36; c <= 48; c += 4)
+                    if (!(ic->ic_channels[c].ic_flags & IEEE80211_CHAN_DFS))
+                        setbit(ic->ic_beacon_hint, c);
+            }
+        }
     }
     
 #ifdef IEEE80211_DEBUG
