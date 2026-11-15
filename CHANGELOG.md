@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.4-beta.3
 
 - **Continuity Camera and Sidecar: the driver now answers the requests macOS makes before it registers real-time traffic.** `setPEER_CACHE_CONTROL` used to return "unsupported", so macOS waited 3 s for an event that never came and failed the registration. The driver now accepts the request and, after its handler has returned, posts event 51 with the same 464-byte record (`+4` = 1 added, 3 deleted, peer address at `+8`). Posting from inside the handler is too early, because the caller has not gone to sleep yet and the wakeup is lost. It also answers `getPEER_CACHE_MAXIMUM_SIZE` (8) and accepts `setLLW_PARAMS`. Counters: `ItlwmAWDLPeerCacheRequests/Completed/LastPeer/LastOperation`, `ItlwmAWDLLlwParamRequests`.
 - **New flag `-itlawdlumiack` (off by default): reports the "peer acknowledged our UMI" status.** The next step of the registration sends a unicast action frame (a "UMI") and waits 3 s for its transmit status, message 69 (peer address, then a status byte at `+6`, 0 = acknowledged). macOS sends that frame from a timer that only runs inside an AWDL availability window, and this driver reports no windows (the kernel logs `monitorAWEvents WARNING: Did not get AW start event` every second), so the status never came. With the flag the driver posts it itself. Every wait on `EnsembleUMIStatusDone` then ends at once and the kernel logs "Peer acked Ensemble start UMI request". Counter: `ItlwmAWDLUmiAckPosted`.
