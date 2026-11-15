@@ -114,6 +114,7 @@ ForbiddenItlwm builds on a lot of other people's work:
 - **[Linux iwlwifi](https://wireless.wiki.kernel.org/en/users/drivers/iwlwifi)** and **Intel**, for the firmware and as a reference. No code was copied.
 - **[FranciumOS-org/AirPort_RTW89](https://github.com/FranciumOS-org/AirPort_RTW89)** (GPL-2.0): it showed the approach and was used to cross-check the wire format.
 - **[seemoo-lab/owl](https://github.com/seemoo-lab/owl)** and the Open Wireless Link research, used to cross-check AWDL frame formats and timing. No code was copied.
+- **[DrogaBox](https://github.com/DrogaBox)** and **[RTL8814Native](https://github.com/DrogaBox/RTL8814Native)**, a native macOS driver for Realtek RTL8814AU adapters with its own AWDL. Its notes on how macOS's AWDL peer manager talks to a driver gave the layout of the peer cache control record (operation values, the peer address), the completion event macOS waits for, the rule that it has to be posted after the request handler returns, and the cache size, which the Continuity Camera handling here follows. The offsets were read on Tahoe there and checked again on Sequoia here. No code was copied.
 - **[Acidanthera](https://github.com/acidanthera)**, for Lilu, MacKernelSDK and BlueToolFixup. BTLEAdvFixup's page hook follows BlueToolFixup.
 - **[IntelBluetoothFirmware / IntelBTPatcher](https://github.com/OpenIntelWireless/IntelBluetoothFirmware)** (GPL-3.0): BTLEAdvFixup's HCI hook follows IntelBTPatcher.
 - Apple's XNU sources were read as a reference.
