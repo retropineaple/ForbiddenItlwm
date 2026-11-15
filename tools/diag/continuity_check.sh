@@ -63,7 +63,50 @@ head1 "4. Continuity Camera"
 running ContinuityCaptureAgent && ok "ContinuityCaptureAgent is running." || warn "ContinuityCaptureAgent isn't running."
 CC=$(count_log 'process == "ContinuityCaptureAgent" OR process == "ContinuityCaptureDaemon"')
 note "Continuity Camera log lines: $CC. Try: open Photo Booth or FaceTime and pick the iPhone as the camera (iPhone near the Mac, unlocked)."
-
+note "Where a camera attempt stops is explained, stage by stage, in docs/DEBUGGING.md (Case 3)."
+reg() { ioreg -l -w0 2>/dev/null | grep -oE "\"$1\" = [A-Za-z0-9]+" | head -1 | awk '{ print $3 }'; }
+# Stage 0: does the camera agent list an iPhone? Photo Booth offers it only when this list isn't empty.
+DEV=$(/usr/bin/log show --last "${MIN}m" --info --style compact --predicate 'process == "ContinuityCaptureAgent"' 2>/dev/null | grep -A2 'RapportDevices' | grep -c 'RPRemoteDisplayDevice')
+if [ "$DEV" -gt 0 ]; then ok "Stage 0: the camera agent lists an iPhone as a usable camera ($DEV entries in the last ${MIN} min)."
+else warn "Stage 0: the camera agent's device list holds no iPhone in the last ${MIN} min. The iPhone must be unlocked, awake and near, with Continuity Camera on (Settings > General > AirPlay & Continuity); after a reboot it can take a few minutes."; fi
+# Stages 1 and 2: what the driver answered.
+PCR=$(reg ItlwmAWDLPeerCacheRequests); PCC=$(reg ItlwmAWDLPeerCacheCompleted)
+if [ -z "$PCR" ]; then note "Stage 1: this driver build has no peer-cache counters (older than 0.5.4-beta.3), so Continuity Camera cannot get past registration."
+elif [ "$PCR" = "$PCC" ]; then ok "Stage 1: peer cache requests answered ($PCR of $PCR)."
+else warn "Stage 1: $PCR peer cache requests but only ${PCC:-0} completed."; fi
+UEN=$(reg ItlwmAWDLUmiAckEnabled); UPO=$(reg ItlwmAWDLUmiAckPosted)
+if [ "$UEN" = "Yes" ]; then ok "Stage 2: -itlawdlumiack is on; ${UPO:-0} UMI statuses reported to macOS."
+else note "Stage 2: -itlawdlumiack is off. Continuity Camera's registration fails after 3 s without it (see docs/BOOT-FLAGS.md)."; fi
+# Stage 3: does macOS accept this Mac's CPU family for the camera's video format? (Read-only: it only calls a getter.)
+FAM=$(sysctl -n hw.cpufamily 2>/dev/null)
+HEVC=unavailable
+if command -v python3 >/dev/null 2>&1; then
+    HEVC=$(python3 -I - <<'PY' 2>/dev/null || echo unavailable
+import ctypes, ctypes.util
+ctypes.CDLL('/System/Library/PrivateFrameworks/AVConference.framework/AVConference')
+o = ctypes.CDLL(ctypes.util.find_library('objc'))
+o.objc_getClass.restype = ctypes.c_void_p; o.objc_getClass.argtypes = [ctypes.c_char_p]
+o.sel_registerName.restype = ctypes.c_void_p; o.sel_registerName.argtypes = [ctypes.c_char_p]
+def call(obj, sel):
+    o.objc_msgSend.restype = ctypes.c_void_p if sel == 'sharedInstance' else ctypes.c_bool
+    o.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    return o.objc_msgSend(obj, o.sel_registerName(sel.encode()))
+hw = call(o.objc_getClass(b'VCHardwareSettingsMac'), 'sharedInstance')
+print('yes' if call(hw, 'canDoHEVC') else 'no')
+PY
+)
+fi
+if [ "$HEVC" = "yes" ]; then ok "Stage 3: macOS accepts this Mac for the camera's video format (hw.cpufamily $(printf '0x%x' "${FAM:-0}"))."
+elif [ "$HEVC" = "no" ]; then warn "Stage 3: macOS refuses this Mac for the camera's video format: hw.cpufamily is $(printf '0x%x' "${FAM:-0}"), an older Intel family (Penryn, 0x78ea4fbc, is what AMD kernel patches usually report). Skylake or newer passes. See docs/DEBUGGING.md, Case 3."
+else note "Stage 3: could not ask macOS about the video format (needs python3 and macOS's AVConference)."; fi
+# Stage 4 and what failed lately, from the logs: counts only.
+fails() { # <label> <predicate>
+    local n; n=$(count_log "$2"); [ "$n" -gt 0 ] && warn "$1: $n lines in the last ${MIN} min." || ok "$1: none in the last ${MIN} min."
+}
+fails "RemoteCamera traffic registration failed" 'process == "ContinuityCaptureAgent" AND eventMessage CONTAINS "Traffic register failed"'
+fails "UMI status never came (\"Ensemble start Failure\")" 'process == "kernel" AND eventMessage CONTAINS "Ensemble start Failure"'
+fails "No video format for this hardware (\"No supportedPayloads\")" 'process == "ContinuityCaptureAgent" AND eventMessage CONTAINS "No supportedPayloads"'
+fails "Media connection never became ready (\"nw_connection ready timeout\")" 'process == "ContinuityCaptureAgent" AND eventMessage CONTAINS "nw_connection ready timeout"'
 head1 "Link state behind all of it (AWDL)"
 KEYS='Added|Channel|CountryLearned|BaPeerAdded|BaFilterOff|PromiscLive|PeerSyncFrames|DataTx|DataRxUcast|UcastOK|UcastFailed'
 ioreg -l -w0 2>/dev/null | grep -oE "\"ITLAWDLCoex($KEYS)\" = [A-Za-z0-9]+" | sed 's/"ITLAWDLCoex//; s/" = /=/' | sort -u | tr '\n' ' '; echo

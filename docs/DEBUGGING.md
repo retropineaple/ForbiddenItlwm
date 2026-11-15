@@ -162,7 +162,7 @@ sudo dtrace -Z -q -s tools/diag/trace_emsgsize.d -o emsgsize.out
 
 ## Case 3: Continuity Camera gets part of the way
 
-Continuity Camera (the iPhone as the Mac's camera) is the one Continuity feature that needs the AWDL driver to answer more than discovery does. Handoff, Universal Clipboard, calls, Instant Hotspot and AirPlay Receiver need nothing from it; `tools/diag/continuity_check.sh` shows what is ready. On the test Mac (AX200, macOS Sequoia 15.8.2) the camera still shows a black picture, but the failure moved forward through four stages. Each stage had its own log line, so you can tell where yours stops.
+Continuity Camera (the iPhone as the Mac's camera) is the one Continuity feature that needs the AWDL driver to answer more than discovery does. Handoff, Universal Clipboard, calls, Instant Hotspot and AirPlay Receiver need nothing from it; `tools/diag/continuity_check.sh` shows what is ready, and its camera section reports each stage below (the iPhone listed, the driver's peer-cache and UMI counters, the CPU-family check, and how many lines of each failure the log holds). On the test Mac (AX200, macOS Sequoia 15.8.2) the camera still shows a black picture, but the failure moved forward through four stages. Each stage had its own log line, so you can tell where yours stops.
 
 **0. The iPhone isn't in Photo Booth's list at all.** This is the iPhone, not the driver. The camera agent keeps a list of usable devices; look for the iPhone in it:
 
