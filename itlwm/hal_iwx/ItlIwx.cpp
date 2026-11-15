@@ -6021,7 +6021,8 @@ static uint32_t awdlCoexRejectReasons[4];
 // Stage 4: receive Block Ack on the listener. The phone's ADDBA request gets a peer station (bound to the
 // listener's MAC context) and a firmware session, then an answer from the listener's queue. While a lot
 // of data arrives, promiscuous receive goes off (dedicated mode found that the firmware doesn't
-// acknowledge a session's frames with it on), and comes back when it's quiet.
+// acknowledge a session's frames with it on). By default it stays off for as long as the peer's firmware
+// station exists, and comes back when that station goes (see awdlCoexBaHandle).
 static bool awdlCoexBaPeerAdded, awdlCoexBaFilterOff;
 static ItlAWDL::PendingAddbaRequests awdlCoexBaRequestsPending;
 static uint8_t awdlCoexBaPeer[6], awdlCoexBaTidToken[8];
@@ -6103,9 +6104,11 @@ static uint32_t awdlCoexBaRefillKicks, awdlCoexBaRefillFrames;
 // slowly) or none (macOS had nothing to send)? After a refill kick, was it still empty with frames waiting?
 static uint32_t awdlCoexBaEmptyWithReady, awdlCoexBaEmptyNoReady, awdlCoexBaRefillStillEmptyReady;
 // -itlawdlcoexbafilterhyst: the old receive-filter policy (promiscuous back on after quiet seconds) for an
-// A/B test. By default promiscuous receive stays off while a receive BA session with the peer is open:
-// the firmware doesn't acknowledge a session's frames with it on, and three iPhone sysdiagnoses showed a
-// minute-long stall where the phone's frames went unacknowledged after it came back on.
+// A/B test. By default promiscuous receive stays off while the peer's firmware station exists (not only while
+// a receive BA session is open): the firmware doesn't acknowledge a station's frames with it on, and iPhone
+// sysdiagnoses showed a minute-long stall where the phone's frames went unacknowledged after it came back on.
+// A receive session is torn down after 60 s idle, but the station lives up to ten minutes, and a send we start
+// in that gap gets no replies until the phone opens a session itself: two minutes in the 2026-11-15 tests.
 static bool awdlCoexBaFilterHysteresis;
 // -itlawdlcoexawhold: outside an aggregated bulk send (which has its own station pause), awdl0 output waits
 // in macOS's queue while the active peer's fresh, calibrated schedule says it is away from our channel,
@@ -8105,8 +8108,8 @@ awdlCoexBaHandle(struct iwx_softc *sc)
             awdlCoexBaAnswerRetryUS = answerNow + 20000ULL;
         }
     }
-    // Promiscuous receive off for as long as a receive BA session is open (or, with the A/B flag, the old
-    // traffic hysteresis). It comes back on when the session or the peer station goes.
+    // Promiscuous receive off for as long as the peer's station exists (or, with the A/B flag, the old
+    // traffic hysteresis). It comes back on when the peer station goes.
     bool filterChange = false;
     if (awdlCoexBaFilterHysteresis) {
         filterChange = awdlCoexBaPeerAdded && awdlCoexBaTids && stillOurs() &&
@@ -8128,7 +8131,12 @@ awdlCoexBaHandle(struct iwx_softc *sc)
             awdlCoexBaProbeUntilUS = answerNow + 250000ULL;
             awdlCoexBaEvent('P', awdlCoexBaTxToken, awdlCoexBaTxAsks, 0);
         }
-        const bool wantOff = receiveSession && answerNow >= awdlCoexBaProbeUntilUS;
+        // Off while the peer's station exists, not only while a receive TID is open. A receive TID is torn
+        // down after 60 s idle, but the station and our send agreement live for ten minutes. With promiscuous
+        // receive on in that gap the firmware does not acknowledge the phone's replies to a send we start, so
+        // nothing arrives (DataRxUcast frozen, SYNs unanswered) until the phone opens a session itself, which
+        // took about two minutes on 2026-11-15. canProbe still applies only to a real receive session.
+        const bool wantOff = awdlCoexBaPeerAdded && answerNow >= awdlCoexBaProbeUntilUS;
         if (wantOff != awdlCoexBaFilterOff) {
             awdlCoexBaFilter.off = wantOff;
             filterChange = true;
