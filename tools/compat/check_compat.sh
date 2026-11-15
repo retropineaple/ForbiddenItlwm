@@ -446,6 +446,36 @@ else
     info "Skipped: the AirDrop build isn't running."
 fi
 
+# ---------------------------------------------------------------- wired MTU
+head1 "7. Wired interface MTU (large AirDrop sends)"
+# AirDrop sends big files over QUIC, which sizes its datagrams from the MTU of the path it starts on. With
+# Ethernet at 1500 and awdl0 at 1484, QUIC can build packets of 1494 to 1500 bytes and send them on awdl0.
+# macOS refuses them (EMSGSIZE, "message too long"), the connection dies and AirDrop reports "unexpected-40".
+# Small files finish before QUIC grows its packets, so only big transfers are hit. Seen on a Mac with Ethernet
+# and AWDL up together (docs/TROUBLESHOOTING.md). Wi-Fi is left out: it stayed at 1500 in the tests that worked.
+AWDL_MTU=$(ifconfig awdl0 2>/dev/null | sed -n 's/.*mtu \([0-9][0-9]*\).*/\1/p' | head -1)
+WIFI_DEV=$(networksetup -listallhardwareports 2>/dev/null | awk '/Hardware Port: (Wi-Fi|AirPort)/ { getline; print $2; exit }')
+if [ -z "$AWDL_MTU" ]; then
+    info "There's no awdl0 interface, so there's nothing to compare."
+else
+    TOO_BIG=""
+    for IF in $(ifconfig -l); do
+        case "$IF" in en[0-9]*) ;; *) continue;; esac
+        [ "$IF" = "$WIFI_DEV" ] && continue
+        IFINFO=$(ifconfig "$IF" 2>/dev/null)
+        case "$IFINFO" in *"status: active"*) ;; *) continue;; esac
+        IF_MTU=$(printf '%s\n' "$IFINFO" | sed -n 's/.*mtu \([0-9][0-9]*\).*/\1/p' | head -1)
+        [ -n "$IF_MTU" ] && [ "$IF_MTU" -gt "$AWDL_MTU" ] && TOO_BIG="$TOO_BIG $IF=$IF_MTU"
+    done
+    if [ -z "$TOO_BIG" ]; then
+        pass "No active wired interface has a larger MTU than awdl0 ($AWDL_MTU)."
+    else
+        warn "Active wired interface with an MTU above awdl0's $AWDL_MTU:$TOO_BIG"
+        warn "Big AirDrop sends can die after about 2 s with \"unexpected-40\" (packets of 1494 to 1500 bytes refused on awdl0)."
+        warn "Fix: lower that interface to $AWDL_MTU, e.g. sudo networksetup -setMTU Ethernet $AWDL_MTU (undo: 1500)."
+    fi
+fi
+
 # ---------------------------------------------------------------- verdict
 head1 "Verdict"
 case "$CARD_TIER" in
