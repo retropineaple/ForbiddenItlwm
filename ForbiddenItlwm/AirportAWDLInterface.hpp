@@ -4,6 +4,7 @@
 #include <Airport/IOSkywalkQueueFactories.h>
 #include "AWDLRequestedValue.hpp"
 #include "AWDLInactiveProtocol.hpp"
+#include "AWDLPeerCache.hpp"
 #include <IOKit/IOLocks.h>
 
 class ItlAWDLInterface : public IO80211AWDLProtocol {
@@ -168,7 +169,7 @@ private:
     // the driver posts event 51 with the same 464-byte record (+4 = 1 added, 3 deleted). A wakeup sent from inside
     // the handler is lost, because the caller has not gone to sleep yet, so the completion is queued here and
     // posted by a timer on the interface work loop after the handler has returned.
-    static constexpr unsigned peerCacheBytes = 464, peerCacheQueueDepth = 8;
+    static constexpr unsigned peerCacheBytes = itlawdl::peerCacheRecordBytes, peerCacheQueueDepth = 8;
     struct PeerCacheDone { uint8_t bytes[peerCacheBytes]; };
     PeerCacheDone peerCacheDone[peerCacheQueueDepth];
     unsigned peerCacheDoneCount = 0, peerCacheCompleted = 0, peerCacheDropped = 0;
