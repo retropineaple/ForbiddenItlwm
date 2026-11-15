@@ -31,7 +31,10 @@ with tempfile.TemporaryDirectory(prefix="forbiddenitlwm-tests-") as directory:
 subprocess.run(["python3", str(root / "tests/monitor_tx_ownership.py")], check=True)
 subprocess.run(["python3", str(root / "tests/monitor_channel.py")], check=True)
 subprocess.run(["python3", str(root / "tests/monitor_probe.py")], check=True)
-subprocess.run(["python3", str(root / "tests/btleadv_patterns.py")], check=True)
+# The default set is checked against this Mac's own bluetoothd, so it only means something on the macOS build the
+# set is for. CI runners run another build; FORBIDDEN_SKIP_HOST_BLUETOOTHD=1 skips just this check there.
+if not os.environ.get("FORBIDDEN_SKIP_HOST_BLUETOOTHD"):
+    subprocess.run(["python3", str(root / "tests/btleadv_patterns.py")], check=True)
 # The Sonoma set needs a 14.8.9 bluetoothd. Point this at one to check it.
 if os.environ.get("FORBIDDEN_SONOMA_BLUETOOTHD"):
     subprocess.run(["python3", str(root / "tests/btleadv_patterns.py"), "--target", "sonoma",

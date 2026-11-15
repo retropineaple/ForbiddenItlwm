@@ -11,3 +11,7 @@ MacKernelSDK
 include/FwBinary.cpp
 .DS_Store
 *.log
+# Local build output and MCP tool state
+build-*/
+graphify-out/
+.serena/
