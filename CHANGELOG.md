@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased (Continuity Camera draft)
+
+- **Continuity Camera / `llw0` (`-itlawdlllw`, Sequoia):** peer-cache and UMI answers so registration proceeds; plain RFC 1042 Continuity frames delivered on `llw0` only when `ITL_AWDL_LLW` is built (dropped on Tahoe/Sonoma builds without `llw0`). Draft until video loss is acceptable; see [DEBUGGING.md Case 3](docs/DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way).
+- **Tools:** Continuity diagnostics under `tools/diag/` (`continuity_check.sh`, peer-cache/UMI dtrace, MTU/EMSGSIZE traces). `check_compat.sh` section 8 warns when a wired interface MTU exceeds `awdl0`.
+
 ## 0.6.0-beta.2
 
 **Bluetooth: BTLEAdvFixup 0.9.3**

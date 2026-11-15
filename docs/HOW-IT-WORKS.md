@@ -106,6 +106,16 @@ macOS publishes each interface's link-quality metric as `State:/Network/Interfac
 - **What ForbiddenItlwm does:** every 2 seconds while connected, it calls `IOSkywalkNetworkInterface::reportLinkQuality` (which sets the kernel's metric) from the signal strength: 100 at -70 dBm or stronger, 50 at -80 dBm or stronger, 10 below. It reports "off" when the link drops and, from 0.6.0-beta.1, when the driver stops.
 - **It also tells WCL the signal (Tahoe only):** the signal strength goes into WCL's link-quality update (byte 0 valid, the RSSI at offset 4), which Apple's `handleLqmUpdate` reads. From 0.6.0-beta.1 ([PR #1](https://github.com/retropineaple/ForbiddenItlwm/pull/1)) the update also carries the noise floor and signal-to-noise (offsets 0x0b to 0x10) when the firmware has measured noise; some cards' firmware doesn't report it in normal Wi-Fi (the project's AX211 doesn't), and then those fields stay empty. That structure's layout is only known for Tahoe: checked on 26.7.2 and 26.7.3 for the noise fields.
 
+### 9. Continuity Camera and Sidecar: what the driver answers
+
+These two ask the driver for things AirDrop never does. Before it registers real-time traffic with the iPhone, macOS:
+
+- asks the driver to add the peer to a firmware cache (`setPEER_CACHE_CONTROL`, a 464-byte record: version at +0, operation at +4, peer address at +8) and sleeps until the driver posts event 51 with the same record and +4 set to 1 (added) or 3 (deleted). The driver posts it from a timer on the interface work loop a few milliseconds after its handler returns; posted from inside the handler, the wakeup would arrive before the caller sleeps and be lost.
+- sends low-latency parameters (`setLLW_PARAMS`), which are acknowledged and counted.
+- sends the iPhone a unicast action frame and waits for its transmit status, message 69 (peer address, then a status byte at +6; 0 means acknowledged). macOS sends that frame itself, but only inside an availability window, which this driver does not report. With `-itlawdlumiack` the driver posts the status instead, so the wait ends. Nothing is transmitted for it.
+
+None of this moves data. It lets the registration finish. The video then needs a media connection that this driver does not provide yet: see [DEBUGGING.md Case 3](DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way) for where it stops and what is known.
+
 ## Why speed and connect time vary
 
 - **Speed follows the iPhone's own Wi-Fi.** Its channel sequence gives AirDrop the slots its station doesn't need:
@@ -125,7 +135,9 @@ These each took one or more test boots to learn.
 - **Peer creation needs real RSSI** in the frame metadata. With 0 there, the peer manager never adds the peer.
 - **`awdl0` is receive-restricted.** Ordinary sockets can't receive on it, so `nc` and similar tools time out even when replies arrive. Judge connectivity with a packet capture.
 - **Use `/usr/bin/log`.** In zsh, `log` is a built-in, so a bare `log show` prints nothing useful. `sharingd`, `rapportd`, `mDNSResponder` and `wifip2pd` logs show what AirDrop is doing.
-- **The firmware gives a listener context group data only in promiscuous mode,** whatever the multicast filter says.
+- **The firmware gives a listener context group data only in promiscuous mode,** whatever the multicast filter says. So with promiscuous receive off, which is the normal state while a peer is active (next point), the Mac receives almost no group frames: in one test run 13 group frames arrived against 247 sent, so the iPhone's multicast mDNS answers don't reach it. Discovery and connections still worked in the tests.
+- **Promiscuous receive follows the peer's firmware station.** The firmware doesn't acknowledge a station's frames while promiscuous receive is on, so the driver keeps it off for as long as the peer's station exists (up to ten minutes after the last traffic). Keying it on the receive Block Ack session instead let it come back on 60 s after that session went idle, and a send started in that gap got no replies for about two minutes (`awdlCoexBaHandle`, [TROUBLESHOOTING.md](TROUBLESHOOTING.md#a-send-from-the-mac-stalls-for-a-minute-or-more-after-the-iphone-sat-idle)).
+- **QUIC sizes its packets from the wired MTU.** `awdl0` is 1484. With an Ethernet interface at 1500 up beside it, a big AirDrop send builds packets of up to 1500 bytes, macOS refuses those on `awdl0` with `EMSGSIZE`, and the transfer dies (`unexpected-40`). The fix is the wired interface's MTU, not the driver ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#big-airdrop-sends-die-after-a-couple-of-seconds-unexpected-40)).
 - **Cross-band retunes on a live binding crash the firmware.** Band changes are refused.
 - **Firmware TX status depends on the frame:** for broadcasts it only means the frame left the queue.
 - **ACKs must match the MAC context's address.** The listener carries the AWDL address so the firmware credits the peer's ACKs.
