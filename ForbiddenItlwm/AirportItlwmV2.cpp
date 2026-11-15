@@ -84,6 +84,155 @@ IOReturn ItlAWDLInterface::setAWDL_PEER_TRAFFIC_REGISTRATION(apple80211_awdl_pee
     return data ? kIOReturnSuccess : kIOReturnBadArgument;
 }
 
+#ifndef APPLE80211_M_PEER_CACHE_CONTROL
+#define APPLE80211_M_PEER_CACHE_CONTROL 51
+#endif
+
+IOReturn ItlAWDLInterface::getPEER_CACHE_MAXIMUM_SIZE(apple80211_peer_cache_maximum_size *data)
+{
+    if (!nativeState.accept)
+        return unsupported("getPEER_CACHE_MAXIMUM_SIZE");
+    if (!data)
+        return kIOReturnBadArgument;
+    // The record keeps the peer count at +4. Eight is what Broadcom's firmware cache holds.
+    const uint32_t peers = 8;
+    memcpy(reinterpret_cast<uint8_t *>(data) + 4, &peers, sizeof(peers));
+    return kIOReturnSuccess;
+}
+
+IOReturn ItlAWDLInterface::setPEER_CACHE_CONTROL(apple80211_peer_cache_control *data)
+{
+    if (!nativeState.accept)
+        return unsupported("setPEER_CACHE_CONTROL");
+    if (!data)
+        return kIOReturnBadArgument;
+    // Continuity Camera and Sidecar register traffic with a peer, and macOS first asks the driver to put that
+    // peer into a firmware cache: 464 bytes, version at +0, operation at +4 (0 or 6 add, 2 delete), the peer's
+    // address at +8. The Intel firmware keeps no such cache and the data path doesn't use one, so the request
+    // is only answered. Returning success is not enough: the family sleeps until event 51 comes back with the
+    // same record and +4 set to 1 (added) or 3 (deleted), which Broadcom's completePeerCacheControl does when
+    // its firmware answers. Layout read on Sequoia 24H232 with tools/diag/trace_peer_cache.d.
+    const uint8_t *raw = reinterpret_cast<const uint8_t *>(data);
+    uint32_t operation;
+    memcpy(&operation, raw + 4, sizeof(operation));
+    char peer[18];
+    snprintf(peer, sizeof(peer), "%02x:%02x:%02x:%02x:%02x:%02x", raw[8], raw[9], raw[10], raw[11], raw[12], raw[13]);
+    peerCacheRequests++;
+    setProperty("ItlwmAWDLPeerCacheRequests", peerCacheRequests, 32);
+    setProperty("ItlwmAWDLPeerCacheLastPeer", peer);
+    setProperty("ItlwmAWDLPeerCacheLastOperation", operation, 32);
+    const uint32_t result = (operation == 0 || operation == 6) ? 1 : operation == 2 ? 3 : 0;
+    if (!result || !peerCacheTimer || !configurationLock)
+        return kIOReturnSuccess;
+    IOLockLock(configurationLock);
+    if (peerCacheDoneCount < peerCacheQueueDepth) {
+        PeerCacheDone &entry = peerCacheDone[peerCacheDoneCount++];
+        memcpy(entry.bytes, raw, peerCacheBytes);
+        memcpy(entry.bytes + 4, &result, sizeof(result));
+    } else {
+        peerCacheDropped++;
+    }
+    IOLockUnlock(configurationLock);
+    if (umiAckWanted && result == 1) {
+        memcpy(umiLastPeer, raw + 8, 6);
+        umiLastPeerValid = true;
+        queueUmiAck(raw + 8);
+    }
+    // After this handler has returned and the caller is asleep.
+    peerCacheTimer->setTimeoutMS(10);
+    // The registration thread then queues its UMI and waits for event 9, so the status follows later.
+    return kIOReturnSuccess;
+}
+
+// Queues one acknowledged-UMI status for the peer (once) and arms the timer. The registration thread queues
+// its UMI and starts waiting only after it has answered the requests that preceded it, so the status follows
+// later rather than being posted from inside the request.
+void ItlAWDLInterface::queueUmiAck(const uint8_t *peer)
+{
+    if (!umiAckWanted || !umiAckTimer || !configurationLock)
+        return;
+    IOLockLock(configurationLock);
+    bool queued = false;
+    for (unsigned i = 0; i < umiAckCount; i++)
+        if (!memcmp(umiAckPeers[i], peer, 6))
+            queued = true;
+    if (!queued && umiAckCount < umiAckQueueDepth)
+        memcpy(umiAckPeers[umiAckCount++], peer, 6);
+    IOLockUnlock(configurationLock);
+    umiAckTimer->setTimeoutMS(150);
+}
+
+void ItlAWDLInterface::peerCacheTick(OSObject *owner, IOTimerEventSource *)
+{
+    if (auto *self = OSDynamicCast(ItlAWDLInterface, owner))
+        self->postPeerCacheCompletions();
+}
+
+void ItlAWDLInterface::umiAckTick(OSObject *owner, IOTimerEventSource *)
+{
+    if (auto *self = OSDynamicCast(ItlAWDLInterface, owner))
+        self->postUmiAcks();
+}
+
+#ifndef APPLE80211_M_AWDL_UNICAST_AF_STATUS
+#define APPLE80211_M_AWDL_UNICAST_AF_STATUS 69
+#endif
+
+void ItlAWDLInterface::postUmiAcks()
+{
+    uint8_t peers[umiAckQueueDepth][6];
+    unsigned count;
+    IOLockLock(configurationLock);
+    count = umiAckCount;
+    memcpy(peers, umiAckPeers, sizeof(peers));
+    umiAckCount = 0;
+    IOLockUnlock(configurationLock);
+    for (unsigned i = 0; i < count; i++) {
+        uint8_t status[32] = {};
+        memcpy(status, peers[i], 6);   // status[6] = 0: the peer acknowledged
+        postMessage(APPLE80211_M_AWDL_UNICAST_AF_STATUS, status, sizeof(status), false);
+        umiAckPosted++;
+    }
+    if (count)
+        setProperty("ItlwmAWDLUmiAckPosted", umiAckPosted, 32);
+}
+
+void ItlAWDLInterface::postPeerCacheCompletions()
+{
+    PeerCacheDone pending[peerCacheQueueDepth];
+    unsigned count;
+    IOLockLock(configurationLock);
+    count = peerCacheDoneCount;
+    memcpy(pending, peerCacheDone, count * sizeof(PeerCacheDone));
+    peerCacheDoneCount = 0;
+    IOLockUnlock(configurationLock);
+    for (unsigned i = 0; i < count; i++) {
+        postMessage(APPLE80211_M_PEER_CACHE_CONTROL, pending[i].bytes, peerCacheBytes, false);
+        peerCacheCompleted++;
+    }
+    if (count) {
+        setProperty("ItlwmAWDLPeerCacheCompleted", peerCacheCompleted, 32);
+        if (peerCacheDropped)
+            setProperty("ItlwmAWDLPeerCacheDropped", peerCacheDropped, 32);
+    }
+}
+
+IOReturn ItlAWDLInterface::setLLW_PARAMS(apple80211_llw_params *data)
+{
+    if (!nativeState.accept)
+        return unsupported("setLLW_PARAMS");
+    if (!data)
+        return kIOReturnBadArgument;
+    // Low-latency (HPP) parameters, sent when a Continuity feature registers traffic. The firmware has no
+    // such mode, so they are acknowledged and counted; the link keeps its normal schedule.
+    llwParamRequests++;
+    setProperty("ItlwmAWDLLlwParamRequests", llwParamRequests, 32);
+    // Each traffic registration begins with these requests, ahead of its UMI and the wait for its status.
+    if (umiAckWanted && umiLastPeerValid)
+        queueUmiAck(umiLastPeer);
+    return kIOReturnSuccess;
+}
+
 extern bool itlAWDLBuildVerified();
 extern bool itlAWDLBuildForced();
 
@@ -720,6 +869,16 @@ void ItlAWDLInterface::releaseNetworkResources()
         packetQueues[i-1]->disable();
         queueWorkLoop->removeEventSource(packetQueues[i-1]);
     }
+    if (umiAckTimer) {
+        umiAckTimer->cancelTimeout();
+        queueWorkLoop->removeEventSource(umiAckTimer);
+        OSSafeReleaseNULL(umiAckTimer);
+    }
+    if (peerCacheTimer) {
+        peerCacheTimer->cancelTimeout();
+        queueWorkLoop->removeEventSource(peerCacheTimer);
+        OSSafeReleaseNULL(peerCacheTimer);
+    }
     addedQueues = 0;
     for (auto &queue : packetQueues)
         OSSafeReleaseNULL(queue);
@@ -869,6 +1028,17 @@ IOReturn ItlAWDLInterface::initializeNetwork(IO80211Controller *controller,
     nativeStarted = true;
     queueWorkLoop = workLoop;
     queueWorkLoop->retain();
+    peerCacheTimer = IOTimerEventSource::timerEventSource(this, reinterpret_cast<IOTimerEventSource::Action>(&ItlAWDLInterface::peerCacheTick));
+    if (peerCacheTimer && queueWorkLoop->addEventSource(peerCacheTimer) != kIOReturnSuccess)
+        OSSafeReleaseNULL(peerCacheTimer);
+    int umiAck = 0;
+    if (PE_parse_boot_argn("-itlawdlumiack", &umiAck, sizeof(umiAck))) {
+        umiAckTimer = IOTimerEventSource::timerEventSource(this, reinterpret_cast<IOTimerEventSource::Action>(&ItlAWDLInterface::umiAckTick));
+        if (umiAckTimer && queueWorkLoop->addEventSource(umiAckTimer) != kIOReturnSuccess)
+            OSSafeReleaseNULL(umiAckTimer);
+        umiAckWanted = umiAckTimer != nullptr;
+    }
+    setProperty("ItlwmAWDLUmiAckEnabled", umiAckWanted);
 
     stage("allocating-pools");
     // iface162: the TX pool must outlast macOS's own awdl0 queue. The flowswitch copies every outgoing
