@@ -120,22 +120,21 @@ IOReturn ItlAWDLInterface::setPEER_CACHE_CONTROL(apple80211_peer_cache_control *
     setProperty("ItlwmAWDLPeerCacheRequests", peerCacheRequests, 32);
     setProperty("ItlwmAWDLPeerCacheLastPeer", peer);
     setProperty("ItlwmAWDLPeerCacheLastOperation", operation, 32);
-    const uint32_t result = (operation == 0 || operation == 6) ? 1 : operation == 2 ? 3 : 0;
+    const uint32_t result = itlawdl::peerCacheCompletion(operation);
     if (!result || !peerCacheTimer || !configurationLock)
         return kIOReturnSuccess;
     IOLockLock(configurationLock);
     if (peerCacheDoneCount < peerCacheQueueDepth) {
         PeerCacheDone &entry = peerCacheDone[peerCacheDoneCount++];
-        memcpy(entry.bytes, raw, peerCacheBytes);
-        memcpy(entry.bytes + 4, &result, sizeof(result));
+        itlawdl::buildPeerCacheCompletion(raw, result, entry.bytes);
     } else {
         peerCacheDropped++;
     }
     IOLockUnlock(configurationLock);
     if (umiAckWanted && result == 1) {
-        memcpy(umiLastPeer, raw + 8, 6);
+        memcpy(umiLastPeer, itlawdl::peerCacheAddress(raw), 6);
         umiLastPeerValid = true;
-        queueUmiAck(raw + 8);
+        queueUmiAck(umiLastPeer);
     }
     // After this handler has returned and the caller is asleep.
     peerCacheTimer->setTimeoutMS(10);
@@ -151,12 +150,7 @@ void ItlAWDLInterface::queueUmiAck(const uint8_t *peer)
     if (!umiAckWanted || !umiAckTimer || !configurationLock)
         return;
     IOLockLock(configurationLock);
-    bool queued = false;
-    for (unsigned i = 0; i < umiAckCount; i++)
-        if (!memcmp(umiAckPeers[i], peer, 6))
-            queued = true;
-    if (!queued && umiAckCount < umiAckQueueDepth)
-        memcpy(umiAckPeers[umiAckCount++], peer, 6);
+    itlawdl::umiAckQueuePush(umiAckPeers, umiAckCount, umiAckQueueDepth, peer);
     IOLockUnlock(configurationLock);
     umiAckTimer->setTimeoutMS(150);
 }
@@ -187,8 +181,8 @@ void ItlAWDLInterface::postUmiAcks()
     umiAckCount = 0;
     IOLockUnlock(configurationLock);
     for (unsigned i = 0; i < count; i++) {
-        uint8_t status[32] = {};
-        memcpy(status, peers[i], 6);   // status[6] = 0: the peer acknowledged
+        uint8_t status[itlawdl::umiStatusRecordBytes];
+        itlawdl::buildUmiAckStatus(peers[i], status);   // status[6] = 0: the peer acknowledged
         postMessage(APPLE80211_M_AWDL_UNICAST_AF_STATUS, status, sizeof(status), false);
         umiAckPosted++;
     }
