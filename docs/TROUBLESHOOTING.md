@@ -57,6 +57,27 @@ Fixed in 0.5.1-test1 ([#7](https://github.com/retropineaple/ForbiddenItlwm/issue
 
 This is the main known problem. The time goes into the iPhone finding the Mac's AirDrop service before any data moves, and it's worst when both devices have been idle. Cancelling and sending again usually connects quickly. Mac → iPhone isn't affected.
 
+## A send from the Mac stalls for a minute or more after the iPhone sat idle
+
+The Mac → iPhone send sits on "Waiting" or fails, `ping6 -I awdl0 <iphone>%awdl0` gets no replies, yet `ITLAWDLCoexPeerSyncFrames` keeps rising (the iPhone is on the channel and the driver hears it). It clears by itself after about two minutes, or as soon as the iPhone sends something. A capture (`tools/diag/awdl_flow.py`) shows only SYN retries from the Mac and no packet from the iPhone.
+
+- **Check:** `ioreg -l -w0 | grep -E '"ITLAWDLCoex(BaFilterOff|PromiscLive|BaPeerAdded|DataRxUcast|DataTx|UcastOK)"'`. The stuck state is `BaFilterOff` No, `PromiscLive` Yes, `BaPeerAdded` Yes, `DataRxUcast` frozen while `DataTx` and `UcastOK` rise (the iPhone's radio acknowledges our frames, but nothing comes back). The counter jumps the moment `BaFilterOff` turns Yes.
+- **Cause:** while promiscuous receive is on, the firmware doesn't acknowledge the peer station's frames, so the iPhone's replies are lost. The driver kept promiscuous receive off only while a *receive* Block Ack session was open. That session is torn down after 60 s idle, but the peer station lives up to ten minutes, so there was a gap in which a send we started got no replies until the iPhone opened a session itself.
+- **Fixed in:** the change that makes the filter follow the peer's station (`itlwm/hal_iwx/ItlIwx.cpp`, `awdlCoexBaHandle`; see [HOW-IT-WORKS.md](HOW-IT-WORKS.md)). With it, `BaFilterOff` stayed Yes for a whole six-minute test and a 2.8 GB send ran at 34 MB/s. Setup times (`askFinishedMS` in the `sharingd` log) were 0.1 to 0.9 s.
+- **Side effect:** while promiscuous receive is off the Mac receives almost no group frames, such as the iPhone's multicast mDNS answers (`ITLAWDLCoexDataRxGroup` stays tiny). Discovery and connections still worked in the tests.
+
+## Big AirDrop sends die after a couple of seconds ("unexpected-40")
+
+Small files go through, but a send of tens of MB or more fails about 1.5 to 2 seconds in, and AirDrop's retry (about 10 s later) fails the same way. The `sharingd` log shows `Transfer connection failed … Error Domain=Network.NWError Code=40` and a `send-finish` with `"failureSubType" : "unexpected-40"`. The driver's counters look healthy (`ItlwmAWDLTxDropped` 0, `ITLAWDLCoexBaTxAcked` close to `BaTxFrames`).
+
+- **Cause:** error 40 is `EMSGSIZE`, "message too long". AirDrop sends big files over QUIC, which sizes its datagrams from the MTU of the path it starts on. With a wired interface at 1500 and `awdl0` at 1484, QUIC builds packets of 1494 to 1500 bytes and macOS refuses them on `awdl0`, so the connection dies. Small files finish before QUIC grows its packets. In the test the log showed the QUIC connection created over `en0`, and a kernel trace named `ip6_output_list` as the source of every `EMSGSIZE` (rejected lengths 1494 to 1500 bytes). The driver never sees these packets.
+- **Check:** `ifconfig awdl0 | grep mtu` says 1484. If `ifconfig en0 | grep mtu` (or another active wired interface) says 1500, this is it. `bash tools/compat/check_compat.sh` warns about it in section 7. Wi-Fi (`en1`) stayed at 1500 in the tests that worked and isn't the problem.
+- **Fix:** lower the wired interface to awdl0's MTU. `sudo ifconfig en0 mtu 1484` lasts until the next restart. `sudo networksetup -setMTU Ethernet 1484` keeps it; the service name comes from `networksetup -listallhardwareports`. Undo with 1500. A connection that was already open keeps its old packet size and can fail once right after the change: send again.
+- **Verified:** with `en0` at 1484, a 2,882,165,196-byte send over AWDL (`transport: "awdl"` in the `send-finish` line) completed at 34 MB/s with no rejections.
+- **Not a driver bug, and it doesn't happen on a Wi-Fi-only Mac.** It needs a wired interface up beside AWDL.
+- **If AirDrop goes over the wired network instead:** the `send-finish` line says `"transport" : "directWired"` when the iPhone is reachable over your LAN. That doesn't use AWDL at all (it ran at 41 MB/s). To test AWDL, disconnect the iPhone from your Wi-Fi network (Wi-Fi on, not joined).
+- **Still failing?** Run the trace in [DEBUGGING.md](DEBUGGING.md#case-2-big-sends-die-with-unexpected-40) to see which function refuses what.
+
 ## Transfers are slower than expected
 
 - **Check the iPhone's Wi-Fi first.** AirDrop gets the share of the iPhone's radio time that its own Wi-Fi leaves over. If the iPhone isn't on Wi-Fi, or is on channel 149, it gets 15 of 16 slots (about 22 MB/s). On a quiet network on another channel it gets 11 (about 15 MB/s), on a busy one 7 (about 6 MB/s). `ITLAWDLCoexPeerPresentEntries` shows the current number.

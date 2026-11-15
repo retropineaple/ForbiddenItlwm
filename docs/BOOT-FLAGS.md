@@ -41,6 +41,8 @@ What each one does:
 | `-itlawdlanybuild` | Starts AirDrop on a macOS build the driver hasn't verified. **Risk of a kernel panic.** Only for testing a new build, from a USB stick. It doesn't override the check of Apple's AWDL function table |
 | `itlawdlbtcoex=1` | Firmware Bluetooth coexistence mode 1. Fixed choppy Bluetooth audio during AirDrop on an older test build. Before 0.5.1 it only took effect in the monitor test mode |
 | `-itlawdlsamples` | Publishes raw frame samples in the I/O Registry for debugging. **They can hold device names and addresses.** Never share them publicly, and don't leave the flag on |
+| `-itlawdlpmdebug` | Turns on all of macOS's AWDL peer-manager debug flags once AWDL is enabled (`ItlwmAWDLDebugFlagsSet` becomes Yes), so the kernel log says why peers are accepted or rejected. Very verbose in the unified log: for debugging and bug reports, not to leave on |
+| `-itlawdlumiack` | Experimental, for Continuity Camera and Sidecar. Those register real-time traffic with the iPhone, and macOS then waits 3 s for a status message ("the peer acknowledged our UMI") that this driver's radio path never produces, so the registration failed with an I/O error. With the flag the driver posts that status itself, a moment after it answers the peer-cache request and the low-latency parameters that start each registration (`ItlwmAWDLUmiAckPosted` counts them). Nothing is sent over the air, so it only moves the registration forward. It does not make the camera's video work by itself: see [DEBUGGING.md](DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way). Leave it off unless you are testing Continuity Camera |
 
 ## Comparison flags
 

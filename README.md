@@ -99,6 +99,7 @@ What's planned: [ROADMAP](docs/ROADMAP.md).
 | [TESTED-HARDWARE](docs/TESTED-HARDWARE.md) | Every tested and reported machine, card and macOS build |
 | [ROADMAP](docs/ROADMAP.md) | What's being worked on and what's planned |
 | [HOW-IT-WORKS](docs/HOW-IT-WORKS.md) | How the driver gives macOS an AWDL radio |
+| [DEBUGGING](docs/DEBUGGING.md) | What each counter means, how to capture and trace the link, and two worked cases (stalls after idle, big sends dying with `unexpected-40`) |
 | [tools/compat](tools/compat/README.md) | Compatibility checker, transfer measurement, hardware reports |
 | [CHANGELOG](CHANGELOG.md) | Releases |
 
