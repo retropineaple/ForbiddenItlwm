@@ -7,7 +7,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="forbiddenitlwm-tests-") as directory:
-    for name in ("awdl_requested_configuration", "awdl_protocol", "awdl_frame_builder", "awdl_sync_prefix", "awdl_local_schedule", "awdl_probe_policy", "awdl_data_payload", "awdl_data_frame", "awdl_observation", "awdl_regulatory", "awdl_tx_burst", "awdl_peer_schedule", "awdl_build_guard", "btleadv_hci", "eapol_key_length", "wcl_transition"):
+    for name in ("awdl_requested_configuration", "awdl_protocol", "awdl_frame_builder", "awdl_sync_prefix", "awdl_local_schedule", "awdl_probe_policy", "awdl_data_payload", "awdl_data_frame", "awdl_observation", "awdl_regulatory", "awdl_tx_burst", "awdl_peer_schedule", "awdl_build_guard", "btleadv_hci", "eapol_key_length", "wcl_transition", "btleadv_extra"):
         output = Path(directory) / name
         subprocess.run([
             "xcrun", "clang++", "-std=c++14",
@@ -31,7 +31,11 @@ with tempfile.TemporaryDirectory(prefix="forbiddenitlwm-tests-") as directory:
 subprocess.run(["python3", str(root / "tests/monitor_tx_ownership.py")], check=True)
 subprocess.run(["python3", str(root / "tests/monitor_channel.py")], check=True)
 subprocess.run(["python3", str(root / "tests/monitor_probe.py")], check=True)
-subprocess.run(["python3", str(root / "tests/btleadv_patterns.py")], check=True)
+build = subprocess.check_output(["sw_vers", "-buildVersion"], text=True).strip()
+pattern_set = {"25G241": "2671", "25G332": "2672", "25G342": "2673"}.get(build, "2671")
+subprocess.run(["python3", str(root / "tests/btleadv_patterns.py"), "--set", pattern_set], check=True)
+if build == "25G342":
+    subprocess.run(["python3", str(root / "tests/btleadv_extra_patterns.py")], check=True)
 # The Sonoma set needs a 14.8.9 bluetoothd. Point this at one to check it.
 if os.environ.get("FORBIDDEN_SONOMA_BLUETOOTHD"):
     subprocess.run(["python3", str(root / "tests/btleadv_patterns.py"), "--target", "sonoma",
