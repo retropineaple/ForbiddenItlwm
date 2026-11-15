@@ -104,7 +104,7 @@ macOS publishes each interface's link-quality metric as `State:/Network/Interfac
 
 These two ask the driver for things AirDrop never does. Before it registers real-time traffic with the iPhone, macOS:
 
-- asks the driver to add the peer to a firmware cache (`setPEER_CACHE_CONTROL`, a 464-byte record: version at +0, operation at +4, peer address at +8) and sleeps until the driver posts event 51 with the same record and +4 set to 1 (added) or 3 (deleted). The driver posts it from a timer on the interface work loop a few milliseconds after its handler returns; posted from inside the handler, the wakeup would arrive before the caller sleeps and be lost.
+- asks the driver to add the peer to a firmware cache (`setPEER_CACHE_CONTROL`, a 464-byte record: version at +0, operation at +4, peer address at +8) and sleeps until the driver posts event 51 with the same record and +4 set to 1 (added) or 3 (deleted). The driver posts it from a timer on the interface work loop a few milliseconds after its handler returns; posted from inside the handler, the wakeup would arrive before the caller sleeps and be lost. The record layout, the event number and this timing rule were first worked out by DrogaBox's [RTL8814Native](https://github.com/DrogaBox/RTL8814Native) for Tahoe; here they were checked on Sequoia.
 - sends low-latency parameters (`setLLW_PARAMS`), which are acknowledged and counted.
 - sends the iPhone a unicast action frame and waits for its transmit status, message 69 (peer address, then a status byte at +6; 0 means acknowledged). macOS sends that frame itself, but only inside an availability window, which this driver does not report. With `-itlawdlumiack` the driver posts the status instead, so the wait ends. Nothing is transmitted for it.
 

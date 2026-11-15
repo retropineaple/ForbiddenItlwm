@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Credits:** added [DrogaBox](https://github.com/DrogaBox) and RTL8814Native. Their notes on the AWDL peer manager's driver interface (the peer cache record, its completion event and when to post it, the cache size) are what the Continuity Camera peer cache handling in 0.5.4-beta.3 follows. No code was copied.
 - **Tools:** the camera section of `tools/diag/continuity_check.sh` now follows the stages Continuity Camera passes through: whether the camera agent lists the iPhone, the driver's peer-cache and `-itlawdlumiack` counters, whether macOS accepts this Mac's CPU family for the camera's video format (it asks `canDoHEVC`, read-only), and counts of each failure line in the log. It prints counts only, no names.
 - **Tests:** the peer cache completion record (event 51), the UMI status record (message 69) and the bounded list of peers owed a status moved into `ForbiddenItlwm/AWDLPeerCache.hpp`, with a host test (`tests/awdl_peer_cache.cpp`) in `tools/test_awdl.py`. The driver's behaviour is unchanged.
 - **Checked:** the Tahoe and Sonoma kexts compile with the Continuity changes and pass their virtual table audits (568 and 547 slots); they have not been run on those macOS versions.

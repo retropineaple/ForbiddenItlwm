@@ -1,6 +1,7 @@
 // The parts of the Continuity peer cache and UMI status handling that are plain data, so a host test can check them.
-// Layouts were read on macOS Sequoia 15.8.2 (24H232) with tools/diag/trace_peer_cache.d and by disassembling
-// IO80211Family; see docs/HOW-IT-WORKS.md, section 9.
+// The peer cache layout and the completion event were first worked out by DrogaBox's RTL8814Native (Tahoe, 25G241);
+// no code was copied. They were read again on macOS Sequoia 15.8.2 (24H232) with tools/diag/trace_peer_cache.d and by
+// disassembling IO80211Family; see docs/HOW-IT-WORKS.md, section 9.
 #pragma once
 #include <stdint.h>
 #include <string.h>
