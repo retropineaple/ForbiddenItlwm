@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Tools:** the camera section of `tools/diag/continuity_check.sh` now follows the stages Continuity Camera passes through: whether the camera agent lists the iPhone, the driver's peer-cache and `-itlawdlumiack` counters, whether macOS accepts this Mac's CPU family for the camera's video format (it asks `canDoHEVC`, read-only), and counts of each failure line in the log. It prints counts only, no names.
+- **Tests:** the peer cache completion record (event 51), the UMI status record (message 69) and the bounded list of peers owed a status moved into `ForbiddenItlwm/AWDLPeerCache.hpp`, with a host test (`tests/awdl_peer_cache.cpp`) in `tools/test_awdl.py`. The driver's behaviour is unchanged.
+- **Checked:** the Tahoe and Sonoma kexts compile with the Continuity changes and pass their virtual table audits (568 and 547 slots); they have not been run on those macOS versions.
+
 ## 0.5.4-beta.3
 
 - **Continuity Camera and Sidecar: the driver now answers the requests macOS makes before it registers real-time traffic.** `setPEER_CACHE_CONTROL` used to return "unsupported", so macOS waited 3 s for an event that never came and failed the registration. The driver now accepts the request and, after its handler has returned, posts event 51 with the same 464-byte record (`+4` = 1 added, 3 deleted, peer address at `+8`). Posting from inside the handler is too early, because the caller has not gone to sleep yet and the wakeup is lost. It also answers `getPEER_CACHE_MAXIMUM_SIZE` (8) and accepts `setLLW_PARAMS`. Counters: `ItlwmAWDLPeerCacheRequests/Completed/LastPeer/LastOperation`, `ItlwmAWDLLlwParamRequests`.
