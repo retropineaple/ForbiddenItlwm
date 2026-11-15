@@ -5,6 +5,7 @@
 - **Continuity Camera / `llw0` (`-itlawdlllw`, Sequoia):** peer-cache and UMI answers so registration proceeds; plain RFC 1042 Continuity frames delivered on `llw0` only when `ITL_AWDL_LLW` is built (dropped on Tahoe/Sonoma builds without `llw0`). Draft until video loss is acceptable; see [DEBUGGING.md Case 3](docs/DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way).
 - **Tools:** Continuity diagnostics under `tools/diag/` (`continuity_check.sh` stages, peer-cache/UMI dtrace, MTU/EMSGSIZE traces). `check_compat.sh` section 8 warns when a wired interface MTU exceeds `awdl0`. The camera section of `continuity_check.sh` follows registration stages and prints counts only.
 - **Tests:** peer cache completion (event 51), UMI status (message 69) and owed-peer list in `ForbiddenItlwm/AWDLPeerCache.hpp` with `tests/awdl_peer_cache.cpp`.
+- **Credits:** added [DrogaBox](https://github.com/DrogaBox) and RTL8814Native. Their notes on the AWDL peer manager's driver interface (the peer cache record, its completion event and when to post it, the cache size) are what the Continuity Camera peer cache handling in 0.5.4-beta.3 follows. No code was copied.
 
 ## 0.6.0-beta.2
 
