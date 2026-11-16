@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0-alpha.1 (test build)
+
+A test build of 0.6.0's main changes, released to collect results. **Alpha** means it's for testers: it was tested on the project's hackintosh only where that hackintosh can test it (channel 149, Tahoe).
+
+- **Channel 44 ([#17](https://github.com/retropineaple/ForbiddenItlwm/issues/17), [PR #21](https://github.com/retropineaple/ForbiddenItlwm/pull/21), [#35](https://github.com/retropineaple/ForbiddenItlwm/issues/35), thanks to zheznanohana).** Apple devices use channel 149 or 44 for AirDrop, and each picks one by its own country rules: in Japan, Germany and Russia, for example, iPhones use 44, even where 149 is allowed. The listener stayed on 149 or fell back to 6, so the iPhone rarely met it. Now, once the driver has heard the iPhone, the listener follows it: to 44 (at 80 MHz over 36–48 where the firmware allows it, else 20 MHz) if the iPhone uses 44, otherwise 149 as before, then 6. The iPhone's own Wi-Fi channel isn't mistaken for its AirDrop channel. `ITLAWDLCoexPeer5GHz` shows the channel the iPhone uses.
+- **Faster Mac → iPhone on the same channel ([#22](https://github.com/retropineaple/ForbiddenItlwm/issues/22), [#24](https://github.com/retropineaple/ForbiddenItlwm/issues/24), [PR #47](https://github.com/retropineaple/ForbiddenItlwm/pull/47)).** When the Mac's Wi-Fi was on the listener's channel, the iPhone never accepted block ack, so Mac → iPhone went out one frame at a time. The fix (a short receive window while asking for block ack), tested by three testers on 149 and 44, is now on by default. `-itlawdlnosamechprobe` turns it off.
+- **Mac → iPhone sends no longer stall after the iPhone was idle ([PR #57](https://github.com/retropineaple/ForbiddenItlwm/pull/57), thanks to wh0ami7).** After a minute without data the iPhone ends its receive session, but its station stays for 10 minutes; in between, the listener's receive filter opened up and sends could hang. The filter now follows the station.
+- **Passive channels next to your Wi-Fi.** Where the firmware marks a channel passive but usable beside a connected network (as in Japan for 36–48), the listener may use it while the Mac's own Wi-Fi is connected on a channel in the same group, as Linux does. `-itlawdlnoirconcurrent` turns it off.
+- **No 80 MHz overlap with your router ([#26](https://github.com/retropineaple/ForbiddenItlwm/issues/26)).** If the Mac's Wi-Fi uses the listener's 80 MHz block with another main channel (for example a router on 157 at 80 MHz), the listener now uses its channel at 20 MHz; inside a 160 MHz router channel it moves elsewhere. Beacon hints a country change doesn't affect are kept.
+- **Diagnostics:** scan counters for missing networks (`ItlwmScanStats`, #20, #24, #45), the channel lists macOS gets, and `-itllog`, which keeps the driver's log readable after a failed wake.
+- **Tools:** `check_compat.sh` checks channels 36–48 as well as 149–161, counts a listener on 44 at 80 MHz as the fast mode, shows which channel your iPhone uses, and no longer says AirDrop must stay on channel 6 in countries without 149. The hardware report scripts list channels 36–48 too.
+- **Removed:** 0.5.3's test flags `-itlawdlbaaskshared` and `-itlawdlhideinfra`. Neither helped; they're ignored now.
+- **Tested on the project's hackintosh** (Tahoe 26.7.1, AX211, listener on 149): Wi-Fi works, AirDrop at 15–25 MB/s iPhone → Mac and 8–20 MB/s Mac → iPhone, no change on 149 from the new channel logic. Channel 44 needs testers in Japan, Germany or Russia. The Sequoia and Sonoma builds are built and checked offline.
+- BTLEAdvFixup is unchanged (0.9.1).
+
 ## 0.5.4-beta.2
 
 - **BTLEAdvFixup 0.9.1: new Bluetooth LE mice and keyboards pair again ([#27](https://github.com/retropineaple/ForbiddenItlwm/issues/27), [#31](https://github.com/retropineaple/ForbiddenItlwm/pull/31), thanks to CreateRan).** With IntelBTPatcher disabled, a new LE mouse or keyboard connected but never finished pairing, because BTLEAdvFixup didn't include IntelBTPatcher's fix for it. It does now, including lshbluesky's LE Data Length Change fix for Tahoe. Devices that were already paired weren't affected.

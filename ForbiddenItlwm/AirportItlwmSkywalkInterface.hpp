@@ -435,6 +435,7 @@ private:
     void updateWCLLinkQuality(bool = false);
     static void wclJoinTimeout(OSObject *, IOTimerEventSource *);
     IOReturn beginWCLScan(apple80211ScanRequest *);
+    IOReturn startWCLScan(apple80211ScanRequest *);
     void clearWCLPMKSA();
     IOReturn installWCLKey(apple80211_key *);
     IOReturn accessWCLRSN(apple80211_rsn_ie_data *, bool);

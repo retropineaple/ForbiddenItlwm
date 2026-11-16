@@ -6,7 +6,7 @@
 
 **AirDrop for Intel Wi-Fi cards on macOS.** ForbiddenItlwm is a fork of AirportItlwm that adds AWDL, the peer-to-peer Wi-Fi link AirDrop runs on. Apple's own Wi-Fi stack does the rest. Normal Wi-Fi stays connected while AirDrop works.
 
-> **Public beta. Newest release: [0.5.4-beta.2](https://github.com/retropineaple/ForbiddenItlwm/releases/latest).** Works on macOS Tahoe 26.7.x and Sequoia 15.8.x, with a Sonoma 14.8.9 test build. Each macOS version has its own kexts. Fixes come out often: before reporting a problem, update to the newest release (**Watch → Custom → Releases** to be notified).
+> **Public beta. Newest release: [0.6.0-alpha.1](https://github.com/retropineaple/ForbiddenItlwm/releases/latest).** Works on macOS Tahoe 26.7.x and Sequoia 15.8.x, with a Sonoma 14.8.9 test build. Each macOS version has its own kexts. Fixes come out often: before reporting a problem, update to the newest release (**Watch → Custom → Releases** to be notified).
 
 ## ⚠️ Read this first
 
@@ -55,13 +55,13 @@ bash tools/compat/check_compat.sh
 
 Read-only: it changes nothing and sends nothing anywhere. More in [tools/compat](tools/compat/README.md).
 
-**Channel 149 and your country.** AirDrop is fast on channel 149 at 80 MHz, the channel Apple devices use for it.
+**Channels 149 and 44, and your country.** AirDrop is fast on 5 GHz at 80 MHz. Apple devices use channel 149 or 44 for it, each by its own country rules (in Japan, Germany and Russia, for example, iPhones use 44).
 - **The card has to learn your country first,** from a nearby Wi-Fi network that advertises it (most routers do; an iPhone's Personal Hotspot switched on nearby also works). Until then it falls back to channel 6.
-- **Some countries don't allow channel 149** (Japan, Turkey, Egypt and Saudi Arabia, for example), or only at 20 or 40 MHz. AirDrop then uses channel 6, which works but is slow.
-- **In China and other places where the card marks 149 as passive,** AirDrop moves to 149 once it has heard a Wi-Fi network there, as Linux does.
-- **Coming:** in countries without 149, iPhones use **channel 44** instead. We're working on using 44 at 80 MHz there before falling back to 6 ([#17](https://github.com/retropineaple/ForbiddenItlwm/issues/17)).
+- **From 0.6.0-alpha.1 the listener follows your iPhone** onto 44 when the iPhone uses 44 ([#17](https://github.com/retropineaple/ForbiddenItlwm/issues/17), [PR #21](https://github.com/retropineaple/ForbiddenItlwm/pull/21)). Up to 0.5.4 it stayed on 149 or fell back to channel 6, which works but is slow.
+- **Some countries allow neither** (Turkey, Egypt and Saudi Arabia have no 149, for example), or only at 20 or 40 MHz. AirDrop then uses channel 6.
+- **Where the card marks a channel passive** (China's 149, Japan's 44), AirDrop uses it once it has heard a Wi-Fi network there, as Linux does, or from 0.6.0 while your Mac's own Wi-Fi is connected nearby in the same channel group.
 
-The checker shows your country and whether channel 149 is open; [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#the-listener-is-on-channel-6-or-countrylearned-is-no) explains the rest.
+The checker shows your country and whether channels 149 and 44 are open; [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#the-listener-is-on-channel-6-or-countrylearned-is-no) explains the rest.
 
 ## Install
 
@@ -74,7 +74,7 @@ Boot from the USB stick, join your Wi-Fi network, wait a minute, then check:
 1. **The driver runs:** `bash tools/compat/check_compat.sh` shows the AirDrop build running and your card and Bluetooth as OK.
 2. **Wi-Fi works:** browse, and try a speed test.
 3. **Bluetooth works:** it's on, and `ioreg -l -w0 -d1 | grep '"BTLEAdvHookRouted'` shows 1.
-4. **AirDrop's channel:** `ioreg -l -w0 | grep '"ITLAWDLCoexChannel"'` shows 149 (6 means slow; see above).
+4. **AirDrop's channel:** `ioreg -l -w0 | grep '"ITLAWDLCoexChannel"'` shows 149, or 44 where your iPhone uses 44 (6 means slow; see above).
 5. **AirDrop both ways:** send a large file from the Mac to the iPhone, and one from the iPhone to the Mac. Run `bash tools/compat/airdrop_measure.sh` while you do, to see the speed and connect time.
 6. **iMessage:** send and receive an iMessage on the Mac. If it fails, `printf 'show State:/Network/Interface/en0/LinkQuality\n' | scutil` should show 100 (or 50 or 10 on a weak signal); see [TROUBLESHOOTING](docs/TROUBLESHOOTING.md#imessage-or-other-apple-services-dont-work-over-wi-fi).
 

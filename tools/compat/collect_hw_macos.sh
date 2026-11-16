@@ -124,7 +124,7 @@ system_profiler SPAirPortDataType 2>/dev/null | awk -v country="$INCLUDE_COUNTRY
         sub(/^ +/, ""); print; next }
     country == 1 && /Country Code:/ { sub(/^ +/, ""); print }' | redact
 
-section "Channel 149 and country"
+section "Channels 149 and 44, and country"
 # Whether the firmware has a country (ZZ means none) is kept; the code itself only with --include-country.
 CC=$(system_profiler SPAirPortDataType 2>/dev/null | awk -F': ' '/^ *Country Code:/ { print $2; exit }')
 case "$CC" in
@@ -135,8 +135,8 @@ sysctl -n kern.bootargs 2>/dev/null | tr ' ' '\n' | grep -q '^itlwm_cc=' && echo
 # Channels of nearby networks only, by band, without names.
 system_profiler SPAirPortDataType 2>/dev/null | awk '
     /Other Local Wi-Fi Networks:/ { on=1; next }
-    on && /^ *Channel:/ { sub(/^ *Channel: */, ""); c=$1+0; n++; if ($0 ~ /5GHz/) f++; if (c >= 149 && c <= 165) u++; ch[$0]++ }
-    END { printf "Nearby networks listed: %d (%d on 5 GHz, %d on 149 to 165)\n", n, f, u
+    on && /^ *Channel:/ { sub(/^ *Channel: */, ""); c=$1+0; n++; if ($0 ~ /5GHz/) f++; if (c >= 149 && c <= 165) u++; if (c >= 36 && c <= 48) l++; ch[$0]++ }
+    END { printf "Nearby networks listed: %d (%d on 5 GHz, %d on 149 to 165, %d on 36 to 48)\n", n, f, u, l
           for (k in ch) printf "  channel %s: %d\n", k, ch[k] }'
 
 section "AirDrop driver status (only while its build runs)"

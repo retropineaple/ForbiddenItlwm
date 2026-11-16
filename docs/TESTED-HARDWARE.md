@@ -20,7 +20,7 @@ Kexts used with ForbiddenItlwm:
 
 | Kext | Version |
 | --- | --- |
-| ForbiddenItlwm | 0.1.0-beta1, 0.2.0-beta1, 0.4.0-beta1's changes in development builds, and 0.5.0-test1 (Tahoe) |
+| ForbiddenItlwm | 0.1.0-beta1, 0.2.0-beta1, 0.4.0-beta1's changes in development builds, 0.5.0-test1, and 0.6.0-alpha.1's changes in a development build (Tahoe, listener on 149) |
 | BTLEAdvFixup | 0.8.0, 0.8.2's changes in a development build, 0.9.0 and 0.9.1 (Tahoe) |
 | Lilu | 1.7.2 |
 | IntelBluetoothFirmware | 2.5.1 |

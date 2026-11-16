@@ -318,12 +318,13 @@ fi
 BT_STATE=$(system_profiler SPBluetoothDataType 2>/dev/null | awk -F': ' '/^ *State:/ { print $2; exit }')
 [ -n "$BT_STATE" ] && info "Bluetooth state: $BT_STATE"
 
-# ---------------------------------------------------------------- channel 149 and country
-head1 "5. Channel 149 and country"
-# The fast mode puts the AirDrop listener on channel 149 at 80 MHz, which needs 149, 153, 157 and 161
-# in the firmware's channel map and allowed to transmit. Intel firmware starts in world mode (country
-# ZZ), where those channels are listen-only, and opens them only after it learns the country from a
-# nearby network's beacons. The driver accepts the firmware's decision and never overrides it.
+# ---------------------------------------------------------------- channels 149 and 44, and country
+head1 "5. Channels 149 and 44, and country"
+# The fast mode puts the AirDrop listener on the iPhone's 5 GHz AWDL channel at 80 MHz: 149 (needs 149 to
+# 161 in the firmware's channel map and allowed to transmit) or, from 0.6.0, 44 where the iPhone uses 44
+# (needs 36 to 48). Intel firmware starts in world mode (country ZZ), where those channels are listen-only,
+# and opens them only after it learns the country from a nearby network's beacons. The driver accepts the
+# firmware's decision and never overrides it.
 SP=$(system_profiler SPAirPortDataType 2>/dev/null)
 CC=$(printf '%s\n' "$SP" | awk -F': ' '/^ *Country Code:/ { print $2; exit }')
 SUPPORTED=$(printf '%s\n' "$SP" | awk -F': ' '/^ *Supported Channels:/ { print $2; exit }')
@@ -345,7 +346,7 @@ fi
 if [ -z "$SP" ]; then
     warn "macOS returned no Wi-Fi details (is Wi-Fi on?)."
 elif [ -z "$CC" ] || [ "$CC" = "ZZ" ] || [ "$CC" = "00" ]; then
-    warn "Country code: ${CC:-none}. The firmware hasn't learned a country, so channel 149 is listen-only for now."
+    warn "Country code: ${CC:-none}. The firmware hasn't learned a country, so channels 149 and 44 are listen-only for now."
     warn "AirDrop will use channel 6 (very slow) until a nearby network advertises the country."
     CH149_STATE=no-country
 else
@@ -353,14 +354,15 @@ else
     CH149_STATE=country
     case "$NO_149" in
         *" $CC "*)
-            fail "In $CC the radio rules don't allow Wi-Fi on channels 149 to 161 (Linux regulatory database)."
-            fail "The firmware is expected to keep them closed, so AirDrop can only use channel 6 (very slow) here."
+            warn "In $CC the radio rules don't allow Wi-Fi on channels 149 to 161 (Linux regulatory database)."
+            warn "iPhones use channel 44 there. From 0.6.0 the listener follows them to 44 if the firmware allows it;"
+            warn "up to 0.5.4, and where 44 isn't allowed either, AirDrop uses channel 6 (very slow)."
             CH149_STATE=law;;
     esac
     case "$NARROW_149" in
         *" $CC "*)
             warn "In $CC the rules allow channels 149 to 161 only at 20 or 40 MHz. The fast mode needs 80 MHz,"
-            warn "so the driver is expected to use channel 6 here."
+            warn "so the driver is expected to use channel 44 (from 0.6.0, if the iPhone uses it) or 6 here."
             CH149_STATE=law;;
     esac
 fi
@@ -369,10 +371,22 @@ if [ -n "$SUPPORTED" ]; then
     for c in 149 153 157 161; do
         case ", $SUPPORTED," in *", $c (5GHz)"*|*", $c (5 GHz)"*) ;; *) MISSING_CH="$MISSING_CH $c";; esac
     done
+    MISSING_44=""
+    for c in 36 40 44 48; do
+        case ", $SUPPORTED," in *", $c (5GHz)"*|*", $c (5 GHz)"*) ;; *) MISSING_44="$MISSING_44 $c";; esac
+    done
     if [ -z "$MISSING_CH" ]; then
         pass "Channels 149, 153, 157 and 161 are in the channel map (needed for 149 at 80 MHz)."
     else
-        fail "Missing from the channel map:$MISSING_CH. 149 at 80 MHz isn't possible here; AirDrop would stay on channel 6."
+        warn "Missing from the channel map:$MISSING_CH. 149 at 80 MHz isn't possible here."
+    fi
+    if [ -z "$MISSING_44" ]; then
+        pass "Channels 36, 40, 44 and 48 are in the channel map (needed for 44 at 80 MHz, from 0.6.0)."
+    else
+        warn "Missing from the channel map:$MISSING_44. 44 at 80 MHz isn't possible here."
+    fi
+    if [ -n "$MISSING_CH" ] && [ -n "$MISSING_44" ]; then
+        fail "Neither 149 nor 44 at 80 MHz is possible here; AirDrop would stay on channel 6."
         CH149_STATE=not-in-map
     fi
     case ", $SUPPORTED," in *", 6 (2GHz)"*|*", 6 (2.4GHz)"*) ;; *) warn "Channel 6 isn't in the channel map either, so the listener has no channel at all.";; esac
@@ -389,7 +403,7 @@ if [ -n "$NEARBY" ]; then
 else
     info "macOS listed no other nearby networks (it can hide them without Location Services)."
 fi
-info "Channel 149 also depends on the country's radio laws. Even after it learns the country, the firmware"
+info "Channels 149 and 44 also depend on the country's radio laws. Even after it learns the country, the firmware"
 info "decides, and in some countries (Japan and Turkey, for example) Wi-Fi isn't allowed on 149 to 161 at all."
 case "${CH149_STATE:-}" in
     no-country)
@@ -400,24 +414,30 @@ esac
 # ---------------------------------------------------------------- AirDrop runtime
 head1 "6. AirDrop listener (only while the AirDrop build runs)"
 if [ -n "$MARKER" ]; then
-    REG=$(ioreg -l -w0 2>/dev/null | grep -oE '"ITLAWDLCoex(Channel|OwnWidth|CountryLearned|CountryNotices|CountryAnswers|CountryFailures|RefusedReason|MultiState|Added|Gate|AssumeZero)" = [^,}]*' | sort -u)
+    REG=$(ioreg -l -w0 2>/dev/null | grep -oE '"ITLAWDLCoex(Channel|OwnWidth|CountryLearned|CountryNotices|CountryAnswers|CountryFailures|RefusedReason|MultiState|Added|Gate|AssumeZero|Peer5GHz)" = [^,}]*' | sort -u)
     get() { printf '%s\n' "$REG" | sed -n "s/^\"ITLAWDLCoex$1\" = //p" | head -1 | tr -d '"'; }
-    CH=$(get Channel); W=$(get OwnWidth); CL=$(get CountryLearned); ADDED=$(get Added)
+    CH=$(get Channel); W=$(get OwnWidth); CL=$(get CountryLearned); ADDED=$(get Added); P5=$(get Peer5GHz)
     if [ -z "$ADDED" ]; then
         warn "No listener status yet. Join a Wi-Fi network and wait a minute, then run this again."
-    elif [ "$CH" = "149" ] && [ "$W" = "80" ]; then
-        pass "Listener on channel 149 at 80 MHz (country learned: ${CL:-?}). This is the fast mode."
+    elif { [ "$CH" = "149" ] || [ "$CH" = "44" ]; } && [ "$W" = "80" ]; then
+        pass "Listener on channel $CH at 80 MHz (country learned: ${CL:-?}). This is the fast mode."
+    elif [ "$CH" = "149" ] || [ "$CH" = "44" ]; then
+        info "Listener on channel $CH at ${W:-?} MHz (country learned: ${CL:-?})."
     elif [ "$CH" = "6" ]; then
-        warn "Listener on channel 6 at 20 MHz. The firmware hasn't opened channel 149 yet, usually because no"
+        warn "Listener on channel 6 at 20 MHz. The firmware hasn't opened channel 149 or 44 yet, usually because no"
         warn "nearby network has told it the country. AirDrop is very slow or fails on channel 6."
     else
         info "Listener channel ${CH:-?}, width ${W:-?}, state $(get MultiState)."
     fi
     if [ -n "$ADDED" ]; then
+        case "$P5" in
+            44|149) info "Your iPhone uses channel $P5 for AirDrop (from its last sync frames).";;
+            1) info "Your iPhone's latest schedule names neither 149 nor 44.";;
+        esac
         NOTICES=$(get CountryNotices); ANSWERS=$(get CountryAnswers)
-        if [ "$CL" = "Yes" ] && [ "$CH" != "149" ]; then
-            warn "The firmware learned a country this boot but still keeps the listener off channel 149. Its rules for"
-            warn "this country don't allow AirDrop there, and the driver accepts that."
+        if [ "$CL" = "Yes" ] && [ "$CH" != "149" ] && [ "$CH" != "44" ]; then
+            warn "The firmware learned a country this boot but still keeps the listener off channels 149 and 44. Its"
+            warn "rules for this country don't allow AirDrop there, and the driver accepts that."
         elif [ "$CL" = "Yes" ]; then
             pass "The firmware learned a country this boot ($NOTICES notices, $ANSWERS answered)."
         elif [ "${NOTICES:-0}" -gt 0 ] 2>/dev/null; then
@@ -460,8 +480,8 @@ esac
 echo "  $CARD_TEXT"
 case "${CH149_STATE:-}" in
     no-country) echo "  ${YEL}No country yet, so AirDrop will be on channel 6 (very slow) until the firmware learns one.${RST}";;
-    law)        echo "  ${YEL}This country's rules are expected to keep AirDrop on channel 6 (very slow).${RST}";;
-    not-in-map) echo "  ${YEL}Channel 149 at 80 MHz isn't in the channel map here, so AirDrop can only use channel 6 (very slow).${RST}";;
+    law)        echo "  ${YEL}This country's rules don't allow 149 at 80 MHz. From 0.6.0 AirDrop uses channel 44 if your iPhone does and the firmware allows it; otherwise channel 6 (very slow).${RST}";;
+    not-in-map) echo "  ${YEL}Neither 149 nor 44 at 80 MHz is in the channel map here, so AirDrop can only use channel 6 (very slow).${RST}";;
 esac
 if [ "$BLOCKERS" -gt 0 ]; then
     echo "  ${RED}$BLOCKERS blocker(s) above stop it working on this Mac regardless of the card.${RST}"
