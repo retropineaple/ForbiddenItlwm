@@ -13,6 +13,7 @@
 */
 
 #include "ItlIwm.hpp"
+extern void iwmAwdlStop();
 
 #define super ItlHalService
 OSDefineMetaClassAndStructors(ItlIwm, ItlHalService)
@@ -26,6 +27,7 @@ detach(IOPCIDevice *device)
             auto that = static_cast<ItlIwm *>(arg0);
             auto pci = static_cast<IOPCIDevice *>(arg1);
             that->dmaDetaching = true;
+            iwmAwdlStop();
             that->dmaEpoch++;
             that->com.sc_ic.ic_ac.ac_if.if_flags &= ~(IFF_UP | IFF_RUNNING);
             that->com.sc_ic.ic_state = IEEE80211_S_INIT;
@@ -96,6 +98,7 @@ free()
 void ItlIwm::
 releaseAll()
 {
+    iwmAwdlStop();
     XYLog("%s\n", __FUNCTION__);
     pci_intr_handle *intrHandler = com.ih;
     if (com.sc_calib_to) {

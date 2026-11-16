@@ -17,7 +17,7 @@ ForbiddenItlwm makes macOS's native stack (IO80211Family with Skywalk, on Tahoe,
    Block Ack, send gate
                                │
             Intel firmware: station context (normal Wi-Fi)
-                          + listener context on 149/80 or 44/80 (AirDrop)
+                          + listener context on 149/80 (AirDrop)
 ```
 
 ### 1. The interface: `awdl0`
@@ -30,7 +30,7 @@ ForbiddenItlwm makes macOS's native stack (IO80211Family with Skywalk, on Tahoe,
 ### 2. The radio: a second firmware context
 
 Normal Wi-Fi uses the firmware's station context. ForbiddenItlwm adds a second MAC context, a **listener**, with:
-- its own PHY context on the 5 GHz channel the iPhone uses for AirDrop, 149 or 44 (from 0.6.0), at 80 MHz when allowed; channel 6 when neither is
+- its own PHY context on channel 149 at 80 MHz (channel 6 when 149 isn't allowed)
 - its own firmware station and transmit queue
 - the AWDL address
 
@@ -63,11 +63,9 @@ Its byte patterns are exact bytes from specific `bluetoothd` builds: 25G241's (2
 
 The bonding fix was tested on macOS 26.7.2 (25G332) with an Intel Wi-Fi 6 AX200 (PCI 8086:2723, Bluetooth function USB 8087:0029) on a MacBookPro16,4 SMBIOS, running this plugin with IntelBTPatcher disabled: a new Bluetooth LE mouse bonds, and bluetoothd stays stable afterwards. Reports for other Intel cards are welcome.
 
-### 6. Country and channels 149 and 44
+### 6. Country and channel 149
 
-Apple's AWDL uses channel 6 on 2.4 GHz and one 5 GHz channel, 149 or 44, which each device picks by its own country rules. From 0.6.0 the listener follows the iPhone: the iPhone's channel sequence (in its sync frames) shows which 5 GHz channel it uses, and the listener takes 44 if the iPhone uses 44, otherwise 149 (`ITLAWDLCoexPeer5GHz`). Slots the iPhone gives to its own Wi-Fi network aren't counted. Before any iPhone is heard, the listener starts on 149.
-
-Intel firmware starts in world mode, where these channels are listen-only. It opens them after it learns the country from a nearby network's beacons, if that country's rules allow it. The driver asks the firmware and follows its answer, with two exceptions taken from Linux: where the firmware marks a channel passive (China's 149 to 161, Japan's 36 to 48, for example), the driver treats it as usable once it has received a beacon from a Wi-Fi network on it (the "beacon hint", `ITLAWDLCoexBeaconHints`), or, if the firmware marks it usable beside a connection, while the Mac's own Wi-Fi is connected on a channel in the same group (`ITLAWDLCoexIrConcurrent`). Hints a new country doesn't allow are cleared. Without either, the listener uses channel 6, which works but is slow: the iPhone spends few slots there, and 2.4 GHz rates are low.
+Intel firmware starts in world mode, where channels 149 to 161 are listen-only. It opens them after it learns the country from a nearby network's beacons, if that country's rules allow 80 MHz there. The driver asks the firmware and follows its answer. One exception, as on Linux: where the firmware marks 149 to 161 passive (China, for example), the driver treats a channel as usable once it has received a beacon from a Wi-Fi network on it (the "beacon hint", `ITLAWDLCoexBeaconHints`), and clears the hints when the country changes. Until then the listener uses channel 6, which works but is slow: the iPhone spends few slots there, and 2.4 GHz rates are low.
 
 ### 7. Which macOS builds AirDrop starts on
 

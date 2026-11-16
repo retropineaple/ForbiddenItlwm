@@ -8,10 +8,10 @@ ioreg -l -w0 | grep -E '"ItlwmAWDL(InterfaceBuild|BuildCheck)"|"ITLAWDLCoex(Adde
 
 | Key | Healthy value |
 | --- | --- |
-| `ItlwmAWDLInterfaceBuild` | `forbidden-0.6.0-alpha.1`, `forbidden-0.6.0-alpha.1-sequoia` or `forbidden-0.6.0-alpha.1-sonoma` |
+| `ItlwmAWDLInterfaceBuild` | `forbidden-0.5.4-beta.2`, `forbidden-0.5.4-beta.2-sequoia` or `forbidden-0.5.4-beta.2-sonoma` |
 | `ItlwmAWDLBuildCheck` | `verified` (`expected: …` on a 15.8.x kernel that wasn't checked offline). Anything starting with `blocked` means AirDrop is off on this macOS build: see below |
 | `ITLAWDLCoexAdded` | Yes: the AirDrop listener exists |
-| `ITLAWDLCoexChannel`, `ITLAWDLCoexOwnWidth` | 149 and 80. From 0.6.0, 44 and 80 (or 20) where your iPhone uses 44 |
+| `ITLAWDLCoexChannel`, `ITLAWDLCoexOwnWidth` | 149 and 80 |
 | `ITLAWDLCoexCountryLearned` | Yes |
 | `ITLAWDLCoexCountryNotices` | A small number. It climbs fast if the firmware keeps restarting |
 | `ITLAWDLCoexPeerSyncFrames` | Rises while an Apple device with AirDrop open is nearby |
@@ -29,13 +29,11 @@ The driver only starts AirDrop on macOS builds whose Wi-Fi stack was checked: Ta
 
 ## The listener is on channel 6, or `CountryLearned` is No
 
-Apple devices use channel 149 or 44 for AirDrop on 5 GHz, and each picks one by its own country rules (Japan, Germany and Russia, for example, use 44). From 0.6.0 the listener follows the iPhone: once it has heard the iPhone, it moves to the channel the iPhone uses (`ITLAWDLCoexPeer5GHz` shows which: 44, 149, or 1 for neither). Before it has heard one, it starts on 149.
-
 The firmware opens channel 149 only after a nearby network tells it the country.
 - Make sure some 5 GHz network that advertises a country is in range. Switching on an iPhone's Personal Hotspot nearby, without joining it, has worked.
 - Wait a minute after it appears.
-- Some countries don't allow channels 149 to 161, or allow them only at 20 or 40 MHz. Up to 0.5.4 AirDrop stayed on channel 6 there; from 0.6.0 it uses 44 if the iPhone does and the firmware allows it. The checker warns about known ones.
-- **Channels 149 to 161 marked passive** (China, for example): from 0.5.0, once the hackintosh hears a Wi-Fi network's beacon on one of these channels, the listener may use it, as on Linux. `ITLAWDLCoexBeaconHints` shows which channels were heard (bits 0 to 3 = 149, 153, 157, 161). A router on 149 at 80 MHz covers all four. The same applies to 36 to 48 for channel 44 (bits 8 to 11). From 0.6.0 such a channel can also be used while the Mac's own Wi-Fi is connected on a channel in the same group (36–48, 52–64, 100–144 or 149–165), if the firmware marks it for that, as Linux does: `ITLAWDLCoexIrConcurrent` lists the channels, `ITLAWDLCoexIrConcurrentUsed` counts the uses. With neither, AirDrop stays on 6.
+- Some countries don't allow channels 149 to 161, or allow them only at 20 or 40 MHz. There AirDrop stays on channel 6. The checker warns about known ones.
+- **Channels 149 to 161 marked passive** (China, for example): from 0.5.0, once the hackintosh hears a Wi-Fi network's beacon on one of these channels, the listener may use it, as on Linux. `ITLAWDLCoexBeaconHints` shows which channels were heard (bits 0 to 3 = 149, 153, 157, 161). A router on 149 at 80 MHz covers all four. With no network on them nearby, AirDrop stays on 6.
 - The driver never overrides the country's rules, and `itlwm_cc` doesn't help.
 
 ## The iPhone doesn't list the Mac
@@ -63,13 +61,9 @@ This is the main known problem. The time goes into the iPhone finding the Mac's 
 
 - **Check the iPhone's Wi-Fi first.** AirDrop gets the share of the iPhone's radio time that its own Wi-Fi leaves over. If the iPhone isn't on Wi-Fi, or is on channel 149, it gets 15 of 16 slots (about 22 MB/s). On a quiet network on another channel it gets 11 (about 15 MB/s), on a busy one 7 (about 6 MB/s). `ITLAWDLCoexPeerPresentEntries` shows the current number.
 - **Check the channel:** on 6, everything is very slow. The listener can drop to 6 for a while when the firmware briefly loses the country (`ITLAWDLCoexCountryLearned` No).
-- **Mac → iPhone much slower than iPhone → Mac:** on some setups (#22, #24) the iPhone never accepted block ack (`ITLAWDLCoexBaTxStateName` stays `asking`), so every frame went out singly. It happened when the Mac's own Wi-Fi was on the same channel as the AirDrop listener. From 0.6.0 the fix from [PR #47](https://github.com/retropineaple/ForbiddenItlwm/pull/47) is on by default (`ITLAWDLCoexSameChannelProbe*` keys). If it's still slow, please report it with the measure output. **Workaround:** put your router (or the Mac's network) on another channel, such as 36–48 or 157.
+- **Mac → iPhone much slower than iPhone → Mac:** a known open problem on some setups (#22, #24): the iPhone never accepts block ack (`ITLAWDLCoexBaTxStateName` stays `asking`), so every frame goes out singly. It happens when the Mac's own Wi-Fi is on the same channel as the AirDrop listener (usually 149) (#24). **Workaround:** put your router (or the Mac's network) on another channel, such as 36–48 or 157; AirDrop stays on 149 and block ack then forms within a second. Neither of 0.5.3's test flags (`-itlawdlbaaskshared`, `-itlawdlhideinfra`) fixed it; the cause is still being investigated.
 - **Measure it:** `bash tools/compat/airdrop_measure.sh` prints the speed and connect times macOS logs for each transfer.
 - **The very first send after boot** is often slower while rate control settles.
-
-## Networks are missing from the Wi-Fi list
-
-From 0.6.0 the driver counts what happens to macOS's scan requests (#20, #24, #45). After the list has looked wrong for a while, run `ioreg -l -w0 | grep -E '"ItlwmScan(Stats|Last)"'` and post the output with your report. It holds counts only, no network names.
 
 ## A new Bluetooth LE mouse or keyboard won't pair
 

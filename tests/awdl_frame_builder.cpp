@@ -59,5 +59,21 @@ int main()
     assert(buildTransportProbe(nullptr, 0, bytes, sizeof(bytes), &written) == BuildResult::Invalid);
     assert(buildTransportProbe(source, 0, nullptr, sizeof(bytes), &written) == BuildResult::Invalid);
     assert(buildTransportProbe(source, 0, bytes, sizeof(bytes), nullptr) == BuildResult::Invalid);
+    {
+        // Data Path State: flags 0x0303 (infra info, infra address, country, social map), then an
+        // unrelated TLV after it that must survive unchanged.
+        uint8_t run[] = {0x0c, 21, 0, 0x03, 0x03, 'X', '0', 0, 0x02, 0x00,
+                         1, 2, 3, 4, 5, 6, 0x95, 0x00, 7, 8, 9, 10, 11, 12,
+                         0x10, 1, 0, 0x77};
+        size_t n = sizeof(run);
+        assert(stripDataPathInfra(run, &n));
+        const uint8_t expected[] = {0x0c, 7, 0, 0x00, 0x03, 'X', '0', 0, 0x02, 0x00, 0x10, 1, 0, 0x77};
+        assert(n == sizeof(expected) && memcmp(run, expected, n) == 0);
+        assert(!stripDataPathInfra(run, &n) && n == sizeof(expected)); // nothing left to remove
+        // Flags announcing more than the TLV holds: left alone.
+        uint8_t shortRun[] = {0x0c, 4, 0, 0x01, 0x00, 1, 2};
+        size_t m = sizeof(shortRun);
+        assert(!stripDataPathInfra(shortRun, &m) && m == sizeof(shortRun));
+    }
     puts("AWDL local frame construction and transport probe: passed (offline only)");
 }

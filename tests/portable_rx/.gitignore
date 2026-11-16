@@ -1,6 +1,0 @@
-test-*
-!test-*.py
-!test-channel-lease.cpp
-*.dSYM/
-*.log
-__pycache__/

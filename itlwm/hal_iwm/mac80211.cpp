@@ -125,6 +125,871 @@
 #include <net80211/ieee80211_priv.h>
 #include "rs.h"
 
+// ---------------------------------------------------------------------------------------------
+// AWDL listener for the iwm family (experimental port, developed on the AC 3168).
+// Stage A: a second firmware MAC context (LISTENER) in the station's binding, so AWDL's frames
+// on the station's own channel reach the host, and their hand-off to the native AWDL interface.
+// Nothing is transmitted. Flags: -itlawdlcoexprobe (listener), -itlawdlcoexrx (hand-off).
+// A firmware error while the listener exists turns it off for the rest of the boot.
+// ---------------------------------------------------------------------------------------------
+#include <AWDLFrameParser.hpp>
+#if defined(ITL_AWDL_NATIVE)
+extern bool itlAWDLBuildAllowed();
+extern IOReturn itlAWDLReceiveAction(IOEthernetController*, mbuf_t, size_t, uint32_t, int32_t);
+#endif
+enum { kIwmAwdlMacId = 1, kIwmAwdlPhyId = 1 };
+static bool iwmAwdlFlagsRead, iwmAwdlProbe, iwmAwdlRx, iwmAwdlMulti, iwmAwdlMultiActive;
+static struct ieee80211_channel *iwmAwdlOwnChan;
+static uint32_t iwmAwdlPhyResult, iwmAwdlQuotaResult, iwmAwdlBusyRemovals, iwmAwdlTaskIdle;
+static const char *iwmAwdlTaskIdleReason = "none";
+static uint32_t iwmAwdlRefusedReason, iwmAwdlRefusedFlags, iwmAwdlHints, iwmAwdlFlags149, iwmAwdlFlags6;
+static char iwmAwdlFwErrorSnapshot[200];
+// Channels the NVM marks for radar detection (its RADAR bit). The channel map's DFS flag comes from
+// a different NVM bit that this card also sets on 149-165, where no radar detection applies, so the
+// AWDL checks use this instead. Nothing is ever started on a radar channel.
+static u_char iwmAwdlRadar[howmany(IEEE80211_CHAN_MAX + 1, NBBY)];
+static uint32_t iwmAwdlBeaconHints, iwmAwdlRetargets;
+// Own-channel mode: how much of what is on the listener's channel actually reaches us.
+static uint32_t iwmAwdlOwnFrames, iwmAwdlOwnBeacons, iwmAwdlOwnAction, iwmAwdlOwnData, iwmAwdlOwnDropped,
+    iwmAwdlOwnSeconds, iwmAwdlSharedAction;
+static uint64_t iwmAwdlOwnSinceUS;
+// Own-channel airtime. With equal time quotas and the station always awake towards its access
+// point, firmware 29 left the listener's channel almost no time (29 beacons in 501 seconds). Four
+// settings are measured for 20 seconds each, by beacons heard on the listener's channel, and the
+// best one is kept: 0 equal quotas; 1 station power management on; 2 that plus a larger listener
+// quota; 3 the larger quota alone.
+enum { kIwmAwdlExpVariants = 4, kIwmAwdlExpWindowUS = 20000000 };
+static unsigned iwmAwdlExpVariant, iwmAwdlExpBest;
+static bool iwmAwdlExpDone, iwmAwdlStationPm;
+static uint32_t iwmAwdlExpBeacons[kIwmAwdlExpVariants], iwmAwdlExpFrames[kIwmAwdlExpVariants],
+    iwmAwdlExpBeaconsAtStart, iwmAwdlExpFramesAtStart, iwmAwdlListenerQuota, iwmAwdlExpErrors;
+static uint64_t iwmAwdlExpWindowStartUS;
+// The listener's own channel halves the station's airtime, so it starts only once the new
+// association has had time for its key handshake and address.
+static uint64_t iwmAwdlDeferredAddUS;
+static bool iwmAwdlAddNow;
+static uint32_t iwmAwdlDeferredAdds;
+static uint64_t iwmAwdlUptimeUS();
+// The station's last state changes, with uptime in tenths of a second, for join problems.
+static char iwmAwdlStateLog[640];
+static void iwmAwdlNoteState(int from, int to, bool listener)
+{
+    char entry[40];
+    const uint64_t t = iwmAwdlUptimeUS() / 100000ULL;
+    snprintf(entry, sizeof(entry), "%llu.%llu:%d>%d%s ", t / 10, t % 10, from, to, listener ? "L" : "");
+    const size_t have = strlen(iwmAwdlStateLog), need = strlen(entry);
+    if (have + need + 1 > sizeof(iwmAwdlStateLog)) {
+        // Drop the oldest third.
+        const size_t cut = sizeof(iwmAwdlStateLog) / 3;
+        memmove(iwmAwdlStateLog, iwmAwdlStateLog + cut, have - cut + 1);
+    }
+    strlcat(iwmAwdlStateLog, entry, sizeof(iwmAwdlStateLog));
+}
+// Unicast data rate: a ladder from legacy 24 Mbit/s through HT MCS 2 to 7 (one stream, 20 MHz),
+// stepped by what the firmware reports for each window of frames. The firmware sends every retry
+// of a frame at the rate the frame names, so the choice is made here.
+static const int8_t iwmAwdlLadder[] = { -1, 2, 3, 4, 5, 6, 7 }; // -1: legacy OFDM 24 Mbit/s; else HT MCS
+// 80 MHz VHT rates are a separate, guarded step above the ladder's top, because a peer that does not
+// take them loses every frame: only large data frames (never a bare TCP acknowledgement) to a peer
+// that itself sent us 80 MHz VHT in the last 10 s, given up for a while after two failures and for
+// good after eight in a row.
+static const uint8_t iwmAwdlWideMcs[] = { 4, 5, 7, 8, 9 };
+static bool iwmAwdlWide80;
+static int iwmAwdlWideLevel = -1;            // index into iwmAwdlWideMcs; -1: not sending wide
+static uint8_t iwmAwdlWidePeer[6];
+static uint64_t iwmAwdlWidePeerUS, iwmAwdlWideHoldUntilUS;
+static uint32_t iwmAwdlWideHoldS = 5, iwmAwdlWideWindow, iwmAwdlWideRetried, iwmAwdlWideFailed, iwmAwdlWideMisses;
+static uint32_t iwmAwdlWideOk[nitems(iwmAwdlWideMcs)], iwmAwdlWideFail[nitems(iwmAwdlWideMcs)];
+static uint32_t iwmAwdlWideHolds, iwmAwdlRxVht80, iwmAwdlRxVhtLast, iwmAwdlRxCrcBad, iwmAwdlRxCrcBadVht;
+static char iwmAwdlWideText[160];
+void iwmAwdlNoteCrcBad(uint32_t rate_n_flags)
+{
+    ++iwmAwdlRxCrcBad;
+    if (rate_n_flags & RATE_MCS_VHT_MSK)
+        ++iwmAwdlRxCrcBadVht;
+}
+#if defined(ITL_AWDL_NATIVE)
+extern bool itlAWDLSingleStream, itlAWDLNoRxLdpc;
+extern void itlAWDLSetChannelClass(unsigned);
+#endif
+static unsigned iwmAwdlRateIdx = 2;
+static uint32_t iwmAwdlRateWindow, iwmAwdlRateRetried, iwmAwdlRateFailed, iwmAwdlRateUps, iwmAwdlRateDowns;
+static uint32_t iwmAwdlRxRateNow, iwmAwdlRxRateLast, iwmAwdlRxHt, iwmAwdlRxVht, iwmAwdlRxLegacy;
+static uint64_t iwmAwdlLastRetargetUS;
+static inline bool iwmAwdlRadarChannel(unsigned ch)
+{
+    return ch > IEEE80211_CHAN_MAX || isset(iwmAwdlRadar, ch);
+}
+static bool iwmAwdlAdded, iwmAwdlBusy, iwmAwdlPoisoned;
+static const char *iwmAwdlState = "off";
+static uint32_t iwmAwdlAdds, iwmAwdlRemoves, iwmAwdlMacResult, iwmAwdlBindResult, iwmAwdlFwErrors;
+static uint32_t iwmAwdlAction, iwmAwdlData, iwmAwdlOther, iwmAwdlForwarded, iwmAwdlForwardRefused,
+    iwmAwdlMalformed, iwmAwdlLastForwardError, iwmAwdlChannel, iwmAwdlLastRxChannel;
+static int32_t iwmAwdlLastRssi;
+static uint64_t iwmAwdlLastPublishUS;
+// Stage B and C: the listener's own firmware station and queue, macOS's sync frames sent from it
+// (-itlawdlcoextx), and awdl0's data both ways (-itlawdlcoexdata). Fixed legacy OFDM rates for now.
+#include <AWDLDataFrame.hpp>
+#include <AWDLChannels.hpp>
+#if defined(ITL_AWDL_NATIVE)
+extern void itlAWDLObserveData(IOEthernetController*, const uint8_t*, size_t);
+extern IOReturn itlAWDLBuildSyncProbe(IOEthernetController*, mbuf_t*, uint64_t);
+extern IOReturn itlAWDLBuildTransmit(IOEthernetController*, mbuf_t*);
+extern bool itlAWDLServiceTransmit(IOEthernetController*);
+extern void itlAWDLSetFixedChannel(unsigned);
+#endif
+enum { kIwmAwdlQueue = IWM_DQA_INJECT_MONITOR_QUEUE, kIwmAwdlRingLimit = 48, kIwmAwdlPeers = 8 };
+static bool iwmAwdlTx, iwmAwdlDataOn, iwmAwdlStopping, iwmAwdlTimerMade;
+static bool iwmAwdlTxReady, iwmAwdlTxHalted, iwmAwdlAddrKnown, iwmAwdlAddrApplied;
+static uint8_t iwmAwdlAddr[6];
+static unsigned iwmAwdlTxSetupTries;
+static CTimeout *iwmAwdlTimer;
+static struct task iwmAwdlTaskEntry;
+static uint64_t iwmAwdlLastSyncUS, iwmAwdlLastDataUS, iwmAwdlOldestPendingUS, iwmAwdlLastCompletionUS;
+static uint32_t iwmAwdlStaResult, iwmAwdlQueueResult, iwmAwdlAddrChanges, iwmAwdlAddrFailures;
+static uint32_t iwmAwdlSyncBuilt, iwmAwdlSyncNotReady, iwmAwdlSyncRejected, iwmAwdlLastBuildResult,
+    iwmAwdlSyncSubmitted, iwmAwdlSubmitErrors, iwmAwdlTxDone, iwmAwdlTxDoneOk, iwmAwdlTxDoneFail,
+    iwmAwdlTxLastStatus, iwmAwdlTxStuck, iwmAwdlTxRefusedChannel;
+static char iwmAwdlStuckSnapshot[400];
+static unsigned iwmAwdlTxVariant; // 0: the BE FIFO, 1: the multicast FIFO, tried if the first never completes a frame.
+static uint32_t iwmAwdlDataTx, iwmAwdlDataTxUcast, iwmAwdlDataTxUcastOk, iwmAwdlDataTxUcastFail,
+    iwmAwdlDataRxDelivered, iwmAwdlDataRxUnknownPeer, iwmAwdlDataRxMalformed, iwmAwdlDataRxUcast,
+    iwmAwdlDataRxGroup;
+static struct { uint8_t addr[6]; uint64_t heardUS; } iwmAwdlPeerTable[kIwmAwdlPeers];
+static uint8_t iwmAwdlDataBuf[2400];
+
+static void iwmAwdlPeerHeard(const uint8_t *addr, uint64_t now)
+{
+    unsigned oldest = 0;
+    for (unsigned i = 0; i < kIwmAwdlPeers; i++) {
+        if (iwmAwdlPeerTable[i].heardUS && !memcmp(iwmAwdlPeerTable[i].addr, addr, 6)) {
+            iwmAwdlPeerTable[i].heardUS = now;
+            return;
+        }
+        if (iwmAwdlPeerTable[i].heardUS < iwmAwdlPeerTable[oldest].heardUS)
+            oldest = i;
+    }
+    memcpy(iwmAwdlPeerTable[oldest].addr, addr, 6);
+    iwmAwdlPeerTable[oldest].heardUS = now;
+}
+
+// A peer is known while its AWDL action frames were heard on our channel in the last 30 seconds.
+static bool iwmAwdlPeerKnown(const uint8_t *addr, uint64_t now)
+{
+    for (unsigned i = 0; i < kIwmAwdlPeers; i++)
+        if (iwmAwdlPeerTable[i].heardUS && now - iwmAwdlPeerTable[i].heardUS < 30000000ULL &&
+            !memcmp(iwmAwdlPeerTable[i].addr, addr, 6))
+            return true;
+    return false;
+}
+
+static void iwmAwdlTxStateLost()
+{
+    iwmAwdlTxReady = false;
+    iwmAwdlTxHalted = false;
+    iwmAwdlAddrApplied = false;
+    iwmAwdlTxSetupTries = 0;
+    iwmAwdlOldestPendingUS = 0;
+}
+
+static uint64_t iwmAwdlUptimeUS()
+{
+    uint64_t t, ns;
+    clock_get_uptime(&t);
+    absolutetime_to_nanoseconds(t, &ns);
+    return ns / 1000;
+}
+
+static void iwmAwdlReadFlags()
+{
+    if (iwmAwdlFlagsRead)
+        return;
+    iwmAwdlFlagsRead = true;
+#if defined(ITL_AWDL_NATIVE)
+    int dummy = 0;
+    iwmAwdlProbe = itlAWDLBuildAllowed() && PE_parse_boot_argn("-itlawdlcoexprobe", &dummy, sizeof(dummy));
+    iwmAwdlRx = iwmAwdlProbe && PE_parse_boot_argn("-itlawdlcoexrx", &dummy, sizeof(dummy));
+    iwmAwdlTx = iwmAwdlRx && PE_parse_boot_argn("-itlawdlcoextx", &dummy, sizeof(dummy));
+    iwmAwdlDataOn = iwmAwdlTx && PE_parse_boot_argn("-itlawdlcoexdata", &dummy, sizeof(dummy));
+    iwmAwdlMulti = iwmAwdlProbe && PE_parse_boot_argn("-itlawdlcoexmulti", &dummy, sizeof(dummy));
+    if (iwmAwdlProbe)
+        iwmAwdlState = "not-added";
+#endif
+}
+
+static void iwmAwdlPublish()
+{
+    IORegistryEntry *root = IORegistryEntry::getRegistryRoot();
+    if (!root)
+        return;
+    iwmAwdlLastPublishUS = iwmAwdlUptimeUS();
+    root->setProperty("ITLAWDLIwmState", iwmAwdlState);
+    root->setProperty("ITLAWDLIwmAdded", iwmAwdlAdded ? kOSBooleanTrue : kOSBooleanFalse);
+    root->setProperty("ITLAWDLIwmRxHandoff", iwmAwdlRx ? kOSBooleanTrue : kOSBooleanFalse);
+    root->setProperty("ITLAWDLIwmChannel", iwmAwdlChannel, 32);
+    root->setProperty("ITLAWDLIwmOwnChannel", iwmAwdlMultiActive ? kOSBooleanTrue : kOSBooleanFalse);
+    root->setProperty("ITLAWDLIwmPhyResult", iwmAwdlPhyResult, 32);
+    root->setProperty("ITLAWDLIwmQuotaResult", iwmAwdlQuotaResult, 32);
+    root->setProperty("ITLAWDLIwmBusyRemovals", iwmAwdlBusyRemovals, 32);
+    root->setProperty("ITLAWDLIwmTaskIdle", iwmAwdlTaskIdle, 32);
+    root->setProperty("ITLAWDLIwmTaskIdleReason", iwmAwdlTaskIdleReason);
+    root->setProperty("ITLAWDLIwmRefusedReason", iwmAwdlRefusedReason, 32);
+    root->setProperty("ITLAWDLIwmRefusedFlags", iwmAwdlRefusedFlags, 32);
+    root->setProperty("ITLAWDLIwmHints", iwmAwdlHints, 32);
+    root->setProperty("ITLAWDLIwmBeaconHints", iwmAwdlBeaconHints, 32);
+    root->setProperty("ITLAWDLIwmRetargets", iwmAwdlRetargets, 32);
+    if (iwmAwdlMultiActive && iwmAwdlOwnSinceUS) {
+        const uint64_t nowUS = iwmAwdlUptimeUS();
+        iwmAwdlOwnSeconds += uint32_t((nowUS - iwmAwdlOwnSinceUS) / 1000000ULL);
+        iwmAwdlOwnSinceUS += ((nowUS - iwmAwdlOwnSinceUS) / 1000000ULL) * 1000000ULL;
+    }
+    root->setProperty("ITLAWDLIwmOwnSeconds", iwmAwdlOwnSeconds, 32);
+    root->setProperty("ITLAWDLIwmOwnFrames", iwmAwdlOwnFrames, 32);
+    root->setProperty("ITLAWDLIwmOwnBeacons", iwmAwdlOwnBeacons, 32);
+    root->setProperty("ITLAWDLIwmOwnAction", iwmAwdlOwnAction, 32);
+    root->setProperty("ITLAWDLIwmOwnData", iwmAwdlOwnData, 32);
+    root->setProperty("ITLAWDLIwmOwnDropped", iwmAwdlOwnDropped, 32);
+    root->setProperty("ITLAWDLIwmSharedAction", iwmAwdlSharedAction, 32);
+    {
+        char line[200];
+        snprintf(line, sizeof(line), "beacons/frames per 20 s: v0 %u/%u v1 %u/%u v2 %u/%u v3 %u/%u; now v%u%s best v%u errors %u",
+                 iwmAwdlExpBeacons[0], iwmAwdlExpFrames[0], iwmAwdlExpBeacons[1], iwmAwdlExpFrames[1],
+                 iwmAwdlExpBeacons[2], iwmAwdlExpFrames[2], iwmAwdlExpBeacons[3], iwmAwdlExpFrames[3],
+                 iwmAwdlExpVariant, iwmAwdlExpDone ? " (settled)" : " (measuring)", iwmAwdlExpBest, iwmAwdlExpErrors);
+        root->setProperty("ITLAWDLIwmAirtimeTest", line);
+    }
+    root->setProperty("ITLAWDLIwmDeferredAdds", iwmAwdlDeferredAdds, 32);
+    root->setProperty("ITLAWDLIwmStateLog", iwmAwdlStateLog);
+    root->setProperty("ITLAWDLIwmRateIdx", iwmAwdlRateIdx, 32);
+    root->setProperty("ITLAWDLIwmWide80", iwmAwdlWide80 ? kOSBooleanTrue : kOSBooleanFalse);
+    snprintf(iwmAwdlWideText, sizeof(iwmAwdlWideText),
+             "level %d misses %u holds %u ok/fail mcs4 %u/%u mcs5 %u/%u mcs7 %u/%u mcs8 %u/%u mcs9 %u/%u",
+             iwmAwdlWideLevel, iwmAwdlWideMisses, iwmAwdlWideHolds,
+             iwmAwdlWideOk[0], iwmAwdlWideFail[0], iwmAwdlWideOk[1], iwmAwdlWideFail[1],
+             iwmAwdlWideOk[2], iwmAwdlWideFail[2], iwmAwdlWideOk[3], iwmAwdlWideFail[3],
+             iwmAwdlWideOk[4], iwmAwdlWideFail[4]);
+    root->setProperty("ITLAWDLIwmWideTx", iwmAwdlWideText);
+    root->setProperty("ITLAWDLIwmRxVht80", iwmAwdlRxVht80, 32);
+    root->setProperty("ITLAWDLIwmRxVhtLast", iwmAwdlRxVhtLast, 32);
+    root->setProperty("ITLAWDLIwmRxCrcBad", iwmAwdlRxCrcBad, 32);
+    root->setProperty("ITLAWDLIwmRxCrcBadVht", iwmAwdlRxCrcBadVht, 32);
+    root->setProperty("ITLAWDLIwmRateUps", iwmAwdlRateUps, 32);
+    root->setProperty("ITLAWDLIwmRateDowns", iwmAwdlRateDowns, 32);
+    root->setProperty("ITLAWDLIwmRxRateLast", iwmAwdlRxRateLast, 32);
+    root->setProperty("ITLAWDLIwmRxHt", iwmAwdlRxHt, 32);
+    root->setProperty("ITLAWDLIwmRxVht", iwmAwdlRxVht, 32);
+    root->setProperty("ITLAWDLIwmRxLegacy", iwmAwdlRxLegacy, 32);
+    root->setProperty("ITLAWDLIwmFlags149", iwmAwdlFlags149, 32);
+    root->setProperty("ITLAWDLIwmFlags6", iwmAwdlFlags6, 32);
+    if (iwmAwdlFwErrorSnapshot[0])
+        root->setProperty("ITLAWDLIwmFwErrorSnapshot", iwmAwdlFwErrorSnapshot);
+    root->setProperty("ITLAWDLIwmAdds", iwmAwdlAdds, 32);
+    root->setProperty("ITLAWDLIwmRemoves", iwmAwdlRemoves, 32);
+    root->setProperty("ITLAWDLIwmMacResult", iwmAwdlMacResult, 32);
+    root->setProperty("ITLAWDLIwmBindResult", iwmAwdlBindResult, 32);
+    root->setProperty("ITLAWDLIwmFwErrors", iwmAwdlFwErrors, 32);
+    root->setProperty("ITLAWDLIwmAction", iwmAwdlAction, 32);
+    root->setProperty("ITLAWDLIwmData", iwmAwdlData, 32);
+    root->setProperty("ITLAWDLIwmOther", iwmAwdlOther, 32);
+    root->setProperty("ITLAWDLIwmForwarded", iwmAwdlForwarded, 32);
+    root->setProperty("ITLAWDLIwmForwardRefused", iwmAwdlForwardRefused, 32);
+    root->setProperty("ITLAWDLIwmLastForwardError", iwmAwdlLastForwardError, 32);
+    root->setProperty("ITLAWDLIwmMalformed", iwmAwdlMalformed, 32);
+    root->setProperty("ITLAWDLIwmLastRxChannel", iwmAwdlLastRxChannel, 32);
+    root->setProperty("ITLAWDLIwmLastRssi", uint32_t(iwmAwdlLastRssi), 32);
+    if (!iwmAwdlTx)
+        return;
+    root->setProperty("ITLAWDLIwmTxReady", iwmAwdlTxReady ? kOSBooleanTrue : kOSBooleanFalse);
+    root->setProperty("ITLAWDLIwmTxHalted", iwmAwdlTxHalted ? kOSBooleanTrue : kOSBooleanFalse);
+    root->setProperty("ITLAWDLIwmAddrApplied", iwmAwdlAddrApplied ? kOSBooleanTrue : kOSBooleanFalse);
+    root->setProperty("ITLAWDLIwmStaResult", iwmAwdlStaResult, 32);
+    root->setProperty("ITLAWDLIwmQueueResult", iwmAwdlQueueResult, 32);
+    root->setProperty("ITLAWDLIwmAddrChanges", iwmAwdlAddrChanges, 32);
+    root->setProperty("ITLAWDLIwmAddrFailures", iwmAwdlAddrFailures, 32);
+    root->setProperty("ITLAWDLIwmSyncBuilt", iwmAwdlSyncBuilt, 32);
+    root->setProperty("ITLAWDLIwmSyncNotReady", iwmAwdlSyncNotReady, 32);
+    root->setProperty("ITLAWDLIwmSyncRejected", iwmAwdlSyncRejected, 32);
+    root->setProperty("ITLAWDLIwmLastBuildResult", iwmAwdlLastBuildResult, 32);
+    root->setProperty("ITLAWDLIwmSyncSubmitted", iwmAwdlSyncSubmitted, 32);
+    root->setProperty("ITLAWDLIwmSubmitErrors", iwmAwdlSubmitErrors, 32);
+    root->setProperty("ITLAWDLIwmTxDone", iwmAwdlTxDone, 32);
+    root->setProperty("ITLAWDLIwmTxDoneOk", iwmAwdlTxDoneOk, 32);
+    root->setProperty("ITLAWDLIwmTxDoneFail", iwmAwdlTxDoneFail, 32);
+    root->setProperty("ITLAWDLIwmTxLastStatus", iwmAwdlTxLastStatus, 32);
+    root->setProperty("ITLAWDLIwmTxStuck", iwmAwdlTxStuck, 32);
+    root->setProperty("ITLAWDLIwmTxVariant", iwmAwdlTxVariant, 32);
+    if (iwmAwdlStuckSnapshot[0])
+        root->setProperty("ITLAWDLIwmStuckSnapshot", iwmAwdlStuckSnapshot);
+    root->setProperty("ITLAWDLIwmTxRefusedChannel", iwmAwdlTxRefusedChannel, 32);
+    root->setProperty("ITLAWDLIwmDataTx", iwmAwdlDataTx, 32);
+    root->setProperty("ITLAWDLIwmDataTxUcast", iwmAwdlDataTxUcast, 32);
+    root->setProperty("ITLAWDLIwmDataTxUcastOk", iwmAwdlDataTxUcastOk, 32);
+    root->setProperty("ITLAWDLIwmDataTxUcastFail", iwmAwdlDataTxUcastFail, 32);
+    root->setProperty("ITLAWDLIwmDataRxDelivered", iwmAwdlDataRxDelivered, 32);
+    root->setProperty("ITLAWDLIwmDataRxUnknownPeer", iwmAwdlDataRxUnknownPeer, 32);
+    root->setProperty("ITLAWDLIwmDataRxMalformed", iwmAwdlDataRxMalformed, 32);
+    root->setProperty("ITLAWDLIwmDataRxUcast", iwmAwdlDataRxUcast, 32);
+    root->setProperty("ITLAWDLIwmDataRxGroup", iwmAwdlDataRxGroup, 32);
+}
+
+// The firmware reported a fatal error. If the listener existed or was being changed, it is the
+// first suspect: no further attempt this boot, so a refusal can't become a restart loop.
+static void iwmAwdlFirmwareError()
+{
+    if (!iwmAwdlAdded && !iwmAwdlBusy)
+        return;
+    ++iwmAwdlFwErrors;
+    // The restart gives a clean firmware, so the listener may come back with the next association.
+    // Three errors in one boot end that: a refusal must not become a restart loop.
+    iwmAwdlPoisoned = iwmAwdlFwErrors >= 3;
+    iwmAwdlAdded = false;
+    iwmAwdlBusy = false;
+    iwmAwdlMultiActive = false;
+    iwmAwdlOwnChan = nullptr;
+    iwmAwdlTxStateLost();
+    iwmAwdlState = iwmAwdlPoisoned ? "disabled: firmware errors with listener" : "not-added: after a firmware error";
+}
+
+// The firmware was stopped or restarted: every context is gone, ours included.
+static void iwmAwdlFirmwareGone()
+{
+    iwmAwdlTxStateLost();
+    iwmAwdlMultiActive = false;
+    iwmAwdlOwnChan = nullptr;
+    iwmAwdlStationPm = false;
+    iwmAwdlListenerQuota = 0;
+    iwmAwdlDeferredAddUS = 0;
+    if (iwmAwdlAdded) {
+        iwmAwdlAdded = false;
+        if (!iwmAwdlPoisoned)
+            iwmAwdlState = "not-added";
+    }
+}
+
+// Detach: no timer or task of ours may run afterwards.
+void iwmAwdlStop()
+{
+    iwmAwdlStopping = true;
+    if (iwmAwdlTimerMade) {
+        iwmAwdlTimerMade = false;
+        timeout_del(&iwmAwdlTimer);
+        timeout_free(&iwmAwdlTimer);
+        task_del(systq, &iwmAwdlTaskEntry);
+    }
+}
+
+int ItlIwm::
+iwm_awdl_mac_cmd(struct iwm_softc *sc, uint32_t action)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    struct iwm_node *in = (struct iwm_node *)ic->ic_bss;
+    struct iwm_mac_ctx_cmd cmd;
+    static const uint8_t awdlBssid[6] = {0x00, 0x25, 0x00, 0xff, 0x94, 0x73};
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.id_and_color = htole32(IWM_FW_CMD_ID_AND_COLOR(kIwmAwdlMacId, 0));
+    cmd.action = htole32(action);
+    if (action != IWM_FW_CTXT_ACTION_REMOVE) {
+        cmd.mac_type = htole32(IWM_FW_MAC_TYPE_LISTENER);
+        cmd.tsf_id = htole32(IWM_TSF_ID_B);
+        // The firmware ACKs only its context's address, so once macOS's AWDL address is known it is
+        // this one. Until then a locally administered address of its own.
+        if (iwmAwdlAddrKnown) {
+            IEEE80211_ADDR_COPY(cmd.node_addr, iwmAwdlAddr);
+        } else {
+            IEEE80211_ADDR_COPY(cmd.node_addr, ic->ic_myaddr);
+            cmd.node_addr[0] |= 0x02;
+            cmd.node_addr[5] ^= 0x5a;
+        }
+        IEEE80211_ADDR_COPY(cmd.bssid_addr, awdlBssid);
+        struct ieee80211_channel *listen = iwmAwdlOwnChan ? iwmAwdlOwnChan :
+            (in && in->in_phyctxt ? in->in_phyctxt->channel : nullptr);
+        const bool is2g = listen && IEEE80211_IS_CHAN_2GHZ(listen);
+        cmd.cck_rates = htole32(is2g ? 0x0f : 0);
+        cmd.ofdm_rates = htole32(0x15);
+        // Beside the station: AWDL's BSSID and group frames. On its own channel also promiscuous, with
+        // beacons: the newer cards' firmware passes a listener no data without it, and the beacons
+        // show how much of that channel's traffic reaches us. What isn't AWDL's is sorted out on receive.
+        cmd.filter_flags = htole32(iwmAwdlOwnChan ?
+            IWM_MAC_FILTER_IN_PROMISC | IWM_MAC_FILTER_IN_CONTROL_AND_MGMT | IWM_MAC_FILTER_ACCEPT_GRP |
+            IWM_MAC_FILTER_IN_BEACON : IWM_MAC_FILTER_ACCEPT_GRP);
+        // Its access categories and their transmit FIFOs, with the standard EDCA defaults. Without
+        // them the firmware has no FIFO for this context and never sends what its queue holds.
+        static const struct { uint8_t ac, fifo, aifsn; uint16_t cwmin, cwmax; } edca[] = {
+            { IWM_AC_BE, IWM_TX_FIFO_BE, 3, 15, 1023 },
+            { IWM_AC_BK, IWM_TX_FIFO_BK, 7, 15, 1023 },
+            { IWM_AC_VI, IWM_TX_FIFO_VI, 2, 7, 15 },
+            { IWM_AC_VO, IWM_TX_FIFO_VO, 2, 3, 7 },
+        };
+        for (unsigned i = 0; i < nitems(edca); i++) {
+            cmd.ac[edca[i].ac].cw_min = htole16(edca[i].cwmin);
+            cmd.ac[edca[i].ac].cw_max = htole16(edca[i].cwmax);
+            cmd.ac[edca[i].ac].aifsn = edca[i].aifsn;
+            cmd.ac[edca[i].ac].fifos_mask = uint8_t(1 << edca[i].fifo);
+            cmd.ac[edca[i].ac].edca_txop = 0;
+        }
+        cmd.qos_flags = htole32(IWM_MAC_QOS_FLG_UPDATE_EDCA);
+        cmd.short_slot = htole32(IWM_MAC_FLG_SHORT_SLOT);
+    }
+    return iwm_send_cmd_pdu(sc, IWM_MAC_CONTEXT_CMD, 0, sizeof(cmd), &cmd);
+}
+
+// A binding: the station's with or without the listener beside the station (MODIFY), or the
+// listener's own on its own PHY context (ADD with the listener, REMOVE without).
+int ItlIwm::
+iwm_awdl_bind_cmd(struct iwm_softc *sc, struct iwm_phy_ctxt *phyctxt, uint32_t action, uint32_t mac0,
+                  uint32_t mac1, uint32_t *status)
+{
+    struct iwm_binding_cmd cmd;
+    size_t len;
+    int i;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.id_and_color = htole32(IWM_FW_CMD_ID_AND_COLOR(phyctxt->id, phyctxt->color));
+    cmd.action = htole32(action);
+    cmd.phy = htole32(IWM_FW_CMD_ID_AND_COLOR(phyctxt->id, phyctxt->color));
+    for (i = 0; i < IWM_MAX_MACS_IN_BINDING; i++)
+        cmd.macs[i] = htole32(IWM_FW_CTXT_INVALID);
+    cmd.macs[0] = htole32(mac0);
+    cmd.macs[1] = htole32(mac1);
+    if (IEEE80211_IS_CHAN_2GHZ(phyctxt->channel) ||
+        !isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_CDB_SUPPORT))
+        cmd.lmac_id = htole32(IWM_LMAC_24G_INDEX);
+    else
+        cmd.lmac_id = htole32(IWM_LMAC_5G_INDEX);
+    if (isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_BINDING_CDB_SUPPORT))
+        len = sizeof(cmd);
+    else
+        len = sizeof(struct iwm_binding_cmd_v1);
+    *status = 0;
+    return iwm_send_cmd_pdu_status(sc, IWM_BINDING_CONTEXT_CMD, len, &cmd, status);
+}
+
+// The listener's own channel (-itlawdlcoexmulti): none when the station already sits on a channel
+// Apple devices use for AWDL (6, 44, 149); otherwise 149, else 6, each only if the firmware's
+// channel map lets us start there (active, not passive unless a network was heard, no radar,
+// ad hoc allowed).
+static unsigned
+iwmAwdlPickOwn(struct ieee80211com *ic, unsigned stationChannel)
+{
+    if (!iwmAwdlMulti || stationChannel == 6 || stationChannel == 44 || stationChannel == 149)
+        return 0;
+    auto usable = [ic](unsigned ch) {
+        const auto &c = ic->ic_channels[ch];
+        return c.ic_freq && isset(ic->ic_chan_active, ch) &&
+            !((c.ic_flags & IEEE80211_CHAN_PASSIVE) && !isset(ic->ic_beacon_hint, ch)) &&
+            !iwmAwdlRadarChannel(ch) && !(c.ic_flags & IEEE80211_CHAN_NOADHOC);
+    };
+    if (usable(149))
+        return 149;
+    if (usable(6))
+        return 6;
+    return 0;
+}
+
+// The listener's own PHY context at 20 MHz. The shared helper takes its width from the station's
+// network, so the command is finished here.
+int ItlIwm::
+iwm_awdl_phy_cmd(struct iwm_softc *sc, struct iwm_phy_ctxt *own)
+{
+    struct iwm_phy_context_cmd cmd;
+
+    iwm_phy_ctxt_cmd_hdr(sc, own, &cmd, IWM_FW_CTXT_ACTION_MODIFY, 0);
+    iwm_phy_ctxt_cmd_data(sc, &cmd, own->channel, 1, 1);
+    cmd.ci.width = IWM_PHY_VHT_CHANNEL_MODE20;
+    cmd.ci.ctrl_pos = IWM_PHY_VHT_CTRL_POS_1_BELOW;
+    return iwm_send_cmd_pdu(sc, IWM_PHY_CONTEXT_CMD, 0, sizeof(cmd), &cmd);
+}
+
+// The station's power command, with or without 802.11 power management towards its access point.
+// With it the firmware can tell the access point the station is away while it serves the listener.
+int ItlIwm::
+iwm_awdl_station_pm(struct iwm_softc *sc, struct iwm_node *in, int enable)
+{
+    struct iwm_mac_power_cmd cmd;
+
+    memset(&cmd, 0, sizeof(cmd));
+    iwm_power_build_cmd(sc, in, &cmd);
+    if (enable) {
+        cmd.flags |= htole16(IWM_POWER_FLAGS_POWER_MANAGEMENT_ENA_MSK);
+        cmd.rx_data_timeout = htole32(100 * 1000);
+        cmd.tx_data_timeout = htole32(100 * 1000);
+    }
+    return iwm_send_cmd_pdu(sc, IWM_MAC_PM_POWER_TABLE, 0, sizeof(cmd), &cmd);
+}
+
+// One setting of the airtime test. Caller holds iwmAwdlBusy and checks the generation afterwards.
+int ItlIwm::
+iwm_awdl_apply_airtime(struct iwm_softc *sc, unsigned variant)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    struct iwm_node *in = (struct iwm_node *)ic->ic_bss;
+    const int generation = sc->sc_generation;
+    const bool pm = variant == 1 || variant == 2;
+    int err = 0;
+
+    if (!in)
+        return EINVAL;
+    if (pm != iwmAwdlStationPm) {
+        err = iwm_awdl_station_pm(sc, in, pm);
+        if (generation != sc->sc_generation)
+            return ECANCELED;
+        if (!err)
+            iwmAwdlStationPm = pm;
+    }
+    iwmAwdlListenerQuota = variant >= 2 ? 100 : 0;
+    in = (struct iwm_node *)ic->ic_bss;
+    if (!in)
+        return EINVAL;
+    const int quotaErr = iwm_update_quotas(sc, in, 1);
+    if (generation != sc->sc_generation)
+        return ECANCELED;
+    return err ? err : quotaErr;
+}
+
+int ItlIwm::
+iwm_awdl_listener(struct iwm_softc *sc, int add)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    struct iwm_node *in = (struct iwm_node *)ic->ic_bss;
+    struct iwm_phy_ctxt *own = &sc->sc_phyctxt[kIwmAwdlPhyId];
+    const int generation = sc->sc_generation;
+    const uint32_t listenerMac = IWM_FW_CMD_ID_AND_COLOR(kIwmAwdlMacId, 0);
+    uint32_t status = 0;
+    int err;
+
+    iwmAwdlReadFlags();
+    if (!iwmAwdlProbe || ic->ic_opmode != IEEE80211_M_STA)
+        return 0;
+    if (!add)
+        iwmAwdlDeferredAddUS = 0;
+#if defined(ITL_AWDL_NATIVE)
+    if (add && !iwmAwdlTimerMade && !iwmAwdlStopping) {
+        task_set(&iwmAwdlTaskEntry, iwm_awdl_task, sc, "iwmAwdlTask");
+        timeout_set(&iwmAwdlTimer, iwm_awdl_timeout, sc);
+        iwmAwdlTimerMade = true;
+        timeout_add_msec(&iwmAwdlTimer, 200);
+    }
+#endif
+    if (iwmAwdlBusy) {
+        // Another listener command is waiting on the firmware. A removal can't be skipped: the
+        // station is about to leave, so nothing more may be tried on this firmware.
+        if (!add && iwmAwdlAdded) {
+            ++iwmAwdlBusyRemovals;
+            iwmAwdlPoisoned = true;
+            iwmAwdlState = "disabled: removal raced a command";
+        }
+        return 0;
+    }
+    if ((add != 0) == iwmAwdlAdded)
+        return 0;
+    if (add && iwmAwdlPoisoned)
+        return EIO;
+    if (!in || !in->in_phyctxt || !in->in_phyctxt->channel ||
+        !(sc->sc_flags & IWM_FLAG_BINDING_ACTIVE))
+        return EINVAL;
+
+    iwmAwdlBusy = true;
+    if (add) {
+        const unsigned stationChannel = ieee80211_chan2ieee(ic, in->in_phyctxt->channel);
+        // Beacon hint, as Linux's regulatory code does: we are associated to an access point that
+        // beacons on this channel, so initiating there is allowed even where the NVM marks it
+        // passive. Radar channels are never hinted.
+        if (!iwmAwdlRadarChannel(stationChannel))
+            setbit(ic->ic_beacon_hint, stationChannel);
+        iwmAwdlFlags149 = ic->ic_channels[149].ic_flags | (isset(ic->ic_chan_active, 149) ? 0x80000000U : 0);
+        iwmAwdlFlags6 = ic->ic_channels[6].ic_flags | (isset(ic->ic_chan_active, 6) ? 0x80000000U : 0);
+        iwmAwdlHints = (isset(ic->ic_beacon_hint, 149) ? 1U : 0U) | (isset(ic->ic_beacon_hint, 6) ? 2U : 0U) |
+            (isset(ic->ic_beacon_hint, 44) ? 4U : 0U) | (iwmAwdlRadarChannel(149) ? 16U : 0U) |
+            (iwmAwdlRadarChannel(6) ? 32U : 0U);
+        unsigned ownNumber = iwmAwdlPickOwn(ic, stationChannel);
+        if (ownNumber && isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_ULTRA_HB_CHANNELS))
+            ownNumber = 0;
+        if (!ownNumber && stationChannel != 6 && stationChannel != 44 && stationChannel != 149) {
+            // The station is on a channel Apple devices don't use for AWDL, and the listener has no
+            // channel of its own: a listener here would hear nobody, and its sync frames would make
+            // macOS prefer a link that can't work over the transfer paths that still do.
+            iwmAwdlState = "idle: Wi-Fi is not on an AirDrop channel (6, 44, 149)";
+            iwmAwdlBusy = false;
+            iwmAwdlPublish();
+            return 0;
+        }
+        if (ownNumber && !iwmAwdlAddNow && iwmAwdlTimerMade) {
+            // On its own channel: only after the association has settled. The timer task adds it.
+            iwmAwdlDeferredAddUS = iwmAwdlUptimeUS() + 8000000ULL;
+            iwmAwdlState = "waiting: own channel after the association settles";
+            iwmAwdlBusy = false;
+            iwmAwdlPublish();
+            return 0;
+        }
+        iwmAwdlOwnChan = nullptr;
+        if (ownNumber) {
+            struct ieee80211_channel *before = own->channel;
+            own->channel = &ic->ic_channels[ownNumber];
+            err = iwm_awdl_phy_cmd(sc, own);
+            iwmAwdlPhyResult = err ? 0x80000000U | uint32_t(err) : 1;
+            if (generation != sc->sc_generation) {
+                iwmAwdlBusy = false;
+                return ECANCELED;
+            }
+            if (err) {
+                // The context isn't bound to anything: staying beside the station is still possible.
+                own->channel = before;
+                ownNumber = 0;
+            } else {
+                iwmAwdlOwnChan = own->channel;
+            }
+        }
+        err = iwm_awdl_mac_cmd(sc, IWM_FW_CTXT_ACTION_ADD);
+        iwmAwdlMacResult = err ? 0x80000000U | uint32_t(err) : 1;
+        if (generation != sc->sc_generation) {
+            iwmAwdlBusy = false;
+            return ECANCELED;
+        }
+        if (err) {
+            // No answer to read: the firmware may or may not have made the context.
+            iwmAwdlPoisoned = true;
+            iwmAwdlState = "disabled: MAC context refused";
+            goto out;
+        }
+        in = (struct iwm_node *)ic->ic_bss;
+        if (!in || !in->in_phyctxt || !in->in_phyctxt->channel) {
+            (void)iwm_awdl_mac_cmd(sc, IWM_FW_CTXT_ACTION_REMOVE);
+            err = EINVAL;
+            goto out;
+        }
+        if (ownNumber)
+            err = iwm_awdl_bind_cmd(sc, own, IWM_FW_CTXT_ACTION_ADD, listenerMac, IWM_FW_CTXT_INVALID, &status);
+        else
+            err = iwm_awdl_bind_cmd(sc, in->in_phyctxt, IWM_FW_CTXT_ACTION_MODIFY,
+                                    IWM_FW_CMD_ID_AND_COLOR(in->in_id, in->in_color), listenerMac, &status);
+        iwmAwdlBindResult = err ? 0x80000000U | uint32_t(err) : (status ? 0x40000000U | status : 1);
+        if (generation != sc->sc_generation) {
+            iwmAwdlBusy = false;
+            return ECANCELED;
+        }
+        if (err || status) {
+            if (!err)
+                err = EIO;
+            // Leave no context the binding doesn't know about; either way, don't try again.
+            (void)iwm_awdl_mac_cmd(sc, IWM_FW_CTXT_ACTION_REMOVE);
+            iwmAwdlPoisoned = true;
+            iwmAwdlState = "disabled: binding refused";
+            goto out;
+        }
+        iwmAwdlAdded = true;
+        iwmAwdlMultiActive = ownNumber != 0;
+        iwmAwdlOwnSinceUS = ownNumber ? iwmAwdlUptimeUS() : 0;
+        iwmAwdlExpVariant = 0;
+        iwmAwdlExpDone = false;
+        iwmAwdlExpWindowStartUS = 0;
+        iwmAwdlListenerQuota = 0;
+        ++iwmAwdlAdds;
+        iwmAwdlChannel = ownNumber ? ownNumber : stationChannel;
+        iwmAwdlState = ownNumber ? "listening: own channel" : "listening: station's channel";
+        // Beside the station on a 5 GHz channel whose context is 80 MHz wide, the listener can send
+        // and be sent to at 80 MHz, and says so in its frames (operating class 128).
+        iwmAwdlWide80 = !ownNumber && stationChannel > 14 && ic->ic_bss &&
+            ic->ic_bss->ni_chw == IEEE80211_CHAN_WIDTH_80;
+#if defined(ITL_AWDL_NATIVE)
+        itlAWDLSetChannelClass(iwmAwdlWide80 ? 128 : 0);
+#endif
+        iwmAwdlWideLevel = -1;
+        iwmAwdlWidePeerUS = iwmAwdlWideHoldUntilUS = 0;
+        iwmAwdlWideWindow = iwmAwdlWideRetried = iwmAwdlWideFailed = 0;
+        iwmAwdlAddrApplied = false;
+        XYLog("%s: AWDL listener added on channel %u\n", DEVNAME(sc), iwmAwdlChannel);
+        if (iwmAwdlMultiActive) {
+            // Two bindings now share the radio: the firmware needs each one's share of the time.
+            in = (struct iwm_node *)ic->ic_bss;
+            err = in ? iwm_update_quotas(sc, in, 1) : EINVAL;
+            iwmAwdlQuotaResult = err ? 0x80000000U | uint32_t(err) : 1;
+            if (generation != sc->sc_generation) {
+                iwmAwdlBusy = false;
+                return ECANCELED;
+            }
+            err = 0;
+        }
+#if defined(ITL_AWDL_NATIVE)
+        if (iwmAwdlTx) {
+            // Our frames name the channel we are on.
+            itlAWDLSetFixedChannel(iwmAwdlChannel);
+            iwmAwdlTxSetupTries = 0;
+            if (iwmAwdlTimerMade)
+                timeout_add_msec(&iwmAwdlTimer, 100);
+        }
+#endif
+    } else {
+        const bool multi = iwmAwdlMultiActive;
+        iwmAwdlAdded = false;
+        iwmAwdlMultiActive = false;
+        iwmAwdlState = "not-added";
+        // Its station and queue first, then the time share, the binding, and last the context.
+        const int txErr = iwm_awdl_tx_teardown(sc);
+        if (generation != sc->sc_generation) {
+            iwmAwdlBusy = false;
+            return 0;
+        }
+        in = (struct iwm_node *)ic->ic_bss;
+        if (!in || !in->in_phyctxt || !in->in_phyctxt->channel) {
+            iwmAwdlBusy = false;
+            iwmAwdlPoisoned = true;
+            iwmAwdlState = "disabled: removal failed";
+            return EINVAL;
+        }
+        if (multi) {
+            // The station's own power setting back first, then the whole session to its binding.
+            iwmAwdlListenerQuota = 0;
+            if (iwmAwdlStationPm) {
+                (void)iwm_awdl_station_pm(sc, in, 0);
+                iwmAwdlStationPm = false;
+                if (generation != sc->sc_generation) {
+                    iwmAwdlBusy = false;
+                    return 0;
+                }
+                in = (struct iwm_node *)ic->ic_bss;
+                if (!in || !in->in_phyctxt || !in->in_phyctxt->channel) {
+                    iwmAwdlBusy = false;
+                    iwmAwdlPoisoned = true;
+                    iwmAwdlState = "disabled: removal failed";
+                    return EINVAL;
+                }
+            }
+            (void)iwm_update_quotas(sc, in, 1);
+            if (generation != sc->sc_generation) {
+                iwmAwdlBusy = false;
+                return 0;
+            }
+            err = iwm_awdl_bind_cmd(sc, own, IWM_FW_CTXT_ACTION_REMOVE, IWM_FW_CTXT_INVALID,
+                                    IWM_FW_CTXT_INVALID, &status);
+        } else {
+            err = iwm_awdl_bind_cmd(sc, in->in_phyctxt, IWM_FW_CTXT_ACTION_MODIFY,
+                                    IWM_FW_CMD_ID_AND_COLOR(in->in_id, in->in_color), IWM_FW_CTXT_INVALID,
+                                    &status);
+        }
+        if (generation != sc->sc_generation) {
+            iwmAwdlBusy = false;
+            return 0;
+        }
+        if (!err && status)
+            err = EIO;
+        const int macErr = iwm_awdl_mac_cmd(sc, IWM_FW_CTXT_ACTION_REMOVE);
+        if (generation != sc->sc_generation) {
+            iwmAwdlBusy = false;
+            return 0;
+        }
+        if (!err)
+            err = macErr;
+        if (!err)
+            err = txErr;
+        ++iwmAwdlRemoves;
+        iwmAwdlOwnChan = nullptr;
+        if (err) {
+            iwmAwdlPoisoned = true;
+            iwmAwdlState = "disabled: removal failed";
+        }
+    }
+out:
+    iwmAwdlBusy = false;
+    iwmAwdlPublish();
+    return err;
+}
+
+// True when the frame was AWDL's and has been consumed. AWDL frames never reach net80211.
+bool ItlIwm::
+iwm_awdl_rx(struct iwm_softc *sc, mbuf_t m, int chanidx, struct ieee80211_rxinfo *rxi)
+{
+    static const uint8_t awdlBssid[6] = {0x00, 0x25, 0x00, 0xff, 0x94, 0x73};
+    if (!iwmAwdlProbe || mbuf_len(m) < 24)
+        return false;
+    const uint8_t *f = mtod(m, const uint8_t *);
+    // Address 3 is the BSSID only without To DS and From DS, as in AWDL's frames.
+    if ((f[0] & 0x03) || (f[1] & 0x03) || memcmp(f + 16, awdlBssid, sizeof(awdlBssid)))
+        return false;
+    if (f[0] == 0xd0) {
+        ++iwmAwdlAction;
+        if (!iwmAwdlMultiActive)
+            ++iwmAwdlSharedAction;
+        iwmAwdlLastRxChannel = uint32_t(chanidx);
+        iwmAwdlLastRssi = int32_t(rxi->rxi_rssi) + IWM_MIN_DBM;
+#if defined(ITL_AWDL_NATIVE)
+        if (iwmAwdlRx && iwmAwdlAdded && !mbuf_next(m)) {
+            // The hand-off expects four bytes after the frame, as from monitor mode: a copy gets them.
+            size_t length = mbuf_len(m);
+            const size_t unpadded = ItlAWDL::trimZeroPadding(f, length);
+            if (unpadded < length)
+                length = unpadded;
+            ItlAWDL::ActionFrame action;
+            mbuf_t copy = nullptr;
+            if (ItlAWDL::parseAction(f, length, &action) != ItlAWDL::ParseResult::Valid) {
+                ++iwmAwdlMalformed;
+            } else if (!(f[10] & 1) && uint32_t(chanidx) == iwmAwdlChannel &&
+                       !(iwmAwdlAddrKnown && !memcmp(f + 10, iwmAwdlAddr, 6)) &&
+                       (iwmAwdlPeerHeard(f + 10, iwmAwdlUptimeUS()), false)) {
+            } else if (!mbuf_getpacket(MBUF_DONTWAIT, &copy) && copy && mbuf_maxlen(copy) >= length + 4) {
+                memcpy(mbuf_data(copy), f, length);
+                memset(static_cast<uint8_t *>(mbuf_data(copy)) + length, 0, 4);
+                mbuf_setlen(copy, length + 4);
+                mbuf_pkthdr_setlen(copy, length + 4);
+                const IOReturn sent = itlAWDLReceiveAction(getController(), copy, length,
+                                                           static_cast<uint32_t>(chanidx), iwmAwdlLastRssi);
+                if (sent == kIOReturnSuccess) {
+                    ++iwmAwdlForwarded;
+                } else {
+                    ++iwmAwdlForwardRefused;
+                    iwmAwdlLastForwardError = uint32_t(sent);
+                }
+            }
+            if (copy)
+                mbuf_freem(copy);
+        }
+#endif
+    } else if ((f[0] & 0x0c) == 0x08) {
+        ++iwmAwdlData;
+#if defined(ITL_AWDL_NATIVE)
+        const size_t dataLen = mbuf_len(m);
+        ++((f[4] & 1) ? iwmAwdlDataRxGroup : iwmAwdlDataRxUcast);
+        if (!(f[4] & 1)) {
+            // What the peer sends us at, for the report.
+            iwmAwdlRxRateLast = iwmAwdlRxRateNow;
+            ++((iwmAwdlRxRateNow & RATE_MCS_VHT_MSK) ? iwmAwdlRxVht :
+               (iwmAwdlRxRateNow & RATE_MCS_HT_MSK) ? iwmAwdlRxHt : iwmAwdlRxLegacy);
+            if (iwmAwdlRxRateNow & RATE_MCS_VHT_MSK) {
+                iwmAwdlRxVhtLast = iwmAwdlRxRateNow;
+                // A peer that sends us 80 MHz VHT can be sent it.
+                if ((iwmAwdlRxRateNow & RATE_MCS_CHAN_WIDTH_MSK) == RATE_MCS_CHAN_WIDTH_80) {
+                    ++iwmAwdlRxVht80;
+                    memcpy(iwmAwdlWidePeer, f + 10, 6);
+                    iwmAwdlWidePeerUS = iwmAwdlUptimeUS();
+                }
+            }
+        }
+        if (iwmAwdlDataOn && iwmAwdlAdded && !mbuf_next(m) && dataLen + 4 <= sizeof(iwmAwdlDataBuf) &&
+            uint32_t(chanidx) == iwmAwdlChannel) {
+            ItlAWDL::DataFrameView view;
+            if (!iwmAwdlPeerKnown(f + 10, iwmAwdlUptimeUS())) {
+                ++iwmAwdlDataRxUnknownPeer;
+            } else if (ItlAWDL::parseDataFrame(f, dataLen, false, &view) == ItlAWDL::ParseResult::Valid) {
+                // awdl0's hand-off expects the monitor-mode layout: four bytes after the frame.
+                memcpy(iwmAwdlDataBuf, f, dataLen);
+                memset(iwmAwdlDataBuf + dataLen, 0, 4);
+                itlAWDLObserveData(getController(), iwmAwdlDataBuf, dataLen + 4);
+                ++iwmAwdlDataRxDelivered;
+                iwmAwdlLastDataUS = iwmAwdlUptimeUS();
+            } else {
+                ++iwmAwdlDataRxMalformed;
+            }
+        }
+#endif
+    } else {
+        ++iwmAwdlOther;
+    }
+    if (iwmAwdlUptimeUS() - iwmAwdlLastPublishUS >= 1000000ULL)
+        iwmAwdlPublish();
+    mbuf_freem(m);
+    return true;
+}
+
 #ifdef IWM_DEBUG
 int iwm_debug = 1;
 #endif
@@ -280,6 +1145,12 @@ iwm_init_channel_map(struct iwm_softc *sc, const uint16_t * const nvm_ch_flags,
         if (ch_flags & IWM_NVM_CHANNEL_DFS) {
             channel->ic_flags |= IEEE80211_CHAN_DFS;
         }
+        if (hw_value >= 0 && hw_value <= IEEE80211_CHAN_MAX) {
+            if (ch_flags & IWM_NVM_CHANNEL_RADAR)
+                setbit(iwmAwdlRadar, hw_value);
+            else
+                clrbit(iwmAwdlRadar, hw_value);
+        }
 
         channel->ic_freq = ieee80211_ieee2mhz(hw_value, flags);
     }
@@ -300,6 +1171,12 @@ iwm_setup_ht_rates(struct iwm_softc *sc)
     if (sc->support_ldpc)
         ic->ic_htcaps |= IEEE80211_HTCAP_LDPC;
     
+#if defined(ITL_AWDL_NATIVE)
+    // What the AWDL capabilities reported to macOS may claim, known before the interface exists:
+    // one stream until MCS 8-15 is set below, and receive LDPC only if the card has it.
+    itlAWDLSingleStream = true;
+    itlAWDLNoRxLdpc = !sc->support_ldpc;
+#endif
     if (!iwm_mimo_enabled(sc))
         return;
     
@@ -307,6 +1184,9 @@ iwm_setup_ht_rates(struct iwm_softc *sc)
     if ((rx_ant & IWM_ANT_AB) == IWM_ANT_AB ||
         (rx_ant & IWM_ANT_BC) == IWM_ANT_BC)
         ic->ic_sup_mcs[1] = 0xff;    /* MCS 8-15 */
+#if defined(ITL_AWDL_NATIVE)
+    itlAWDLSingleStream = ic->ic_sup_mcs[1] == 0;
+#endif
 }
 
 void ItlIwm::
@@ -939,6 +1819,39 @@ iwm_rx_frame(struct iwm_softc *sc, mbuf_t m, int chanidx,
     if (chanidx < 0 || chanidx >= nitems(ic->ic_channels))
         chanidx = ieee80211_chan2ieee(ic, ic->ic_ibss_chan);
     
+    iwmAwdlReadFlags();
+    iwmAwdlRxRateNow = uint32_t(rate_n_flags);
+    const bool onOwnChannel = iwmAwdlMultiActive && iwmAwdlAdded && uint32_t(chanidx) == iwmAwdlChannel;
+    if (onOwnChannel && mbuf_len(m) >= 24) {
+        const uint8_t *of = mtod(m, const uint8_t *);
+        static const uint8_t ownBssid[6] = {0x00, 0x25, 0x00, 0xff, 0x94, 0x73};
+        ++iwmAwdlOwnFrames;
+        if (of[0] == 0x80)
+            ++iwmAwdlOwnBeacons;
+        if (!memcmp(of + 16, ownBssid, 6))
+            ++((of[0] == 0xd0) ? iwmAwdlOwnAction : iwmAwdlOwnData);
+    }
+    if (iwm_awdl_rx(sc, m, chanidx, rxi))
+        return;
+    // The listener's channel isn't the station's: what the promiscuous listener hears there and
+    // isn't AWDL's goes no further, except management frames, so scans still see that channel.
+    if (onOwnChannel && (mbuf_len(m) < 24 || (mtod(m, const uint8_t *)[0] & 0x0c) != 0x00)) {
+        ++iwmAwdlOwnDropped;
+        mbuf_freem(m);
+        return;
+    }
+    // Beacon hint for the AWDL listener's own-channel choice: an access point's beacon heard on a
+    // 5 GHz channel that needs no radar detection shows a network is active there. 5 GHz only:
+    // on 2.4 GHz neighbouring channels overlap, and the channel a beacon was heard on can be wrong.
+    if (iwmAwdlProbe && chanidx > 14 && mbuf_len(m) >= 36) {
+        const uint8_t *bf = mtod(m, const uint8_t *);
+        if (bf[0] == 0x80 && (bf[34] & 0x01) && !iwmAwdlRadarChannel(unsigned(chanidx)) &&
+            isclr(ic->ic_beacon_hint, chanidx)) {
+            setbit(ic->ic_beacon_hint, chanidx);
+            ++iwmAwdlBeaconHints;
+        }
+    }
+    
     wh = mtod(m, struct ieee80211_frame *);
     ni = ieee80211_find_rxnode(ic, wh);
     if ((rxi->rxi_flags & IEEE80211_RXI_HWDEC) &&
@@ -1523,6 +2436,11 @@ iwm_rx_tx_cmd(struct iwm_softc *sc, struct iwm_rx_packet *pkt,
     
     sc->sc_tx_timer[qid] = 0;
     
+    if (qid == kIwmAwdlQueue && iwmAwdlTx) {
+        iwm_awdl_tx_done(sc, tx_resp);
+        return;
+    }
+    
     ring = &sc->txq[qid];
     txd = &ring->data[idx];
     
@@ -1984,6 +2902,597 @@ iwm_tx(struct iwm_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac)
     return 0;
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// AWDL transmit for the iwm family: the listener's station and queue, sync frames and data.
+// ---------------------------------------------------------------------------------------------
+// The listener's queue handed back to the firmware. The command names the queue's own station, so
+// it has to go out while that station still exists: disabling it for a station that was already
+// removed made the firmware assert (0x219F on SCD_QUEUE_CFG).
+int ItlIwm::
+iwm_awdl_disable_txq(struct iwm_softc *sc)
+{
+    struct iwm_scd_txq_cfg_cmd cmd;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.scd_queue = kIwmAwdlQueue;
+    cmd.enable = IWM_SCD_CFG_DISABLE_QUEUE;
+    cmd.sta_id = IWM_MONITOR_STA_ID;
+    cmd.tid = IWM_MAX_TID_COUNT;
+    return iwm_send_cmd_pdu(sc, IWM_SCD_QUEUE_CFG, 0, sizeof(cmd), &cmd);
+}
+
+int ItlIwm::
+iwm_awdl_tx_setup(struct iwm_softc *sc)
+{
+    struct iwm_add_sta_cmd cmd;
+    const int generation = sc->sc_generation;
+    uint32_t status = IWM_ADD_STA_SUCCESS;
+    size_t cmdsize;
+    int err;
+
+    if (!iwm_nic_lock(sc))
+        return EBUSY;
+    err = iwm_enable_txq(sc, IWM_MONITOR_STA_ID, kIwmAwdlQueue,
+                         iwmAwdlTxVariant ? IWM_TX_FIFO_MCAST : iwm_ac_to_tx_fifo[EDCA_AC_BE], 0,
+                         IWM_MAX_TID_COUNT, 0);
+    iwm_nic_unlock(sc);
+    iwmAwdlQueueResult = err ? 0x80000000U | uint32_t(err) : 1;
+    if (generation != sc->sc_generation)
+        return ECANCELED;
+    if (err)
+        return err;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.sta_id = IWM_MONITOR_STA_ID;
+    if (isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_STA_TYPE))
+        cmd.station_type = IWM_STA_GENERAL_PURPOSE;
+    cmd.mac_id_n_color = htole32(IWM_FW_CMD_ID_AND_COLOR(kIwmAwdlMacId, 0));
+    // No peer address: like the monitor's station, it sends to anyone, at the rate each frame names.
+    cmd.tfd_queue_msk = htole32(1 << kIwmAwdlQueue);
+    cmd.tid_disable_tx = htole16(0xffff);
+    cmd.station_flags = htole32((iwmAwdlWide80 ? IWM_STA_FLG_FAT_EN_80MHZ : IWM_STA_FLG_FAT_EN_20MHZ) |
+                                IWM_STA_FLG_MIMO_EN_SISO);
+    cmd.station_flags_msk = htole32(IWM_STA_FLG_FAT_EN_MSK | IWM_STA_FLG_MIMO_EN_MSK);
+    if (isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_STA_TYPE))
+        cmdsize = sizeof(cmd);
+    else
+        cmdsize = sizeof(struct iwm_add_sta_cmd_v7);
+    err = iwm_send_cmd_pdu_status(sc, IWM_ADD_STA, cmdsize, &cmd, &status);
+    if (!err && (status & IWM_ADD_STA_STATUS_MASK) != IWM_ADD_STA_SUCCESS)
+        err = EIO;
+    iwmAwdlStaResult = err ? 0x80000000U | uint32_t(err) | (status << 8) : 1;
+    if (generation != sc->sc_generation)
+        return ECANCELED;
+    if (err) {
+        // The station doesn't exist, so the queue can't be handed back by name; it stays configured
+        // and unused until the firmware restarts.
+        return err;
+    }
+    if (!iwmAwdlAdded || iwmAwdlStopping) {
+        // Made for a listener that is gone meanwhile: the queue first, then its station.
+        struct iwm_rm_sta_cmd rm;
+        memset(&rm, 0, sizeof(rm));
+        rm.sta_id = IWM_MONITOR_STA_ID;
+        (void)iwm_awdl_disable_txq(sc);
+        if (generation == sc->sc_generation)
+            (void)iwm_send_cmd_pdu(sc, IWM_REMOVE_STA, 0, sizeof(rm), &rm);
+        return ECANCELED;
+    }
+    iwmAwdlTxReady = true;
+    iwmAwdlTxHalted = false;
+    iwmAwdlOldestPendingUS = 0;
+    iwmAwdlLastCompletionUS = 0;
+    return 0;
+}
+
+int ItlIwm::
+iwm_awdl_tx_teardown(struct iwm_softc *sc)
+{
+    const int generation = sc->sc_generation;
+    struct iwm_rm_sta_cmd rm;
+    int err, rmErr, qErr;
+
+    if (!iwmAwdlTxReady)
+        return 0;
+    iwmAwdlTxReady = false;
+    iwmAwdlAddrApplied = false;
+    err = iwm_flush_tx_path(sc, 1 << kIwmAwdlQueue);
+    if (generation != sc->sc_generation)
+        return 0;
+    // The queue while its station still exists, then the station.
+    qErr = iwm_awdl_disable_txq(sc);
+    if (generation != sc->sc_generation)
+        return 0;
+    memset(&rm, 0, sizeof(rm));
+    rm.sta_id = IWM_MONITOR_STA_ID;
+    rmErr = iwm_send_cmd_pdu(sc, IWM_REMOVE_STA, 0, sizeof(rm), &rm);
+    if (generation != sc->sc_generation)
+        return 0;
+    // The firmware has let go of the queue: what the flush didn't complete is freed here.
+    if (!err && !rmErr && !qErr)
+        iwm_reset_tx_ring(sc, &sc->txq[kIwmAwdlQueue]);
+    iwmAwdlOldestPendingUS = 0;
+    return err ? err : rmErr ? rmErr : qErr;
+}
+
+// One frame on the listener's queue, from its station, at a fixed legacy OFDM rate: 6 Mbit/s for
+// management and group frames, 24 Mbit/s for unicast data. The frame keeps its own sequence number.
+// Consumes the packet either way.
+int ItlIwm::
+iwm_awdl_tx(struct iwm_softc *sc, mbuf_t m)
+{
+    struct ieee80211com *ic = &sc->sc_ic;
+    struct iwm_tx_ring *ring = &sc->txq[kIwmAwdlQueue];
+    struct iwm_tx_data *data;
+    struct iwm_tfd *desc;
+    struct iwm_device_cmd *cmd;
+    struct iwm_tx_cmd *tx;
+    struct ieee80211_frame *wh;
+    IOPhysicalSegment segs[IWM_NUM_OF_TBS - 2];
+    uint32_t flags = 0, rate_flags;
+    uint16_t len, tb1_len;
+    int nsegs, i, totlen, ridx;
+    const u_int hdrlen = sizeof(struct ieee80211_frame);
+
+    if (dmaDetaching || !ic->ic_bss || !ring->desc || mbuf_next(m) || mbuf_len(m) <= hdrlen ||
+        ring->data[ring->cur].m || ring->queued >= kIwmAwdlRingLimit) {
+        mbuf_freem(m);
+        return ENOBUFS;
+    }
+    wh = mtod(m, struct ieee80211_frame *);
+    const uint8_t type = wh->i_fc[0] & IEEE80211_FC0_TYPE_MASK;
+    const bool isData = type == IEEE80211_FC0_TYPE_DATA;
+    const bool unicast = !IEEE80211_IS_MULTICAST(wh->i_addr1);
+    // Only plain three-address management and non-QoS data frames are built for this path.
+    if ((type != IEEE80211_FC0_TYPE_MGT && wh->i_fc[0] != 0x08) || (wh->i_fc[1] & 0x03)) {
+        mbuf_freem(m);
+        return EINVAL;
+    }
+
+    desc = &ring->desc[ring->cur];
+    memset(desc, 0, sizeof(*desc));
+    data = &ring->data[ring->cur];
+    cmd = &ring->cmd[ring->cur];
+    cmd->hdr.code = IWM_TX_CMD;
+    cmd->hdr.flags = 0;
+    cmd->hdr.qid = ring->qid;
+    cmd->hdr.idx = ring->cur;
+    tx = (struct iwm_tx_cmd *)cmd->data;
+    memset(tx, 0, sizeof(*tx));
+
+    ridx = (isData && unicast) ? IWL_RATE_24M_INDEX : IWL_FIRST_OFDM_RATE;
+    rate_flags = iwm_get_tx_ant(sc, ic->ic_bss, type, wh);
+    const int8_t mcs = (isData && unicast) ? iwmAwdlLadder[iwmAwdlRateIdx] : -1;
+    int wideLevel = -1;
+    if (isData && unicast && iwmAwdlWide80 && iwmAwdlRateIdx + 1 == nitems(iwmAwdlLadder) &&
+        iwmAwdlWideMisses < 8 && mbuf_pkthdr_len(m) >= 1200 && iwmAwdlWidePeerUS &&
+        !memcmp(wh->i_addr1, iwmAwdlWidePeer, 6)) {
+        const uint64_t now = iwmAwdlUptimeUS();
+        if (now - iwmAwdlWidePeerUS < 10000000ULL && now >= iwmAwdlWideHoldUntilUS) {
+            if (iwmAwdlWideLevel < 0) {
+                iwmAwdlWideLevel = 0;
+                iwmAwdlWideWindow = iwmAwdlWideRetried = iwmAwdlWideFailed = 0;
+            }
+            wideLevel = iwmAwdlWideLevel;
+        }
+    }
+    if (wideLevel >= 0)
+        tx->rate_n_flags = htole32(rate_flags | RATE_MCS_VHT_MSK | RATE_MCS_CHAN_WIDTH_80 |
+                                   uint32_t(iwmAwdlWideMcs[wideLevel]));
+    else if (mcs >= 0)
+        tx->rate_n_flags = htole32(rate_flags | RATE_MCS_HT_MSK | RATE_MCS_CHAN_WIDTH_20 | uint32_t(mcs));
+    else
+        tx->rate_n_flags = htole32(rate_flags | iwl_mvm_mac80211_idx_to_hwrate(ridx));
+    tx->rts_retry_limit = IWM_RTS_DFAULT_RETRY_LIMIT;
+    tx->data_retry_limit = isData ? 10 : IWM_MGMT_DFAULT_RETRY_LIMIT;
+    if (unicast)
+        flags |= IWM_TX_CMD_FLG_ACK;
+    tx->sta_id = IWM_MONITOR_STA_ID;
+    tx->pm_frame_timeout = htole16(0);
+
+    totlen = mbuf_pkthdr_len(m);
+    len = sizeof(struct iwm_tx_cmd) + sizeof(struct iwm_cmd_header) + hdrlen - TB0_SIZE;
+    tb1_len = _ALIGN(len, 4);
+    if (tb1_len != len) {
+        flags |= IWM_TX_CMD_FLG_MH_PAD;
+        tx->offload_assist |= htole16(IWM_TX_CMD_OFFLD_PAD);
+    }
+    tx->driver_txop = 0;
+    tx->len = htole16(totlen);
+    tx->tid_tspec = isData ? IWM_TID_NON_QOS : IWM_MAX_TID_COUNT;
+    tx->life_time = htole32(IWM_TX_CMD_LIFE_TIME_INFINITE);
+    tx->dram_lsb_ptr = htole32(data->scratch_paddr);
+    tx->dram_msb_ptr = iwm_get_dma_hi_addr(data->scratch_paddr);
+    memcpy(((uint8_t *)tx) + sizeof(*tx), wh, hdrlen);
+    const uint16_t fc = uint16_t(wh->i_fc[0] | (wh->i_fc[1] << 8));
+    flags |= (iwm_coex_tx_prio(sc, wh, EDCA_AC_BE) << IWM_TX_CMD_FLG_BT_PRIO_POS);
+    mbuf_adj(m, hdrlen);
+    tx->sec_ctl = 0;
+    tx->tx_flags |= htole32(flags);
+
+    nsegs = bus_dmamap_packet(data->map, m, &segs[0], IWM_NUM_OF_TBS - 2, false);
+    if (nsegs == 0) {
+        mbuf_freem(m);
+        return ENOMEM;
+    }
+    data->m = m;
+    data->in = (struct iwm_node *)ieee80211_ref_node(ic->ic_bss);
+    data->txmcs = 0;
+    data->txrate = 0;
+    data->totlen = totlen;
+    // Bit 0 of the stored word marks unicast data for the completion's counters; the frame's own
+    // version bits are always zero.
+    // Bit 0: unicast data. Bits 4 to 7: one more than the wide level the frame was sent at, or 0.
+    data->fc = fc | ((isData && unicast) ? 1 : 0) | (wideLevel >= 0 ? uint16_t((wideLevel + 1) << 4) : 0);
+
+    desc->num_tbs = 2 + nsegs;
+    desc->tbs[0].lo = htole32(data->cmd_paddr);
+    desc->tbs[0].hi_n_len = htole16(iwm_get_dma_hi_addr(data->cmd_paddr) | (TB0_SIZE << 4));
+    desc->tbs[1].lo = htole32(data->cmd_paddr + TB0_SIZE);
+    desc->tbs[1].hi_n_len = htole16(iwm_get_dma_hi_addr(data->cmd_paddr) | (tb1_len << 4));
+    for (i = 0; i < nsegs; i++) {
+        desc->tbs[i + 2].lo = htole32(segs[i].location);
+        desc->tbs[i + 2].hi_n_len = htole16(iwm_get_dma_hi_addr(segs[i].location) | ((segs[i].length) << 4));
+    }
+    iwm_update_sched(sc, ring->qid, ring->cur, tx->sta_id, le16toh(tx->len));
+    ring->cur = (ring->cur + 1) % IWM_TX_RING_COUNT;
+    IWM_WRITE(sc, IWM_HBUS_TARG_WRPTR, ring->qid << 8 | ring->cur);
+    if (!ring->queued++)
+        iwmAwdlOldestPendingUS = iwmAwdlUptimeUS();
+    return 0;
+}
+
+// The firmware's answer for frames on the listener's queue. Nothing here feeds the station's rate
+// control or its transmit accounting.
+void ItlIwm::
+iwm_awdl_tx_done(struct iwm_softc *sc, struct iwm_tx_resp *tx_resp)
+{
+    struct iwm_tx_ring *ring = &sc->txq[kIwmAwdlQueue];
+    const uint32_t status = le16toh(iwl_mvm_get_agg_status(sc, tx_resp)->status) & IWM_TX_STATUS_MSK;
+    const int idx = IWM_AGG_SSN_TO_TXQ_IDX(iwm_get_scd_ssn(tx_resp));
+    const bool ok = status == IWM_TX_STATUS_SUCCESS || status == IWM_TX_STATUS_DIRECT_DONE;
+
+    if (!iwm_txq_advance_valid(ring, idx))
+        return;
+    iwmAwdlTxLastStatus = status;
+    while (ring->tail != idx) {
+        struct iwm_tx_data *txd = &ring->data[ring->tail];
+        if (txd->m != NULL) {
+            ++iwmAwdlTxDone;
+            ++(ok ? iwmAwdlTxDoneOk : iwmAwdlTxDoneFail);
+            const int sentWide = (txd->fc & 1) ? int((txd->fc >> 4) & 0xf) - 1 : -1;
+            if (sentWide >= 0) {
+                ++(ok ? iwmAwdlDataTxUcastOk : iwmAwdlDataTxUcastFail);
+                ++(ok ? iwmAwdlWideOk : iwmAwdlWideFail)[sentWide];
+                if (ok) {
+                    if (iwmAwdlWideMisses < 8)
+                        iwmAwdlWideMisses = 0;
+                } else if (iwmAwdlWideMisses < 8) {
+                    ++iwmAwdlWideMisses;
+                }
+                // Frames still in flight from a level already left don't count against the next one.
+                if (sentWide == iwmAwdlWideLevel) {
+                    ++iwmAwdlWideWindow;
+                    if (!ok)
+                        ++iwmAwdlWideFailed;
+                    else if (tx_resp->failure_frame)
+                        ++iwmAwdlWideRetried;
+                    const uint32_t bad = iwmAwdlWideRetried + 2 * iwmAwdlWideFailed;
+                    if (iwmAwdlWideFailed >= 2 || (iwmAwdlWideWindow >= 40 && bad * 3 > iwmAwdlWideWindow)) {
+                        // Down a level; below the lowest, back to the ladder for a while, longer each time.
+                        if (--iwmAwdlWideLevel < 0) {
+                            iwmAwdlWideHoldUntilUS = iwmAwdlUptimeUS() + uint64_t(iwmAwdlWideHoldS) * 1000000ULL;
+                            iwmAwdlWideHoldS = min(iwmAwdlWideHoldS * 2, 120U);
+                            ++iwmAwdlWideHolds;
+                        }
+                        iwmAwdlWideWindow = iwmAwdlWideRetried = iwmAwdlWideFailed = 0;
+                    } else if (iwmAwdlWideWindow >= 40) {
+                        if (bad * 10 < iwmAwdlWideWindow && iwmAwdlWideLevel + 1 < int(nitems(iwmAwdlWideMcs)))
+                            ++iwmAwdlWideLevel;
+                        iwmAwdlWideHoldS = 5;
+                        iwmAwdlWideWindow = iwmAwdlWideRetried = iwmAwdlWideFailed = 0;
+                    }
+                }
+            } else if (txd->fc & 1) {
+                ++(ok ? iwmAwdlDataTxUcastOk : iwmAwdlDataTxUcastFail);
+                // One window of 40 unicast data frames decides the next step on the rate ladder:
+                // down when more than a third needed a retry or failed, up when fewer than a tenth did.
+                ++iwmAwdlRateWindow;
+                if (!ok)
+                    ++iwmAwdlRateFailed;
+                else if (tx_resp->failure_frame)
+                    ++iwmAwdlRateRetried;
+                if (iwmAwdlRateWindow >= 40) {
+                    const uint32_t bad = iwmAwdlRateRetried + 2 * iwmAwdlRateFailed;
+                    if (bad * 3 > iwmAwdlRateWindow && iwmAwdlRateIdx > 0) {
+                        --iwmAwdlRateIdx;
+                        ++iwmAwdlRateDowns;
+                    } else if (bad * 10 < iwmAwdlRateWindow && iwmAwdlRateIdx + 1 < nitems(iwmAwdlLadder)) {
+                        ++iwmAwdlRateIdx;
+                        ++iwmAwdlRateUps;
+                    }
+                    iwmAwdlRateWindow = iwmAwdlRateRetried = iwmAwdlRateFailed = 0;
+                }
+            }
+            iwm_reset_sched(sc, ring->qid, ring->tail, IWM_MONITOR_STA_ID);
+            iwm_txd_done(sc, txd);
+            if (ring->queued > 0)
+                ring->queued--;
+        }
+        ring->tail = (ring->tail + 1) % IWM_TX_RING_COUNT;
+    }
+    iwmAwdlLastCompletionUS = iwmAwdlUptimeUS();
+    iwmAwdlOldestPendingUS = ring->queued ? iwmAwdlLastCompletionUS : 0;
+}
+
+void ItlIwm::
+iwm_awdl_timeout(void *arg)
+{
+    if (!iwmAwdlStopping)
+        task_add(systq, &iwmAwdlTaskEntry);
+}
+
+// Every few milliseconds while the listener exists, inside the driver's gate: the station and queue
+// if they aren't there yet, a sync frame when one is due, then awdl0's data.
+void ItlIwm::
+iwm_awdl_task(void *arg)
+{
+#if defined(ITL_AWDL_NATIVE)
+    struct iwm_softc *sc = (struct iwm_softc *)arg;
+    ItlIwm *that = container_of(sc, ItlIwm, com);
+    if (iwmAwdlStopping || !that->getMainWorkLoop() || !that->getMainCommandGate())
+        return;
+    if (!that->getMainWorkLoop()->inGate()) {
+        that->getMainCommandGate()->runAction(
+            [](OSObject *, void *arg0, void *, void *, void *) -> IOReturn {
+                iwm_awdl_task(arg0);
+                return kIOReturnSuccess;
+            }, arg);
+        return;
+    }
+    if (iwmAwdlStopping || !iwmAwdlTimerMade)
+        return;
+    struct ieee80211com *ic = &sc->sc_ic;
+    const int generation = sc->sc_generation;
+    const bool running = (IC2IFP(ic)->if_flags & IFF_RUNNING) && ic->ic_state == IEEE80211_S_RUN &&
+        ic->ic_opmode == IEEE80211_M_STA && !that->dmaDetaching &&
+        !(sc->sc_flags & (IWM_FLAG_HW_ERR | IWM_FLAG_SHUTDOWN | IWM_FLAG_RFKILL));
+    // Nothing to do right now: keep the timer alive at a slow pace and say why.
+    const char *idle = !running ? "station not running" : !iwmAwdlAdded ? "no listener" :
+        iwmAwdlPoisoned ? "disabled" : iwmAwdlBusy ? "command in progress" : nullptr;
+    if (running && !iwmAwdlAdded && !iwmAwdlPoisoned && !iwmAwdlBusy && iwmAwdlDeferredAddUS &&
+        iwmAwdlUptimeUS() >= iwmAwdlDeferredAddUS) {
+        iwmAwdlDeferredAddUS = 0;
+        ++iwmAwdlDeferredAdds;
+        iwmAwdlAddNow = true;
+        (void)that->iwm_awdl_listener(sc, 1);
+        iwmAwdlAddNow = false;
+        if (!iwmAwdlStopping && iwmAwdlTimerMade)
+            timeout_add_msec(&iwmAwdlTimer, 100);
+        return;
+    }
+    if (idle) {
+        ++iwmAwdlTaskIdle;
+        iwmAwdlTaskIdleReason = idle;
+        if (iwmAwdlUptimeUS() - iwmAwdlLastPublishUS >= 1000000ULL)
+            iwmAwdlPublish();
+        timeout_add_msec(&iwmAwdlTimer, iwmAwdlBusy ? 20 : 200);
+        return;
+    }
+    // Every later exit arms the timer again, whatever path it takes.
+    struct Rearm {
+        ~Rearm() {
+            if (!iwmAwdlStopping && iwmAwdlTimerMade)
+                timeout_add_msec(&iwmAwdlTimer, iwmAwdlDataOn ? 4 : 15);
+        }
+    } rearm;
+    // A better channel became usable (a network was heard on 149 after the listener started on 6):
+    // take the listener down and bring it up again there. Never a retune of a live binding, and at
+    // most once every ten seconds.
+    if (iwmAwdlMulti && iwmAwdlUptimeUS() - iwmAwdlLastRetargetUS > 10000000ULL) {
+        struct iwm_node *stationNode = (struct iwm_node *)ic->ic_bss;
+        const unsigned stationChannel = stationNode && stationNode->in_phyctxt && stationNode->in_phyctxt->channel ?
+            ieee80211_chan2ieee(ic, stationNode->in_phyctxt->channel) : 0;
+        const unsigned wanted = stationChannel ? iwmAwdlPickOwn(ic, stationChannel) : 0;
+        if (wanted && wanted != iwmAwdlChannel && wanted == 149) {
+            iwmAwdlLastRetargetUS = iwmAwdlUptimeUS();
+            ++iwmAwdlRetargets;
+            if (!that->iwm_awdl_listener(sc, 0) && generation == sc->sc_generation && !iwmAwdlStopping) {
+                iwmAwdlAddNow = true;
+                (void)that->iwm_awdl_listener(sc, 1);
+                iwmAwdlAddNow = false;
+            }
+            return;
+        }
+    }
+    // The airtime test, while the listener is on its own channel.
+    if (iwmAwdlMultiActive && !iwmAwdlExpDone) {
+        const uint64_t expNow = iwmAwdlUptimeUS();
+        if (!iwmAwdlExpWindowStartUS) {
+            iwmAwdlExpWindowStartUS = expNow;
+            iwmAwdlExpBeaconsAtStart = iwmAwdlOwnBeacons;
+            iwmAwdlExpFramesAtStart = iwmAwdlOwnFrames;
+        } else if (expNow - iwmAwdlExpWindowStartUS >= kIwmAwdlExpWindowUS) {
+            iwmAwdlExpBeacons[iwmAwdlExpVariant] = iwmAwdlOwnBeacons - iwmAwdlExpBeaconsAtStart;
+            iwmAwdlExpFrames[iwmAwdlExpVariant] = iwmAwdlOwnFrames - iwmAwdlExpFramesAtStart;
+            unsigned next = iwmAwdlExpVariant + 1;
+            if (next >= kIwmAwdlExpVariants) {
+                // Settle on the setting that heard the most; frames break a tie.
+                next = 0;
+                for (unsigned v = 1; v < kIwmAwdlExpVariants; v++)
+                    if (iwmAwdlExpBeacons[v] > iwmAwdlExpBeacons[next] ||
+                        (iwmAwdlExpBeacons[v] == iwmAwdlExpBeacons[next] && iwmAwdlExpFrames[v] > iwmAwdlExpFrames[next]))
+                        next = v;
+                iwmAwdlExpBest = next;
+                iwmAwdlExpDone = true;
+            }
+            iwmAwdlBusy = true;
+            const int expErr = that->iwm_awdl_apply_airtime(sc, next);
+            iwmAwdlBusy = false;
+            if (generation != sc->sc_generation || !iwmAwdlAdded || iwmAwdlStopping)
+                return;
+            if (expErr)
+                ++iwmAwdlExpErrors;
+            iwmAwdlExpVariant = next;
+            iwmAwdlExpWindowStartUS = iwmAwdlUptimeUS();
+            iwmAwdlExpBeaconsAtStart = iwmAwdlOwnBeacons;
+            iwmAwdlExpFramesAtStart = iwmAwdlOwnFrames;
+            iwmAwdlPublish();
+        }
+    }
+    if (iwmAwdlTx && !iwmAwdlTxReady && iwmAwdlTxSetupTries < 3) {
+        ++iwmAwdlTxSetupTries;
+        iwmAwdlBusy = true;
+        const int err = that->iwm_awdl_tx_setup(sc);
+        iwmAwdlBusy = false;
+        if (err)
+            XYLog("%s: AWDL station and queue not set up (error %d)\n", DEVNAME(sc), err);
+        iwmAwdlPublish();
+    }
+    if (generation != sc->sc_generation || !iwmAwdlAdded || iwmAwdlStopping)
+        return;
+    struct iwm_tx_ring *ring = &sc->txq[kIwmAwdlQueue];
+    uint64_t now = iwmAwdlUptimeUS();
+    // Frames the firmware doesn't complete for two seconds: stop feeding the queue, and leave the
+    // station's own watchdog out of it. Cleared when the listener is next set up.
+    if (iwmAwdlTxReady && !iwmAwdlTxHalted && ring->queued && iwmAwdlOldestPendingUS &&
+        now - iwmAwdlOldestPendingUS > 2000000ULL) {
+        iwmAwdlTxHalted = true;
+        ++iwmAwdlTxStuck;
+        // Where the firmware's scheduler stands on this queue, for the report.
+        uint32_t rd = 0xffffffffU, st = 0xffffffffU, en = 0xffffffffU, fact = 0xffffffffU;
+        if (that->iwm_nic_lock(sc)) {
+            rd = that->iwm_read_prph(sc, IWM_SCD_QUEUE_RDPTR(kIwmAwdlQueue));
+            st = that->iwm_read_prph(sc, IWM_SCD_QUEUE_STATUS_BITS(kIwmAwdlQueue));
+            en = that->iwm_read_prph(sc, IWM_SCD_EN_CTRL);
+            fact = that->iwm_read_prph(sc, IWM_SCD_TXFACT);
+            that->iwm_nic_unlock(sc);
+        }
+        const size_t used = strlen(iwmAwdlStuckSnapshot);
+        snprintf(iwmAwdlStuckSnapshot + used, sizeof(iwmAwdlStuckSnapshot) - used,
+                 "[variant %u queued %d cur %d tail %d scd-rdptr 0x%x status 0x%x en-ctrl 0x%x txfact 0x%x done %u channel %u] ",
+                 iwmAwdlTxVariant, ring->queued, ring->cur, ring->tail, rd, st, en, fact, iwmAwdlTxDone, iwmAwdlChannel);
+        // Never a completion on this queue: once, rebuild the station and queue on the other FIFO.
+        if (!iwmAwdlTxDone && iwmAwdlTxVariant < 1) {
+            iwmAwdlBusy = true;
+            const int downErr = that->iwm_awdl_tx_teardown(sc);
+            iwmAwdlBusy = false;
+            if (generation != sc->sc_generation || !iwmAwdlAdded || iwmAwdlStopping)
+                return;
+            if (!downErr) {
+                ++iwmAwdlTxVariant;
+                iwmAwdlTxSetupTries = 0;
+                iwmAwdlTxHalted = false;
+            }
+        }
+        iwmAwdlPublish();
+    }
+    if (iwmAwdlTxReady && !iwmAwdlTxHalted) {
+        // The firmware's regulatory decision stands: nothing is started on a channel it marks
+        // passive (unless a beaconing network was heard there), radar or no-ad-hoc.
+        struct iwm_node *in = (struct iwm_node *)ic->ic_bss;
+        struct ieee80211_channel *channel = iwmAwdlMultiActive ? iwmAwdlOwnChan :
+            (in && in->in_phyctxt ? in->in_phyctxt->channel : nullptr);
+        const unsigned number = channel ? ieee80211_chan2ieee(ic, channel) : 0;
+        const uint32_t reason = (!channel || number > 255 || !ItlAWDL::fixedScheduleChannel(uint8_t(number)) ? 1U : 0U) |
+            (channel && (channel->ic_flags & IEEE80211_CHAN_PASSIVE) && !isset(ic->ic_beacon_hint, number) ? 2U : 0U) |
+            (iwmAwdlRadarChannel(number) ? 4U : 0U) |
+            (channel && (channel->ic_flags & IEEE80211_CHAN_NOADHOC) ? 8U : 0U) |
+            (!channel || number > 255 || !isset(ic->ic_chan_active, number) ? 16U : 0U) |
+            (number != iwmAwdlChannel ? 32U : 0U);
+        const bool eligible = !reason;
+        if (!eligible) {
+            iwmAwdlRefusedReason = reason;
+            iwmAwdlRefusedFlags = channel ? channel->ic_flags : 0;
+            ++iwmAwdlTxRefusedChannel;
+        } else {
+            const bool dataActive = iwmAwdlLastDataUS && now - iwmAwdlLastDataUS < 1000000ULL;
+            if (now - iwmAwdlLastSyncUS >= (dataActive ? 100000ULL : 45000ULL) &&
+                ring->queued < kIwmAwdlRingLimit) {
+                iwmAwdlLastSyncUS = now;
+                that->iwm_awdl_send_sync(sc);
+            }
+            if (generation != sc->sc_generation || !iwmAwdlAdded || iwmAwdlStopping)
+                return;
+            if (iwmAwdlDataOn && iwmAwdlTxReady && iwmAwdlAddrApplied) {
+                unsigned budget = 32;
+                while (budget-- && ring->queued < kIwmAwdlRingLimit) {
+                    mbuf_t next = nullptr;
+                    if (itlAWDLBuildTransmit(that->getController(), &next) != kIOReturnSuccess || !next)
+                        break;
+                    const uint8_t *bytes = static_cast<const uint8_t *>(mbuf_data(next));
+                    const bool unicast = mbuf_len(next) >= 24 && !(bytes[4] & 1);
+                    if (that->iwm_awdl_tx(sc, next)) {
+                        ++iwmAwdlSubmitErrors;
+                        continue;
+                    }
+                    ++iwmAwdlDataTx;
+                    if (unicast)
+                        ++iwmAwdlDataTxUcast;
+                    iwmAwdlLastDataUS = iwmAwdlUptimeUS();
+                }
+            }
+        }
+    }
+    // Hands macOS back its finished packets, so awdl0's ring keeps moving even while nothing is sent.
+    if (iwmAwdlDataOn)
+        (void)itlAWDLServiceTransmit(that->getController());
+    now = iwmAwdlUptimeUS();
+    if (now - iwmAwdlLastPublishUS >= 1000000ULL)
+        iwmAwdlPublish();
+#endif
+}
+
+void ItlIwm::
+iwm_awdl_send_sync(struct iwm_softc *sc)
+{
+#if defined(ITL_AWDL_NATIVE)
+    const int generation = sc->sc_generation;
+    mbuf_t packet = nullptr;
+    const IOReturn built = itlAWDLBuildSyncProbe(getController(), &packet, iwmAwdlUptimeUS());
+    iwmAwdlLastBuildResult = uint32_t(built);
+    if (built != kIOReturnSuccess || !packet || mbuf_len(packet) < 24) {
+        ++(built == kIOReturnNotReady ? iwmAwdlSyncNotReady : iwmAwdlSyncRejected);
+        if (packet)
+            mbuf_freem(packet);
+        return;
+    }
+    ++iwmAwdlSyncBuilt;
+    const uint8_t *frame = static_cast<const uint8_t *>(mbuf_data(packet));
+    // The firmware ACKs only its context's address, so that has to be the one macOS sends from.
+    // Nothing goes out until the firmware has it.
+    if (!iwmAwdlAddrKnown || !iwmAwdlAddrApplied || memcmp(iwmAwdlAddr, frame + 10, 6)) {
+        memcpy(iwmAwdlAddr, frame + 10, 6);
+        iwmAwdlAddrKnown = true;
+        iwmAwdlAddrApplied = false;
+        iwmAwdlBusy = true;
+        const int err = iwm_awdl_mac_cmd(sc, IWM_FW_CTXT_ACTION_MODIFY);
+        iwmAwdlBusy = false;
+        if (generation != sc->sc_generation || !iwmAwdlAdded || iwmAwdlStopping || !iwmAwdlTxReady) {
+            mbuf_freem(packet);
+            return;
+        }
+        if (err) {
+            ++iwmAwdlAddrFailures;
+            mbuf_freem(packet);
+            return;
+        }
+        ++iwmAwdlAddrChanges;
+        frame = static_cast<const uint8_t *>(mbuf_data(packet));
+        iwmAwdlAddrApplied = !memcmp(iwmAwdlAddr, frame + 10, 6);
+        if (!iwmAwdlAddrApplied) {
+            mbuf_freem(packet);
+            return;
+        }
+    }
+    if (iwm_awdl_tx(sc, packet))
+        ++iwmAwdlSubmitErrors;
+    else
+        ++iwmAwdlSyncSubmitted;
+#endif
+}
+
 #define IWM_TX_CRC_SIZE 4
 #define IWM_TX_DELIMITER_SIZE 4
 
@@ -2243,6 +3752,12 @@ iwm_update_quotas(struct iwm_softc *sc, struct iwm_node *in, int running)
         if (running)
             n_ifs[id] = 1;
     }
+    /* The AWDL listener's own binding takes an equal share while it exists. */
+    if (iwmAwdlMultiActive && sc->sc_phyctxt[kIwmAwdlPhyId].id < IWM_MAX_BINDINGS) {
+        id = sc->sc_phyctxt[kIwmAwdlPhyId].id;
+        colors[id] = sc->sc_phyctxt[kIwmAwdlPhyId].color;
+        n_ifs[id] = 1;
+    }
     
     /*
      * The FW's scheduling session consists of
@@ -2281,6 +3796,17 @@ iwm_update_quotas(struct iwm_softc *sc, struct iwm_node *in, int running)
     
     /* Give the remainder of the session to the first binding */
     cmd.quotas[0].quota = htole32(le32toh(cmd.quotas[0].quota) + quota_rem);
+    /* The airtime test may give the AWDL listener's binding a larger share than the station's. */
+    if (iwmAwdlMultiActive && iwmAwdlListenerQuota && iwmAwdlListenerQuota < IWM_MAX_QUOTA && running) {
+        for (i = 0; i < IWM_MAX_BINDINGS; i++) {
+            const uint32_t entry = le32toh(cmd.quotas[i].id_and_color);
+            if (entry == IWM_FW_CTXT_INVALID || !le32toh(cmd.quotas[i].quota))
+                continue;
+            cmd.quotas[i].quota = htole32(entry == IWM_FW_CMD_ID_AND_COLOR(sc->sc_phyctxt[kIwmAwdlPhyId].id,
+                                                                         sc->sc_phyctxt[kIwmAwdlPhyId].color) ?
+                                          iwmAwdlListenerQuota : IWM_MAX_QUOTA - iwmAwdlListenerQuota);
+        }
+    }
     
     if (isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_QUOTA_LOW_LATENCY)) {
         struct iwm_time_quota_cmd cmd_v2;
@@ -2605,6 +4131,9 @@ iwm_run(struct iwm_softc *sc)
     
     iwm_toggle_tx_ant(sc, &sc->sc_mgmt_last_antenna_idx);
     
+    /* The AWDL listener is optional: its failure never fails the association. */
+    (void)iwm_awdl_listener(sc, 1);
+    
     return 0;
 }
 
@@ -2616,6 +4145,9 @@ iwm_run_stop(struct iwm_softc *sc)
     int err, i, tid;
     
     splassert(IPL_NET);
+    
+    /* The AWDL listener leaves the station's binding before the station does. */
+    (void)iwm_awdl_listener(sc, 0);
     
     /*
      * Stop Tx/Rx BA sessions now. We cannot rely on the BA task
@@ -3071,6 +4603,8 @@ iwm_newstate_task(void *psc)
     enum ieee80211_state ostate = ic->ic_state;
     int arg = sc->ns_arg;
     int err = 0, s = splnet();
+    if (iwmAwdlProbe)
+        iwmAwdlNoteState(int(ostate), int(nstate), iwmAwdlAdded);
     
     if (sc->sc_flags & IWM_FLAG_SHUTDOWN) {
         /* iwm_stop() is waiting for us. */
@@ -3729,6 +5263,7 @@ iwm_stop(struct _ifnet *ifp)
     
     /* Reset soft state. */
     
+    iwmAwdlFirmwareGone();
     sc->sc_generation++;
     for (i = 0; i < nitems(sc->sc_cmd_resp_pkt); i++) {
         ::free(sc->sc_cmd_resp_pkt[i]);
@@ -4229,6 +5764,21 @@ iwm_intr(OSObject *arg, IOInterruptEventSource* sender, int count)
     }
     
     if (r1 & IWM_CSR_INT_BIT_SW_ERR) {
+        if (!iwmAwdlFwErrorSnapshot[0]) {
+            // The first firmware error's own record, for the report.
+            struct iwm_error_event_table table;
+            const uint32_t base = sc->sc_uc.uc_error_event_table;
+            if (base >= 0x800000 && !that->iwm_read_mem(sc, base, &table, sizeof(table) / sizeof(uint32_t)) &&
+                table.valid)
+                snprintf(iwmAwdlFwErrorSnapshot, sizeof(iwmAwdlFwErrorSnapshot),
+                         "error 0x%08X data 0x%08X 0x%08X 0x%08X hcmd 0x%08X listener %d own-channel %d busy %d channel %u",
+                         table.error_id, table.data1, table.data2, table.data3, table.hcmd, iwmAwdlAdded ? 1 : 0,
+                         iwmAwdlMultiActive ? 1 : 0, iwmAwdlBusy ? 1 : 0, iwmAwdlChannel);
+            else
+                snprintf(iwmAwdlFwErrorSnapshot, sizeof(iwmAwdlFwErrorSnapshot), "error log unreadable, listener %d",
+                         iwmAwdlAdded ? 1 : 0);
+        }
+        iwmAwdlFirmwareError();
 #ifdef IWM_DEBUG
         int i;
         

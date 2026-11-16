@@ -4,8 +4,8 @@ What's being worked on, what comes next, and what's planned further out. These a
 
 ## Now
 
-- **Faster Mac → iPhone transfers** ([#22](https://github.com/retropineaple/ForbiddenItlwm/issues/22), [#24](https://github.com/retropineaple/ForbiddenItlwm/issues/24)). When the Mac's Wi-Fi was on the listener's channel, the iPhone never accepted block ack. [PR #47](https://github.com/retropineaple/ForbiddenItlwm/pull/47)'s fix is on by default in 0.6.0-alpha.1; testers' results decide whether it's done.
-- **Channel 44** ([#17](https://github.com/retropineaple/ForbiddenItlwm/issues/17), [PR #21](https://github.com/retropineaple/ForbiddenItlwm/pull/21), [#35](https://github.com/retropineaple/ForbiddenItlwm/issues/35)). In Japan, Germany, Russia and other countries, iPhones use channel 44 for AirDrop, and the driver stayed on 149 or fell back to 6. In 0.6.0-alpha.1 the listener follows the iPhone onto 44, at 80 MHz where allowed. It needs confirmation from testers in those countries.
+- **Faster Mac → iPhone transfers** ([#22](https://github.com/retropineaple/ForbiddenItlwm/issues/22), [#24](https://github.com/retropineaple/ForbiddenItlwm/issues/24)). On some setups the iPhone never accepts block ack, so the Mac sends one frame at a time: a few MB/s instead of about 20. It seems to depend on whether the Mac and the iPhone are on the same Wi-Fi channel. Neither of 0.5.3's test flags fixed it; the cause is still being investigated.
+- **Channel 44 where 149 isn't allowed** ([#17](https://github.com/retropineaple/ForbiddenItlwm/issues/17), [PR #21](https://github.com/retropineaple/ForbiddenItlwm/pull/21)). In Japan and other countries without channel 149, iPhones use channel 44 for AirDrop, but the driver falls back to channel 6, which is slow. A tester's patch moves the listener to 44 at 80 MHz; it needs two safety rules (see the PR) before it can ship.
 - **Stable Wi-Fi when the Mac is on 2.4 GHz** ([#16](https://github.com/retropineaple/ForbiddenItlwm/issues/16)). With the listener on its own channel, one AX201 kept dropping its normal Wi-Fi while that was on 2.4 GHz. 0.5.2-test1 has a test flag (`-itlawdlsameband`) for it.
 
 ## Next

@@ -109,9 +109,9 @@ else
     echo "iw isn't installed. Install the 'iw' package and run this again for the capability list."
 fi
 
-section "Channels 149 to 161 and 36 to 48 (AirDrop at 80 MHz on 149 or 44)"
+section "Channel 149 to 161 (needed for AirDrop at 80 MHz)"
 # "no IR" means listen-only: the firmware hasn't learned a country that allows transmitting there.
-if have iw; then iw list 2>/dev/null | grep -E '\[(36|40|44|48|149|153|157|161|165)\]' | sed 's/^[[:space:]]*//' | sort -u; fi
+if have iw; then iw list 2>/dev/null | grep -E '\[(149|153|157|161|165)\]' | sed 's/^[[:space:]]*//' | sort -u; fi
 
 section "Regulatory"
 if have iw; then

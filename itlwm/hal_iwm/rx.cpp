@@ -122,6 +122,9 @@
 #include "ItlIwm.hpp"
 #include <net80211/ieee80211_priv.h>
 
+// Counts frames dropped for a bad checksum, for the AWDL report (mac80211.cpp).
+extern void iwmAwdlNoteCrcBad(uint32_t rate_n_flags);
+
 void ItlIwm::
 iwm_disable_rx_dma(struct iwm_softc *sc)
 {
@@ -403,6 +406,7 @@ iwm_rx_mpdu(struct iwm_softc *sc, mbuf_t m, void *pktdata,
     rx_pkt_status = le32toh(*(uint32_t *)((uint8_t*)pktdata + sizeof(*rx_res) + len));
     if (!(rx_pkt_status & IWM_RX_MPDU_RES_STATUS_CRC_OK) ||
         !(rx_pkt_status & IWM_RX_MPDU_RES_STATUS_OVERRUN_OK)) {
+        iwmAwdlNoteCrcBad(le32toh(phy_info->rate_n_flags));
         mbuf_freem(m);
         return; /* drop */
     }

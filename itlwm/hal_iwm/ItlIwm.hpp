@@ -372,6 +372,21 @@ public:
     int    iwm_auth(struct iwm_softc *);
     int    iwm_deauth(struct iwm_softc *);
     int    iwm_run(struct iwm_softc *);
+    int    iwm_awdl_mac_cmd(struct iwm_softc *, uint32_t);
+    int    iwm_awdl_bind_cmd(struct iwm_softc *, struct iwm_phy_ctxt *, uint32_t, uint32_t, uint32_t, uint32_t *);
+    int    iwm_awdl_phy_cmd(struct iwm_softc *, struct iwm_phy_ctxt *);
+    int    iwm_awdl_listener(struct iwm_softc *, int);
+    bool   iwm_awdl_rx(struct iwm_softc *, mbuf_t, int, struct ieee80211_rxinfo *);
+    int    iwm_awdl_disable_txq(struct iwm_softc *);
+    int    iwm_awdl_station_pm(struct iwm_softc *, struct iwm_node *, int);
+    int    iwm_awdl_apply_airtime(struct iwm_softc *, unsigned);
+    int    iwm_awdl_tx_setup(struct iwm_softc *);
+    int    iwm_awdl_tx_teardown(struct iwm_softc *);
+    int    iwm_awdl_tx(struct iwm_softc *, mbuf_t);
+    void   iwm_awdl_tx_done(struct iwm_softc *, struct iwm_tx_resp *);
+    void   iwm_awdl_send_sync(struct iwm_softc *);
+    static void iwm_awdl_timeout(void *);
+    static void iwm_awdl_task(void *);
     int    iwm_run_stop(struct iwm_softc *);
     static struct ieee80211_node *iwm_node_alloc(struct ieee80211com *);
     int    iwm_set_key_v1(struct ieee80211com *, struct ieee80211_node *,
