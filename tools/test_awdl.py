@@ -7,7 +7,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="forbiddenitlwm-tests-") as directory:
-    for name in ("awdl_requested_configuration", "awdl_protocol", "awdl_frame_builder", "awdl_sync_prefix", "awdl_local_schedule", "awdl_probe_policy", "awdl_peer_cache", "awdl_data_reject", "awdl_data_payload", "awdl_data_frame", "awdl_observation", "awdl_regulatory", "awdl_tx_burst", "awdl_peer_schedule", "awdl_build_guard", "btleadv_hci", "eapol_key_length", "wcl_transition"):
+    for name in ("awdl_requested_configuration", "awdl_protocol", "awdl_frame_builder", "awdl_sync_prefix", "awdl_local_schedule", "awdl_probe_policy", "awdl_peer_cache", "awdl_data_reject", "awdl_data_payload", "awdl_data_frame", "awdl_observation", "awdl_regulatory", "awdl_tx_burst", "awdl_peer_schedule", "awdl_build_guard", "btleadv_hci", "eapol_key_length", "wcl_transition", "counted_copy", "scan_cursor"):
         output = Path(directory) / name
         subprocess.run([
             "xcrun", "clang++", "-std=c++14",
@@ -31,10 +31,17 @@ with tempfile.TemporaryDirectory(prefix="forbiddenitlwm-tests-") as directory:
 subprocess.run(["python3", str(root / "tests/monitor_tx_ownership.py")], check=True)
 subprocess.run(["python3", str(root / "tests/monitor_channel.py")], check=True)
 subprocess.run(["python3", str(root / "tests/monitor_probe.py")], check=True)
+# AWDL recovery across Wi-Fi reassociation: extracted production methods under ASan/UBSan (PR #12).
+subprocess.run(["python3", str(root / "tests/awdl_reconnect_recovery.py")], check=True)
+# The pattern set for the bluetoothd installed here (PR #1); 26.7.1's set elsewhere.
 # The default set is checked against this Mac's own bluetoothd, so it only means something on the macOS build the
 # set is for. CI runners run another build; FORBIDDEN_SKIP_HOST_BLUETOOTHD=1 skips just this check there.
 if not os.environ.get("FORBIDDEN_SKIP_HOST_BLUETOOTHD"):
-    subprocess.run(["python3", str(root / "tests/btleadv_patterns.py")], check=True)
+    build = subprocess.check_output(["sw_vers", "-buildVersion"], text=True).strip()
+    pattern_set = {"25G241": "2671", "25G332": "2672", "25G342": "2673"}.get(build, "2671")
+    subprocess.run(["python3", str(root / "tests/btleadv_patterns.py"), "--set", pattern_set], check=True)
+# The same-channel probe model and its source pins (PR #47); it builds its own test (audit T02).
+subprocess.run(["python3", str(root / "tests/portable_rx/test-samech.py")], check=True)
 # The Sonoma set needs a 14.8.9 bluetoothd. Point this at one to check it.
 if os.environ.get("FORBIDDEN_SONOMA_BLUETOOTHD"):
     subprocess.run(["python3", str(root / "tests/btleadv_patterns.py"), "--target", "sonoma",
@@ -51,3 +58,8 @@ subprocess.run(["python3", str(root / "tests/awdl_snapshot.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_bridge.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_pool_lease.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_rx_copy.py")], check=True)
+with tempfile.TemporaryDirectory(prefix="forbidden-lqm-") as directory:
+    output = str(Path(directory) / "wcl_lqm_merge")
+    subprocess.run(["xcrun", "clang++", "-std=c++14", "-fsanitize=address,undefined",
+                    str(root / "tests/wcl_lqm_merge.cpp"), "-o", output], check=True)
+    subprocess.run([output], check=True)
