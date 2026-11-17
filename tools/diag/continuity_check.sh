@@ -30,7 +30,9 @@ else
     warn "No awdl0: AirDrop, AirPlay to Mac, Sidecar, Universal Control and Continuity Camera over Wi-Fi can't work."
 fi
 for IF in llw0 p2p0 ap1; do
-    ifconfig "$IF" >/dev/null 2>&1 && note "$IF exists." || note "$IF doesn't exist (macOS only asks for it when a feature needs it; this driver doesn't create it)."
+    if ifconfig "$IF" >/dev/null 2>&1; then note "$IF exists."
+    elif [ "$IF" = llw0 ]; then note "llw0 doesn't exist (macOS asks for it when a feature needs low latency; this driver creates it only with -itlawdlllw, Sequoia)."
+    else note "$IF doesn't exist (macOS only asks for it when a feature needs it; this driver doesn't create it)."; fi
 done
 ROLE=$(ioreg -l -w0 2>/dev/null | grep -oE '"ItlwmAWDLCreateRole" = [0-9]+' | head -1 | awk '{ print $3 }')
 note "Virtual-interface role macOS last asked the driver for: ${ROLE:-none} (6 is AWDL; this driver builds only that one)."
@@ -99,7 +101,33 @@ fi
 if [ "$HEVC" = "yes" ]; then ok "Stage 3: macOS accepts this Mac for the camera's video format (hw.cpufamily $(printf '0x%x' "${FAM:-0}"))."
 elif [ "$HEVC" = "no" ]; then warn "Stage 3: macOS refuses this Mac for the camera's video format: hw.cpufamily is $(printf '0x%x' "${FAM:-0}"), an older Intel family (Penryn, 0x78ea4fbc, is what AMD kernel patches usually report). Skylake or newer passes. See docs/DEBUGGING.md, Case 3."
 else note "Stage 3: could not ask macOS about the video format (needs python3 and macOS's AVConference)."; fi
-# Stage 4 and what failed lately, from the logs: counts only.
+# Stage 4: the low latency interface the media connection wants (llw0), when this build and flag create it.
+regs() { ioreg -l -w0 2>/dev/null | grep -oE "\"$1\" = \"[^\"]*\"" | head -1 | sed 's/^[^=]*= "//; s/"$//'; }
+LLWEN=$(reg ItlwmLLWEnabled)
+if [ "$LLWEN" = "Yes" ]; then
+    LLWST=$(regs ItlwmLLWStage); LLWREQ=$(reg ItlwmLLWRequests)
+    if ifconfig llw0 >/dev/null 2>&1; then ok "Stage 4: llw0 exists ($(ifconfig llw0 | sed -n 's/.*mtu \([0-9]*\).*/mtu \1/p' | head -1)); stage ${LLWST:-?}, ${LLWREQ:-0} create requests."
+    else warn "Stage 4: -itlawdlllw is on but llw0 doesn't exist (stage ${LLWST:-none}, ${LLWREQ:-0} requests from macOS, result ${LLWRES:-$(reg ItlwmLLWCreateResult)})."; fi
+    # Every Skywalk interface has to stay in the power tree at state 1; one left off makes any request that needs
+    # power sleep forever. The interface and its BSD client should both say CurrentPowerState 1.
+    if ifconfig llw0 >/dev/null 2>&1; then
+        PWR=$(ioreg -p IOPower -l -w0 2>/dev/null | awk '/\+-o .*[Ll]lw/ || /\+-o IOSkywalkNetworkBSDClient/ {name=$0; n=12; next} n>0 { n--; if (match($0, /"CurrentPowerState"=[0-9]+/)) { sub(/^[ |]*/, "", name); sub(/^\+-o /, "", name); sub(/[ <{].*/, "", name); print name ":" substr($0, RSTART + 20, RLENGTH - 20); n=0 } }' | tr '\n' ' ')
+        [ -n "$PWR" ] && note "llw0 power tree: $PWR(each should be 1)" || note "llw0 power tree: no llw0 entry found in IOPower."
+    fi
+    note "llw0 traffic: sent by macOS $(reg ItlwmLLWTxOffered), put on awdl0's ring $(reg ItlwmLLWTxForwarded), dropped $(reg ItlwmLLWTxDropped); to llw0 from the radio: wanted $(reg ItlwmLLWRxWanted), delivered $(reg ItlwmLLWRxDelivered), failed $(reg ItlwmLLWRxFailed) (itlawdlllwrx=$(reg ItlwmLLWReceiveRule))."
+    note "Destinations macOS sent: $(regs ItlwmLLWTxDestinations). Seen on the radio: $(regs ItlwmLLWRxDestinationsSeen)."
+else note "Stage 4: the low latency interface is off (needs the Sequoia kext and -itlawdlllw; experimental)."; fi
+# Stage 5-6: do the iPhone's frames get past the driver, and how many never arrive (only meaningful while the camera streams).
+if [ -n "$LLWEN" ]; then
+    MAL=$(reg ITLAWDLCoexDataRxMalformed); LATE=$(reg ITLAWDLCoexSeqLate); SEEN=$(reg ITLAWDLCoexSeqSeen); MISS=$(reg ITLAWDLCoexSeqMissing)
+    if [ "${MAL:-0}" -gt 0 ]; then warn "Stage 5: $MAL data frames from the iPhone were heard but not handed on; python3 -I tools/awdl_rx_rejects.py says why."
+    else ok "Stage 5: no heard data frame was rejected (DataRxMalformed 0)."; fi
+    if [ -n "$SEEN" ] && [ "$SEEN" -gt 0 ]; then
+        note "Stage 6: radio-level loss by 802.11 sequence number: $MISS missing of $((SEEN + MISS)) ($((MISS * 1000 / (SEEN + MISS) / 10)).$((MISS * 1000 / (SEEN + MISS) % 10))%), in $(reg ITLAWDLCoexSeqGapRuns) gaps, longest $(reg ITLAWDLCoexSeqLongestGap), late ${LATE:-n/a}. The video has no error correction; 7 to 9% loss broke it on the test Mac."
+    else note "Stage 6: no sequence-gap data yet (needs the camera streaming and a driver with the ITLAWDLCoexSeq counters)."; fi
+    CRC=$(reg ITLAWDLRxMpduBadCrc); [ -n "$CRC" ] && note "Firmware-reported bad frames dropped at the first check: CRC $CRC, overrun $(reg ITLAWDLRxMpduBadOverrun), of $(reg ITLAWDLRxMpduTotal) (longest run $(reg ITLAWDLRxBadCrcRunLongest)); duplicates dropped $(reg ITLAWDLRxDupDropped)."
+fi
+# What failed lately, from the logs: counts only.
 fails() { # <label> <predicate>
     local n; n=$(count_log "$2"); [ "$n" -gt 0 ] && warn "$1: $n lines in the last ${MIN} min." || ok "$1: none in the last ${MIN} min."
 }
@@ -107,6 +135,7 @@ fails "RemoteCamera traffic registration failed" 'process == "ContinuityCaptureA
 fails "UMI status never came (\"Ensemble start Failure\")" 'process == "kernel" AND eventMessage CONTAINS "Ensemble start Failure"'
 fails "No video format for this hardware (\"No supportedPayloads\")" 'process == "ContinuityCaptureAgent" AND eventMessage CONTAINS "No supportedPayloads"'
 fails "Media connection never became ready (\"nw_connection ready timeout\")" 'process == "ContinuityCaptureAgent" AND eventMessage CONTAINS "nw_connection ready timeout"'
+fails "Video packets missing or unparsable (\"Failed to parse reconstructed packet\")" 'process == "ContinuityCaptureAgent" AND eventMessage CONTAINS "Failed to parse reconstructed packet"'
 head1 "Link state behind all of it (AWDL)"
 KEYS='Added|Channel|CountryLearned|BaPeerAdded|BaFilterOff|PromiscLive|PeerSyncFrames|DataTx|DataRxUcast|UcastOK|UcastFailed'
 ioreg -l -w0 2>/dev/null | grep -oE "\"ITLAWDLCoex($KEYS)\" = [A-Za-z0-9]+" | sed 's/"ITLAWDLCoex//; s/" = /=/' | sort -u | tr '\n' ' '; echo

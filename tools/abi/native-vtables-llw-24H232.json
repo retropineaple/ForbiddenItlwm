@@ -1,0 +1,5263 @@
+{
+"_source": "macOS Sequoia 15.8.2 (24H232) BootKernelExtensions.kc, x86_64, read with tools/abi/kc_vtable.py; slot = byte offset from the first function pointer",
+"IO80211InfraProtocol": {
+"entries": [
+{
+"slot": 0,
+"symbol": "__ZN20IO80211InfraProtocolD1Ev"
+},
+{
+"slot": 8,
+"symbol": "__ZN20IO80211InfraProtocolD0Ev"
+},
+{
+"slot": 16,
+"symbol": "__ZNK8OSObject7releaseEi"
+},
+{
+"slot": 24,
+"symbol": "__ZNK8OSObject14getRetainCountEv"
+},
+{
+"slot": 32,
+"symbol": "__ZNK8OSObject6retainEv"
+},
+{
+"slot": 40,
+"symbol": "__ZNK8OSObject7releaseEv"
+},
+{
+"slot": 48,
+"symbol": "__ZNK8OSObject9serializeEP11OSSerialize"
+},
+{
+"slot": 56,
+"symbol": "__ZNK20IO80211InfraProtocol12getMetaClassEv"
+},
+{
+"slot": 64,
+"symbol": "__ZNK15OSMetaClassBase9isEqualToEPKS_"
+},
+{
+"slot": 72,
+"symbol": "__ZNK8OSObject12taggedRetainEPKv"
+},
+{
+"slot": 80,
+"symbol": "__ZNK8OSObject13taggedReleaseEPKv"
+},
+{
+"slot": 88,
+"symbol": "__ZNK8OSObject13taggedReleaseEPKvi"
+},
+{
+"slot": 96,
+"symbol": "__ZN9IOService8DispatchE5IORPC"
+},
+{
+"slot": 104,
+"symbol": "__ZN15OSMetaClassBase25_RESERVEDOSMetaClassBase4Ev"
+},
+{
+"slot": 112,
+"symbol": "__ZN15OSMetaClassBase25_RESERVEDOSMetaClassBase5Ev"
+},
+{
+"slot": 120,
+"symbol": "__ZN15OSMetaClassBase25_RESERVEDOSMetaClassBase6Ev"
+},
+{
+"slot": 128,
+"symbol": "__ZN15OSMetaClassBase25_RESERVEDOSMetaClassBase7Ev"
+},
+{
+"slot": 136,
+"symbol": "__ZN21IO80211InfraInterface4initEv"
+},
+{
+"slot": 144,
+"symbol": "__ZN21IO80211InfraInterface4freeEv"
+},
+{
+"slot": 152,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject0Ev"
+},
+{
+"slot": 160,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject1Ev"
+},
+{
+"slot": 168,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject2Ev"
+},
+{
+"slot": 176,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject3Ev"
+},
+{
+"slot": 184,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject4Ev"
+},
+{
+"slot": 192,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject5Ev"
+},
+{
+"slot": 200,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject6Ev"
+},
+{
+"slot": 208,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject7Ev"
+},
+{
+"slot": 216,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject8Ev"
+},
+{
+"slot": 224,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject9Ev"
+},
+{
+"slot": 232,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject10Ev"
+},
+{
+"slot": 240,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject11Ev"
+},
+{
+"slot": 248,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject12Ev"
+},
+{
+"slot": 256,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject13Ev"
+},
+{
+"slot": 264,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject14Ev"
+},
+{
+"slot": 272,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject15Ev"
+},
+{
+"slot": 280,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPKcPK15IORegistryPlanej"
+},
+{
+"slot": 288,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPK8OSStringPK15IORegistryPlanej"
+},
+{
+"slot": 296,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPK8OSSymbolPK15IORegistryPlanej"
+},
+{
+"slot": 304,
+"symbol": "__ZNK15IORegistryEntry15copyParentEntryEPK15IORegistryPlane"
+},
+{
+"slot": 312,
+"symbol": "__ZNK15IORegistryEntry14copyChildEntryEPK15IORegistryPlane"
+},
+{
+"slot": 320,
+"symbol": "__ZN15IORegistryEntry17runPropertyActionEPFiP8OSObjectPvS2_S2_S2_ES1_S2_S2_S2_S2_"
+},
+{
+"slot": 328,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry0Ev"
+},
+{
+"slot": 336,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry1Ev"
+},
+{
+"slot": 344,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry2Ev"
+},
+{
+"slot": 352,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry3Ev"
+},
+{
+"slot": 360,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry4Ev"
+},
+{
+"slot": 368,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry5Ev"
+},
+{
+"slot": 376,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry6Ev"
+},
+{
+"slot": 384,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry7Ev"
+},
+{
+"slot": 392,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry8Ev"
+},
+{
+"slot": 400,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry9Ev"
+},
+{
+"slot": 408,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry10Ev"
+},
+{
+"slot": 416,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry11Ev"
+},
+{
+"slot": 424,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry12Ev"
+},
+{
+"slot": 432,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry13Ev"
+},
+{
+"slot": 440,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry14Ev"
+},
+{
+"slot": 448,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry15Ev"
+},
+{
+"slot": 456,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry16Ev"
+},
+{
+"slot": 464,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry17Ev"
+},
+{
+"slot": 472,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry18Ev"
+},
+{
+"slot": 480,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry19Ev"
+},
+{
+"slot": 488,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry20Ev"
+},
+{
+"slot": 496,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry21Ev"
+},
+{
+"slot": 504,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry22Ev"
+},
+{
+"slot": 512,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry23Ev"
+},
+{
+"slot": 520,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry24Ev"
+},
+{
+"slot": 528,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry25Ev"
+},
+{
+"slot": 536,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry26Ev"
+},
+{
+"slot": 544,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry27Ev"
+},
+{
+"slot": 552,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry28Ev"
+},
+{
+"slot": 560,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry29Ev"
+},
+{
+"slot": 568,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry30Ev"
+},
+{
+"slot": 576,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry31Ev"
+},
+{
+"slot": 584,
+"symbol": "__ZN26IOSkywalkEthernetInterface4initEP12OSDictionary"
+},
+{
+"slot": 592,
+"symbol": "__ZN15IORegistryEntry16setPropertyTableEP12OSDictionary"
+},
+{
+"slot": 600,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPK8OSSymbolP8OSObject"
+},
+{
+"slot": 608,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPK8OSStringP8OSObject"
+},
+{
+"slot": 616,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPKcP8OSObject"
+},
+{
+"slot": 624,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPKcS1_"
+},
+{
+"slot": 632,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPKcb"
+},
+{
+"slot": 640,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPKcyj"
+},
+{
+"slot": 648,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPKcPvj"
+},
+{
+"slot": 656,
+"symbol": "__ZN15IORegistryEntry14removePropertyEPK8OSSymbol"
+},
+{
+"slot": 664,
+"symbol": "__ZN15IORegistryEntry14removePropertyEPK8OSString"
+},
+{
+"slot": 672,
+"symbol": "__ZN15IORegistryEntry14removePropertyEPKc"
+},
+{
+"slot": 680,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPK8OSSymbol"
+},
+{
+"slot": 688,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPK8OSString"
+},
+{
+"slot": 696,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPKc"
+},
+{
+"slot": 704,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPK8OSSymbolPK15IORegistryPlanej"
+},
+{
+"slot": 712,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPK8OSStringPK15IORegistryPlanej"
+},
+{
+"slot": 720,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPKcPK15IORegistryPlanej"
+},
+{
+"slot": 728,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPK8OSSymbol"
+},
+{
+"slot": 736,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPK8OSString"
+},
+{
+"slot": 744,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPKc"
+},
+{
+"slot": 752,
+"symbol": "__ZNK15IORegistryEntry24dictionaryWithPropertiesEv"
+},
+{
+"slot": 760,
+"symbol": "__ZNK9IOService19serializePropertiesEP11OSSerialize"
+},
+{
+"slot": 768,
+"symbol": "__ZN15IORegistryEntry13setPropertiesEP8OSObject"
+},
+{
+"slot": 776,
+"symbol": "__ZNK15IORegistryEntry17getParentIteratorEPK15IORegistryPlane"
+},
+{
+"slot": 784,
+"symbol": "__ZNK15IORegistryEntry14applyToParentsEPFvPS_PvES1_PK15IORegistryPlane"
+},
+{
+"slot": 792,
+"symbol": "__ZNK15IORegistryEntry14getParentEntryEPK15IORegistryPlane"
+},
+{
+"slot": 800,
+"symbol": "__ZNK15IORegistryEntry16getChildIteratorEPK15IORegistryPlane"
+},
+{
+"slot": 808,
+"symbol": "__ZNK15IORegistryEntry15applyToChildrenEPFvPS_PvES1_PK15IORegistryPlane"
+},
+{
+"slot": 816,
+"symbol": "__ZNK15IORegistryEntry13getChildEntryEPK15IORegistryPlane"
+},
+{
+"slot": 824,
+"symbol": "__ZNK15IORegistryEntry7isChildEPS_PK15IORegistryPlaneb"
+},
+{
+"slot": 832,
+"symbol": "__ZNK15IORegistryEntry8isParentEPS_PK15IORegistryPlaneb"
+},
+{
+"slot": 840,
+"symbol": "__ZNK15IORegistryEntry7inPlaneEPK15IORegistryPlane"
+},
+{
+"slot": 848,
+"symbol": "__ZNK15IORegistryEntry8getDepthEPK15IORegistryPlane"
+},
+{
+"slot": 856,
+"symbol": "__ZN15IORegistryEntry14attachToParentEPS_PK15IORegistryPlane"
+},
+{
+"slot": 864,
+"symbol": "__ZN15IORegistryEntry16detachFromParentEPS_PK15IORegistryPlane"
+},
+{
+"slot": 872,
+"symbol": "__ZN15IORegistryEntry13attachToChildEPS_PK15IORegistryPlane"
+},
+{
+"slot": 880,
+"symbol": "__ZN15IORegistryEntry15detachFromChildEPS_PK15IORegistryPlane"
+},
+{
+"slot": 888,
+"symbol": "__ZN15IORegistryEntry11detachAboveEPK15IORegistryPlane"
+},
+{
+"slot": 896,
+"symbol": "__ZN15IORegistryEntry9detachAllEPK15IORegistryPlane"
+},
+{
+"slot": 904,
+"symbol": "__ZNK15IORegistryEntry7getNameEPK15IORegistryPlane"
+},
+{
+"slot": 912,
+"symbol": "__ZNK15IORegistryEntry8copyNameEPK15IORegistryPlane"
+},
+{
+"slot": 920,
+"symbol": "__ZNK15IORegistryEntry12compareNamesEP8OSObjectPP8OSString"
+},
+{
+"slot": 928,
+"symbol": "__ZNK15IORegistryEntry11compareNameEP8OSStringPS1_"
+},
+{
+"slot": 936,
+"symbol": "__ZN15IORegistryEntry7setNameEPK8OSSymbolPK15IORegistryPlane"
+},
+{
+"slot": 944,
+"symbol": "__ZN15IORegistryEntry7setNameEPKcPK15IORegistryPlane"
+},
+{
+"slot": 952,
+"symbol": "__ZNK15IORegistryEntry11getLocationEPK15IORegistryPlane"
+},
+{
+"slot": 960,
+"symbol": "__ZNK15IORegistryEntry12copyLocationEPK15IORegistryPlane"
+},
+{
+"slot": 968,
+"symbol": "__ZN15IORegistryEntry11setLocationEPK8OSSymbolPK15IORegistryPlane"
+},
+{
+"slot": 976,
+"symbol": "__ZN15IORegistryEntry11setLocationEPKcPK15IORegistryPlane"
+},
+{
+"slot": 984,
+"symbol": "__ZNK15IORegistryEntry7getPathEPcPiPK15IORegistryPlane"
+},
+{
+"slot": 992,
+"symbol": "__ZNK15IORegistryEntry16getPathComponentEPcPiPK15IORegistryPlane"
+},
+{
+"slot": 1000,
+"symbol": "__ZN15IORegistryEntry13childFromPathEPKcPK15IORegistryPlanePcPi"
+},
+{
+"slot": 1008,
+"symbol": "__ZN9IOService4initEP15IORegistryEntryPK15IORegistryPlane"
+},
+{
+"slot": 1016,
+"symbol": "__ZN9IOService16requestTerminateEPS_j"
+},
+{
+"slot": 1024,
+"symbol": "__ZN18IOSkywalkInterface13willTerminateEP9IOServicej"
+},
+{
+"slot": 1032,
+"symbol": "__ZN18IOSkywalkInterface12didTerminateEP9IOServicejPb"
+},
+{
+"slot": 1040,
+"symbol": "__ZN9IOService15nextIdleTimeoutEyyj"
+},
+{
+"slot": 1048,
+"symbol": "__ZN9IOService18systemWillShutdownEj"
+},
+{
+"slot": 1056,
+"symbol": "__ZN9IOService22copyClientWithCategoryEPK8OSSymbol"
+},
+{
+"slot": 1064,
+"symbol": "__ZN21IO80211InfraInterface15configureReportEP19IOReportChannelListjPvS2_"
+},
+{
+"slot": 1072,
+"symbol": "__ZN21IO80211InfraInterface12updateReportEP19IOReportChannelListjPvS2_"
+},
+{
+"slot": 1080,
+"symbol": "__ZN9IOService19_RESERVEDIOService2Ev"
+},
+{
+"slot": 1088,
+"symbol": "__ZN9IOService19_RESERVEDIOService3Ev"
+},
+{
+"slot": 1096,
+"symbol": "__ZN9IOService19_RESERVEDIOService4Ev"
+},
+{
+"slot": 1104,
+"symbol": "__ZN9IOService19_RESERVEDIOService5Ev"
+},
+{
+"slot": 1112,
+"symbol": "__ZN9IOService19_RESERVEDIOService6Ev"
+},
+{
+"slot": 1120,
+"symbol": "__ZN9IOService19_RESERVEDIOService7Ev"
+},
+{
+"slot": 1128,
+"symbol": "__ZN9IOService19_RESERVEDIOService8Ev"
+},
+{
+"slot": 1136,
+"symbol": "__ZN9IOService19_RESERVEDIOService9Ev"
+},
+{
+"slot": 1144,
+"symbol": "__ZN9IOService20_RESERVEDIOService10Ev"
+},
+{
+"slot": 1152,
+"symbol": "__ZN9IOService20_RESERVEDIOService11Ev"
+},
+{
+"slot": 1160,
+"symbol": "__ZN9IOService20_RESERVEDIOService12Ev"
+},
+{
+"slot": 1168,
+"symbol": "__ZN9IOService20_RESERVEDIOService13Ev"
+},
+{
+"slot": 1176,
+"symbol": "__ZN9IOService20_RESERVEDIOService14Ev"
+},
+{
+"slot": 1184,
+"symbol": "__ZN9IOService20_RESERVEDIOService15Ev"
+},
+{
+"slot": 1192,
+"symbol": "__ZN9IOService20_RESERVEDIOService16Ev"
+},
+{
+"slot": 1200,
+"symbol": "__ZN9IOService20_RESERVEDIOService17Ev"
+},
+{
+"slot": 1208,
+"symbol": "__ZN9IOService20_RESERVEDIOService18Ev"
+},
+{
+"slot": 1216,
+"symbol": "__ZN9IOService20_RESERVEDIOService19Ev"
+},
+{
+"slot": 1224,
+"symbol": "__ZN9IOService20_RESERVEDIOService20Ev"
+},
+{
+"slot": 1232,
+"symbol": "__ZN9IOService20_RESERVEDIOService21Ev"
+},
+{
+"slot": 1240,
+"symbol": "__ZN9IOService20_RESERVEDIOService22Ev"
+},
+{
+"slot": 1248,
+"symbol": "__ZN9IOService20_RESERVEDIOService23Ev"
+},
+{
+"slot": 1256,
+"symbol": "__ZN9IOService20_RESERVEDIOService24Ev"
+},
+{
+"slot": 1264,
+"symbol": "__ZN9IOService20_RESERVEDIOService25Ev"
+},
+{
+"slot": 1272,
+"symbol": "__ZN9IOService20_RESERVEDIOService26Ev"
+},
+{
+"slot": 1280,
+"symbol": "__ZN9IOService20_RESERVEDIOService27Ev"
+},
+{
+"slot": 1288,
+"symbol": "__ZN9IOService20_RESERVEDIOService28Ev"
+},
+{
+"slot": 1296,
+"symbol": "__ZN9IOService20_RESERVEDIOService29Ev"
+},
+{
+"slot": 1304,
+"symbol": "__ZN9IOService20_RESERVEDIOService30Ev"
+},
+{
+"slot": 1312,
+"symbol": "__ZN9IOService20_RESERVEDIOService31Ev"
+},
+{
+"slot": 1320,
+"symbol": "__ZN9IOService20_RESERVEDIOService32Ev"
+},
+{
+"slot": 1328,
+"symbol": "__ZN9IOService20_RESERVEDIOService33Ev"
+},
+{
+"slot": 1336,
+"symbol": "__ZN9IOService20_RESERVEDIOService34Ev"
+},
+{
+"slot": 1344,
+"symbol": "__ZN9IOService20_RESERVEDIOService35Ev"
+},
+{
+"slot": 1352,
+"symbol": "__ZN9IOService20_RESERVEDIOService36Ev"
+},
+{
+"slot": 1360,
+"symbol": "__ZN9IOService20_RESERVEDIOService37Ev"
+},
+{
+"slot": 1368,
+"symbol": "__ZN9IOService20_RESERVEDIOService38Ev"
+},
+{
+"slot": 1376,
+"symbol": "__ZN9IOService20_RESERVEDIOService39Ev"
+},
+{
+"slot": 1384,
+"symbol": "__ZN9IOService20_RESERVEDIOService40Ev"
+},
+{
+"slot": 1392,
+"symbol": "__ZN9IOService20_RESERVEDIOService41Ev"
+},
+{
+"slot": 1400,
+"symbol": "__ZN9IOService20_RESERVEDIOService42Ev"
+},
+{
+"slot": 1408,
+"symbol": "__ZN9IOService20_RESERVEDIOService43Ev"
+},
+{
+"slot": 1416,
+"symbol": "__ZN9IOService20_RESERVEDIOService44Ev"
+},
+{
+"slot": 1424,
+"symbol": "__ZN9IOService20_RESERVEDIOService45Ev"
+},
+{
+"slot": 1432,
+"symbol": "__ZN9IOService20_RESERVEDIOService46Ev"
+},
+{
+"slot": 1440,
+"symbol": "__ZN9IOService20_RESERVEDIOService47Ev"
+},
+{
+"slot": 1448,
+"symbol": "__ZNK9IOService8getStateEv"
+},
+{
+"slot": 1456,
+"symbol": "__ZN9IOService15registerServiceEj"
+},
+{
+"slot": 1464,
+"symbol": "__ZN9IOService5probeEPS_Pi"
+},
+{
+"slot": 1472,
+"symbol": "__ZN21IO80211InfraInterface5startEP9IOService"
+},
+{
+"slot": 1480,
+"symbol": "__ZN21IO80211InfraInterface4stopEP9IOService"
+},
+{
+"slot": 1488,
+"symbol": "__ZN9IOService4openEPS_jPv"
+},
+{
+"slot": 1496,
+"symbol": "__ZN9IOService5closeEPS_j"
+},
+{
+"slot": 1504,
+"symbol": "__ZNK9IOService6isOpenEPKS_"
+},
+{
+"slot": 1512,
+"symbol": "__ZN18IOSkywalkInterface10handleOpenEP9IOServicejPv"
+},
+{
+"slot": 1520,
+"symbol": "__ZN18IOSkywalkInterface11handleCloseEP9IOServicej"
+},
+{
+"slot": 1528,
+"symbol": "__ZNK18IOSkywalkInterface12handleIsOpenEPK9IOService"
+},
+{
+"slot": 1536,
+"symbol": "__ZN9IOService9terminateEj"
+},
+{
+"slot": 1544,
+"symbol": "__ZN9IOService8finalizeEj"
+},
+{
+"slot": 1552,
+"symbol": "__ZN9IOService18lockForArbitrationEb"
+},
+{
+"slot": 1560,
+"symbol": "__ZN9IOService20unlockForArbitrationEv"
+},
+{
+"slot": 1568,
+"symbol": "__ZN9IOService15terminateClientEPS_j"
+},
+{
+"slot": 1576,
+"symbol": "__ZN9IOService12getBusyStateEv"
+},
+{
+"slot": 1584,
+"symbol": "__ZN9IOService10adjustBusyEi"
+},
+{
+"slot": 1592,
+"symbol": "__ZN9IOService18matchPropertyTableEP12OSDictionaryPi"
+},
+{
+"slot": 1600,
+"symbol": "__ZN9IOService18matchPropertyTableEP12OSDictionary"
+},
+{
+"slot": 1608,
+"symbol": "__ZN9IOService13matchLocationEPS_"
+},
+{
+"slot": 1616,
+"symbol": "__ZN9IOService17addNeededResourceEPKc"
+},
+{
+"slot": 1624,
+"symbol": "__ZN9IOService15comparePropertyEP12OSDictionaryPKc"
+},
+{
+"slot": 1632,
+"symbol": "__ZN9IOService15comparePropertyEP12OSDictionaryPK8OSString"
+},
+{
+"slot": 1640,
+"symbol": "__ZN9IOService17comparePropertiesEP12OSDictionaryP12OSCollection"
+},
+{
+"slot": 1648,
+"symbol": "__ZN9IOService6attachEPS_"
+},
+{
+"slot": 1656,
+"symbol": "__ZN9IOService6detachEPS_"
+},
+{
+"slot": 1664,
+"symbol": "__ZNK9IOService11getProviderEv"
+},
+{
+"slot": 1672,
+"symbol": "__ZNK9IOService11getWorkLoopEv"
+},
+{
+"slot": 1680,
+"symbol": "__ZNK9IOService19getProviderIteratorEv"
+},
+{
+"slot": 1688,
+"symbol": "__ZNK9IOService23getOpenProviderIteratorEv"
+},
+{
+"slot": 1696,
+"symbol": "__ZNK9IOService9getClientEv"
+},
+{
+"slot": 1704,
+"symbol": "__ZNK9IOService17getClientIteratorEv"
+},
+{
+"slot": 1712,
+"symbol": "__ZNK9IOService21getOpenClientIteratorEv"
+},
+{
+"slot": 1720,
+"symbol": "__ZN9IOService20callPlatformFunctionEPK8OSSymbolbPvS3_S3_S3_"
+},
+{
+"slot": 1728,
+"symbol": "__ZN9IOService20callPlatformFunctionEPKcbPvS2_S2_S2_"
+},
+{
+"slot": 1736,
+"symbol": "__ZN9IOService12getResourcesEv"
+},
+{
+"slot": 1744,
+"symbol": "__ZN9IOService20getDeviceMemoryCountEv"
+},
+{
+"slot": 1752,
+"symbol": "__ZN9IOService24getDeviceMemoryWithIndexEj"
+},
+{
+"slot": 1760,
+"symbol": "__ZN9IOService24mapDeviceMemoryWithIndexEjj"
+},
+{
+"slot": 1768,
+"symbol": "__ZN9IOService15getDeviceMemoryEv"
+},
+{
+"slot": 1776,
+"symbol": "__ZN9IOService15setDeviceMemoryEP7OSArray"
+},
+{
+"slot": 1784,
+"symbol": "__ZN9IOService17registerInterruptEiP8OSObjectPFvS1_PvPS_iES2_"
+},
+{
+"slot": 1792,
+"symbol": "__ZN9IOService19unregisterInterruptEi"
+},
+{
+"slot": 1800,
+"symbol": "__ZN9IOService16getInterruptTypeEiPi"
+},
+{
+"slot": 1808,
+"symbol": "__ZN9IOService15enableInterruptEi"
+},
+{
+"slot": 1816,
+"symbol": "__ZN9IOService16disableInterruptEi"
+},
+{
+"slot": 1824,
+"symbol": "__ZN9IOService14causeInterruptEi"
+},
+{
+"slot": 1832,
+"symbol": "__ZN9IOService12requestProbeEj"
+},
+{
+"slot": 1840,
+"symbol": "__ZN9IOService7messageEjPS_Pv"
+},
+{
+"slot": 1848,
+"symbol": "__ZN9IOService13messageClientEjP8OSObjectPvm"
+},
+{
+"slot": 1856,
+"symbol": "__ZN9IOService14messageClientsEjPvm"
+},
+{
+"slot": 1864,
+"symbol": "__ZN9IOService16registerInterestEPK8OSSymbolPFiPvS3_jPS_S3_mES3_S3_"
+},
+{
+"slot": 1872,
+"symbol": "__ZN9IOService16applyToProvidersEPFvPS_PvES1_"
+},
+{
+"slot": 1880,
+"symbol": "__ZN9IOService14applyToClientsEPFvPS_PvES1_"
+},
+{
+"slot": 1888,
+"symbol": "__ZN9IOService17applyToInterestedEPK8OSSymbolPFvP8OSObjectPvES5_"
+},
+{
+"slot": 1896,
+"symbol": "__ZN9IOService23acknowledgeNotificationEPvj"
+},
+{
+"slot": 1904,
+"symbol": "__ZN23IO80211SkywalkInterface13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient"
+},
+{
+"slot": 1912,
+"symbol": "__ZN9IOService13newUserClientEP4taskPvjPP12IOUserClient"
+},
+{
+"slot": 1920,
+"symbol": "__ZN23IO80211SkywalkInterface16stringFromReturnEi"
+},
+{
+"slot": 1928,
+"symbol": "__ZN23IO80211SkywalkInterface15errnoFromReturnEi"
+},
+{
+"slot": 1936,
+"symbol": "__ZN9IOService6PMinitEv"
+},
+{
+"slot": 1944,
+"symbol": "__ZN9IOService6PMstopEv"
+},
+{
+"slot": 1952,
+"symbol": "__ZN25IOSkywalkNetworkInterface10joinPMtreeEP9IOService"
+},
+{
+"slot": 1960,
+"symbol": "__ZN9IOService19registerPowerDriverEPS_P14IOPMPowerStatem"
+},
+{
+"slot": 1968,
+"symbol": "__ZN9IOService23requestPowerDomainStateEmP17IOPowerConnectionm"
+},
+{
+"slot": 1976,
+"symbol": "__ZN9IOService14activityTickleEmm"
+},
+{
+"slot": 1984,
+"symbol": "__ZN25IOSkywalkNetworkInterface17setAggressivenessEmm"
+},
+{
+"slot": 1992,
+"symbol": "__ZN9IOService17getAggressivenessEmPm"
+},
+{
+"slot": 2000,
+"symbol": "__ZN9IOService13addPowerChildEPS_"
+},
+{
+"slot": 2008,
+"symbol": "__ZN9IOService16removePowerChildEP17IOPowerConnection"
+},
+{
+"slot": 2016,
+"symbol": "__ZN9IOService18setIdleTimerPeriodEm"
+},
+{
+"slot": 2024,
+"symbol": "__ZN21IO80211InfraInterface13setPowerStateEmP9IOService"
+},
+{
+"slot": 2032,
+"symbol": "__ZN23IO80211SkywalkInterface27maxCapabilityForDomainStateEm"
+},
+{
+"slot": 2040,
+"symbol": "__ZN23IO80211SkywalkInterface31initialPowerStateForDomainStateEm"
+},
+{
+"slot": 2048,
+"symbol": "__ZN9IOService24powerStateForDomainStateEm"
+},
+{
+"slot": 2056,
+"symbol": "__ZN9IOService22powerStateWillChangeToEmmPS_"
+},
+{
+"slot": 2064,
+"symbol": "__ZN9IOService21powerStateDidChangeToEmmPS_"
+},
+{
+"slot": 2072,
+"symbol": "__ZN9IOService13askChangeDownEm"
+},
+{
+"slot": 2080,
+"symbol": "__ZN9IOService14tellChangeDownEm"
+},
+{
+"slot": 2088,
+"symbol": "__ZN9IOService16tellNoChangeDownEm"
+},
+{
+"slot": 2096,
+"symbol": "__ZN9IOService12tellChangeUpEm"
+},
+{
+"slot": 2104,
+"symbol": "__ZN9IOService16allowPowerChangeEm"
+},
+{
+"slot": 2112,
+"symbol": "__ZN9IOService17cancelPowerChangeEm"
+},
+{
+"slot": 2120,
+"symbol": "__ZN9IOService15powerChangeDoneEm"
+},
+{
+"slot": 2128,
+"symbol": "__ZN23IO80211SkywalkInterface6enableEj"
+},
+{
+"slot": 2136,
+"symbol": "__ZN23IO80211SkywalkInterface7disableEj"
+},
+{
+"slot": 2144,
+"symbol": "__ZN18IOSkywalkInterface21clientConnectWithTaskEP4taskP9IOServicej"
+},
+{
+"slot": 2152,
+"symbol": "__ZN18IOSkywalkInterface16clientDisconnectEP9IOServicej"
+},
+{
+"slot": 2160,
+"symbol": "__ZN18IOSkywalkInterface13isTerminatingEv"
+},
+{
+"slot": 2168,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface0Ev"
+},
+{
+"slot": 2176,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface1Ev"
+},
+{
+"slot": 2184,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface2Ev"
+},
+{
+"slot": 2192,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface3Ev"
+},
+{
+"slot": 2200,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface4Ev"
+},
+{
+"slot": 2208,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface5Ev"
+},
+{
+"slot": 2216,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface6Ev"
+},
+{
+"slot": 2224,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface7Ev"
+},
+{
+"slot": 2232,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface8Ev"
+},
+{
+"slot": 2240,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface9Ev"
+},
+{
+"slot": 2248,
+"symbol": "__ZN18IOSkywalkInterface29_RESERVEDIOSkywalkInterface10Ev"
+},
+{
+"slot": 2256,
+"symbol": "__ZN25IOSkywalkNetworkInterface39registerNetworkInterfaceWithLogicalLinkEPKNS_16RegistrationInfoEP20IOSkywalkLogicalLinkP25IOSkywalkPacketBufferPoolS6_j"
+},
+{
+"slot": 2264,
+"symbol": "__ZN25IOSkywalkNetworkInterface21deregisterLogicalLinkEv"
+},
+{
+"slot": 2272,
+"symbol": "__ZN21IO80211InfraInterface26initBSDInterfaceParametersEP18ifnet_init_eparamsPP11sockaddr_dl"
+},
+{
+"slot": 2280,
+"symbol": "__ZN21IO80211InfraInterface19prepareBSDInterfaceEP7__ifnetj"
+},
+{
+"slot": 2288,
+"symbol": "__ZN25IOSkywalkNetworkInterface20finalizeBSDInterfaceEP7__ifnetj"
+},
+{
+"slot": 2296,
+"symbol": "__ZNK25IOSkywalkNetworkInterface15getBSDInterfaceEv"
+},
+{
+"slot": 2304,
+"symbol": "__ZN25IOSkywalkNetworkInterface10setBSDNameEPKc"
+},
+{
+"slot": 2312,
+"symbol": "__ZNK25IOSkywalkNetworkInterface10getBSDNameEv"
+},
+{
+"slot": 2320,
+"symbol": "__ZN21IO80211InfraInterface17processBSDCommandEP7__ifnetjPv"
+},
+{
+"slot": 2328,
+"symbol": "__ZN25IOSkywalkNetworkInterface23processInterfaceCommandEP5ifdrv"
+},
+{
+"slot": 2336,
+"symbol": "__ZN25IOSkywalkNetworkInterface23interfaceAdvisoryEnableEb"
+},
+{
+"slot": 2344,
+"symbol": "__ZN21IO80211InfraInterface18setInterfaceEnableEb"
+},
+{
+"slot": 2352,
+"symbol": "__ZN23IO80211SkywalkInterface15setRunningStateEb"
+},
+{
+"slot": 2360,
+"symbol": "__ZN23IO80211SkywalkInterface17handleChosenMediaEj"
+},
+{
+"slot": 2368,
+"symbol": "__ZN23IO80211SkywalkInterface22getSupportedMediaArrayEPjS0_"
+},
+{
+"slot": 2376,
+"symbol": "__ZN26IOSkywalkEthernetInterface16getPacketTapInfoEPjS0_"
+},
+{
+"slot": 2384,
+"symbol": "__ZNK25IOSkywalkNetworkInterface22getUnsentDataByteCountEPjS0_j"
+},
+{
+"slot": 2392,
+"symbol": "__ZN25IOSkywalkNetworkInterface21getSupportedWakeFlagsEPj"
+},
+{
+"slot": 2400,
+"symbol": "__ZN26IOSkywalkEthernetInterface17enableNetworkWakeEj"
+},
+{
+"slot": 2408,
+"symbol": "__ZNK25IOSkywalkNetworkInterface25calculateRingSizeForQueueEPK20IOSkywalkPacketQueuePj"
+},
+{
+"slot": 2416,
+"symbol": "__ZN26IOSkywalkEthernetInterface18getMaxTransferUnitEv"
+},
+{
+"slot": 2424,
+"symbol": "__ZN25IOSkywalkNetworkInterface18setMaxTransferUnitEj"
+},
+{
+"slot": 2432,
+"symbol": "__ZN26IOSkywalkEthernetInterface16getMinPacketSizeEv"
+},
+{
+"slot": 2440,
+"symbol": "__ZN21IO80211InfraInterface18getHardwareAssistsEv"
+},
+{
+"slot": 2448,
+"symbol": "__ZN25IOSkywalkNetworkInterface18setHardwareAssistsEjj"
+},
+{
+"slot": 2456,
+"symbol": "__ZN26IOSkywalkEthernetInterface18getInterfaceFamilyEv"
+},
+{
+"slot": 2464,
+"symbol": "__ZN26IOSkywalkEthernetInterface21getInterfaceSubFamilyEv"
+},
+{
+"slot": 2472,
+"symbol": "__ZN26IOSkywalkEthernetInterface15getInitialMediaEv"
+},
+{
+"slot": 2480,
+"symbol": "__ZN23IO80211SkywalkInterface15getFeatureFlagsEv"
+},
+{
+"slot": 2488,
+"symbol": "__ZN25IOSkywalkNetworkInterface15getTxDataOffsetEv"
+},
+{
+"slot": 2496,
+"symbol": "__ZN25IOSkywalkNetworkInterface21captureInterfaceStateEj"
+},
+{
+"slot": 2504,
+"symbol": "__ZN25IOSkywalkNetworkInterface21restoreInterfaceStateEj"
+},
+{
+"slot": 2512,
+"symbol": "__ZN25IOSkywalkNetworkInterface6setMTUEj"
+},
+{
+"slot": 2520,
+"symbol": "__ZN21IO80211InfraInterface6bpfTapEjj"
+},
+{
+"slot": 2528,
+"symbol": "__ZN26IOSkywalkEthernetInterface16getBSDNamePrefixEv"
+},
+{
+"slot": 2536,
+"symbol": "__ZN25IOSkywalkNetworkInterface16getBSDUnitNumberEv"
+},
+{
+"slot": 2544,
+"symbol": "__ZN23IO80211SkywalkInterface17classNameOverrideEv"
+},
+{
+"slot": 2552,
+"symbol": "__ZN25IOSkywalkNetworkInterface14deferBSDAttachEb"
+},
+{
+"slot": 2560,
+"symbol": "__ZN25IOSkywalkNetworkInterface24reportDetailedLinkStatusEPK14if_link_status"
+},
+{
+"slot": 2568,
+"symbol": "__ZN25IOSkywalkNetworkInterface13getTSOOptionsEPNS_19IOSkywalkTSOOptionsE"
+},
+{
+"slot": 2576,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface0Ev"
+},
+{
+"slot": 2584,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface1Ev"
+},
+{
+"slot": 2592,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface2Ev"
+},
+{
+"slot": 2600,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface3Ev"
+},
+{
+"slot": 2608,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface4Ev"
+},
+{
+"slot": 2616,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface5Ev"
+},
+{
+"slot": 2624,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface6Ev"
+},
+{
+"slot": 2632,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface7Ev"
+},
+{
+"slot": 2640,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface8Ev"
+},
+{
+"slot": 2648,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface9Ev"
+},
+{
+"slot": 2656,
+"symbol": "__ZN23IO80211SkywalkInterface18getHardwareAddressEP10ether_addr"
+},
+{
+"slot": 2664,
+"symbol": "__ZN23IO80211SkywalkInterface18setHardwareAddressEP10ether_addr"
+},
+{
+"slot": 2672,
+"symbol": "__ZN26IOSkywalkEthernetInterface19setLinkLayerAddressEP10ether_addr"
+},
+{
+"slot": 2680,
+"symbol": "__ZN26IOSkywalkEthernetInterface24configureMulticastFilterEjPK10ether_addrj"
+},
+{
+"slot": 2688,
+"symbol": "__ZN26IOSkywalkEthernetInterface21setMulticastAddressesEPK10ether_addrj"
+},
+{
+"slot": 2696,
+"symbol": "__ZN26IOSkywalkEthernetInterface25setAllMulticastModeEnableEb"
+},
+{
+"slot": 2704,
+"symbol": "__ZN23IO80211SkywalkInterface24setPromiscuousModeEnableEbj"
+},
+{
+"slot": 2712,
+"symbol": "__ZN26IOSkywalkEthernetInterface20reportNicProxyLimitsE22nicproxy_limits_info_s"
+},
+{
+"slot": 2720,
+"symbol": "__ZN21IO80211InfraInterface20hwConfigNicProxyDataEP15nicproxy_info_s"
+},
+{
+"slot": 2728,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface0Ev"
+},
+{
+"slot": 2736,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface1Ev"
+},
+{
+"slot": 2744,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface2Ev"
+},
+{
+"slot": 2752,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface3Ev"
+},
+{
+"slot": 2760,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface4Ev"
+},
+{
+"slot": 2768,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface5Ev"
+},
+{
+"slot": 2776,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface6Ev"
+},
+{
+"slot": 2784,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface7Ev"
+},
+{
+"slot": 2792,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface8Ev"
+},
+{
+"slot": 2800,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface9Ev"
+},
+{
+"slot": 2808,
+"symbol": "__ZN26IOSkywalkEthernetInterface37_RESERVEDIOSkywalkEthernetInterface10Ev"
+},
+{
+"slot": 2816,
+"symbol": "__ZN23IO80211SkywalkInterface17createPeerManagerEv"
+},
+{
+"slot": 2824,
+"symbol": "__ZN23IO80211SkywalkInterface10createPeerEPKhP18IO80211PeerManager"
+},
+{
+"slot": 2832,
+"symbol": "__ZN21IO80211InfraInterface11postMessageEjPvmb"
+},
+{
+"slot": 2840,
+"symbol": "__ZN23IO80211SkywalkInterface20reportDataPathEventsEjPvmb"
+},
+{
+"slot": 2848,
+"symbol": "__ZN21IO80211InfraInterface19recordOutputPacketsEP24TxSubmissionDequeueStatsS1_"
+},
+{
+"slot": 2856,
+"symbol": "__ZN23IO80211SkywalkInterface18recordOutputPacketE17apple80211_wme_acii"
+},
+{
+"slot": 2864,
+"symbol": "__ZN21IO80211InfraInterface11logTxPacketEP20IO80211NetworkPacketP20PacketSkywalkScratch17apple80211_wme_acb"
+},
+{
+"slot": 2872,
+"symbol": "__ZN21IO80211InfraInterface21logTxCompletionPacketEP20IO80211NetworkPacketP20PacketSkywalkScratchPh17apple80211_wme_acijbb"
+},
+{
+"slot": 2880,
+"symbol": "__ZN21IO80211InfraInterface23recordCompletionPacketsEP24TxCompletionEnqueueStatsS1_"
+},
+{
+"slot": 2888,
+"symbol": "__ZN21IO80211InfraInterface11inputPacketEP20IO80211NetworkPacketP15packet_info_tagP12ether_headerPbb"
+},
+{
+"slot": 2896,
+"symbol": "__ZN23IO80211SkywalkInterface24forwardInfraRelayPacketsEP20IO80211NetworkPacketP12ether_header"
+},
+{
+"slot": 2904,
+"symbol": "__ZN23IO80211SkywalkInterface21logSkywalkTxReqPacketEP20IO80211NetworkPacketP20PacketSkywalkScratchPh17apple80211_wme_acb"
+},
+{
+"slot": 2912,
+"symbol": "__ZN21IO80211InfraInterface14pendingPacketsEh"
+},
+{
+"slot": 2920,
+"symbol": "__ZN21IO80211InfraInterface11packetSpaceEh"
+},
+{
+"slot": 2928,
+"symbol": "__ZN23IO80211SkywalkInterface20isChipInterfaceReadyEv"
+},
+{
+"slot": 2936,
+"symbol": "__ZN21IO80211InfraInterface17isDebounceOnGoingEv"
+},
+{
+"slot": 2944,
+"symbol": "__ZN21IO80211InfraInterface12setLinkStateE16IO80211LinkStatejbj"
+},
+{
+"slot": 2952,
+"symbol": "__ZN21IO80211InfraInterface9linkStateEv"
+},
+{
+"slot": 2960,
+"symbol": "__ZN21IO80211InfraInterface16setScanningStateEjbP20apple80211_scan_datai"
+},
+{
+"slot": 2968,
+"symbol": "__ZN21IO80211InfraInterface16setDataPathStateEb"
+},
+{
+"slot": 2976,
+"symbol": "__ZN21IO80211InfraInterface14getScanManagerEv"
+},
+{
+"slot": 2984,
+"symbol": "__ZN23IO80211SkywalkInterface13getControllerEv"
+},
+{
+"slot": 2992,
+"symbol": "__ZN21IO80211InfraInterface20updateLinkParametersEP33apple80211_interface_availability"
+},
+{
+"slot": 3000,
+"symbol": "__ZN21IO80211InfraInterface26updateInterfaceCoexRiskPctEy"
+},
+{
+"slot": 3008,
+"symbol": "__ZN21IO80211InfraInterface6setLQMEy"
+},
+{
+"slot": 3016,
+"symbol": "__ZN21IO80211InfraInterface16updateLinkStatusEv"
+},
+{
+"slot": 3024,
+"symbol": "__ZN21IO80211InfraInterface21updateLinkStatusGatedEv"
+},
+{
+"slot": 3032,
+"symbol": "__ZN21IO80211InfraInterface23setInterfaceExtendedCCAE18apple80211_channelP21apple80211_cca_report"
+},
+{
+"slot": 3040,
+"symbol": "__ZN21IO80211InfraInterface15setInterfaceCCAE18apple80211_channeli"
+},
+{
+"slot": 3048,
+"symbol": "__ZN21IO80211InfraInterface14setInterfaceNFE18apple80211_channelx"
+},
+{
+"slot": 3056,
+"symbol": "__ZN21IO80211InfraInterface23setInterfaceOFDMDesenseE18apple80211_channelx"
+},
+{
+"slot": 3064,
+"symbol": "__ZN23IO80211SkywalkInterface17removePacketQueueEP20IO80211FlowQueueHash"
+},
+{
+"slot": 3072,
+"symbol": "__ZN21IO80211InfraInterface13setDebugFlagsEyj"
+},
+{
+"slot": 3080,
+"symbol": "__ZN21IO80211InfraInterface10debugFlagsEv"
+},
+{
+"slot": 3088,
+"symbol": "__ZN21IO80211InfraInterface24setInterfaceChipCountersEP22apple80211_stat_reportP27apple80211_chip_counters_txP33apple80211_chip_error_counters_txP27apple80211_chip_counters_rx"
+},
+{
+"slot": 3096,
+"symbol": "__ZN21IO80211InfraInterface20setInterfaceMIBdot11EP22apple80211_stat_reportP50apple80211_ManagementInformationBasedot11_counters"
+},
+{
+"slot": 3104,
+"symbol": "__ZN21IO80211InfraInterface13setFrameStatsEP22apple80211_stat_reportP25apple80211_frame_counters"
+},
+{
+"slot": 3112,
+"symbol": "__ZN21IO80211InfraInterface26setInfraSpecificFrameStatsEP22apple80211_stat_reportP31apple80211_infra_specific_stats"
+},
+{
+"slot": 3120,
+"symbol": "__ZN21IO80211InfraInterface16getWmeTxCountersEPy"
+},
+{
+"slot": 3128,
+"symbol": "__ZN21IO80211InfraInterface21setPeerManagerLogFlagEjjj"
+},
+{
+"slot": 3136,
+"symbol": "__ZN21IO80211InfraInterface13setWoWEnabledEb"
+},
+{
+"slot": 3144,
+"symbol": "__ZN21IO80211InfraInterface10wowEnabledEv"
+},
+{
+"slot": 3152,
+"symbol": "__ZN23IO80211SkywalkInterface13printDataPathEP12userPrintCtx"
+},
+{
+"slot": 3160,
+"symbol": "__ZN23IO80211SkywalkInterface17getDataQueueDepthEv"
+},
+{
+"slot": 3168,
+"symbol": "__ZN23IO80211SkywalkInterface21findOrCreateFlowQueueE20IO80211FlowQueueHash"
+},
+{
+"slot": 3176,
+"symbol": "__ZN23IO80211SkywalkInterface30findOrCreateFlowQueueWithCacheE20IO80211FlowQueueHashPb"
+},
+{
+"slot": 3184,
+"symbol": "__ZN23IO80211SkywalkInterface21findExistingFlowQueueE20IO80211FlowQueueHash"
+},
+{
+"slot": 3192,
+"symbol": "__ZN23IO80211SkywalkInterface17removePacketQueueEPK20IO80211FlowQueueHash"
+},
+{
+"slot": 3200,
+"symbol": "__ZN23IO80211SkywalkInterface17flushPacketQueuesEv"
+},
+{
+"slot": 3208,
+"symbol": "__ZN23IO80211SkywalkInterface9cachePeerEP10ether_addrPj"
+},
+{
+"slot": 3216,
+"symbol": "__ZN23IO80211SkywalkInterface9shouldLogEy"
+},
+{
+"slot": 3224,
+"symbol": "__ZN23IO80211SkywalkInterface9vlogDebugEyPKcP13__va_list_tag"
+},
+{
+"slot": 3232,
+"symbol": "__ZN23IO80211SkywalkInterface12vlogDebugBPFEyPKcP13__va_list_tag"
+},
+{
+"slot": 3240,
+"symbol": "__ZN21IO80211InfraInterface24createLinkQualityMonitorEP11IO80211PeerP9IOService"
+},
+{
+"slot": 3248,
+"symbol": "__ZN21IO80211InfraInterface25releaseLinkQualityMonitorEP11IO80211Peer"
+},
+{
+"slot": 3256,
+"symbol": "__ZN23IO80211SkywalkInterface20getP2PSkywalkPeerMgrEv"
+},
+{
+"slot": 3264,
+"symbol": "__ZN23IO80211SkywalkInterface19isCommandProhibitedEi"
+},
+{
+"slot": 3272,
+"symbol": "__ZN23IO80211SkywalkInterface8findPeerER10ether_addr"
+},
+{
+"slot": 3280,
+"symbol": "__ZN23IO80211SkywalkInterface23setNotificationPropertyEPK8OSSymbolPK8OSObject"
+},
+{
+"slot": 3288,
+"symbol": "__ZN23IO80211SkywalkInterface21getWorkerMatchingDictEP8OSString"
+},
+{
+"slot": 3296,
+"symbol": "__ZN23IO80211SkywalkInterface4initEP9IOServiceP10ether_addr"
+},
+{
+"slot": 3304,
+"symbol": "__ZN23IO80211SkywalkInterface18isInterfaceEnabledEv"
+},
+{
+"slot": 3312,
+"symbol": "__ZN23IO80211SkywalkInterface14getSelfMacAddrEv"
+},
+{
+"slot": 3320,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3328,
+"symbol": "__ZN23IO80211SkywalkInterface13getPacketPoolEP8OSString"
+},
+{
+"slot": 3336,
+"symbol": "__ZNK23IO80211SkywalkInterface9getLoggerEv"
+},
+{
+"slot": 3344,
+"symbol": "__ZN23IO80211SkywalkInterface17handleSIOCSIFADDREv"
+},
+{
+"slot": 3352,
+"symbol": "__ZN23IO80211SkywalkInterface12debugHandlerEP24apple80211_debug_command"
+},
+{
+"slot": 3360,
+"symbol": "__ZN23IO80211SkywalkInterface9statsDumpEv"
+},
+{
+"slot": 3368,
+"symbol": "__ZN23IO80211SkywalkInterface19powerOnNotificationEv"
+},
+{
+"slot": 3376,
+"symbol": "__ZN23IO80211SkywalkInterface20powerOffNotificationEv"
+},
+{
+"slot": 3384,
+"symbol": "__ZN23IO80211SkywalkInterface15getTxQueueDepthEv"
+},
+{
+"slot": 3392,
+"symbol": "__ZN23IO80211SkywalkInterface18getRxQueueCapacityEv"
+},
+{
+"slot": 3400,
+"symbol": "__ZN23IO80211SkywalkInterface15updateRxCounterEy"
+},
+{
+"slot": 3408,
+"symbol": "__ZN23IO80211SkywalkInterface17getMultiCastQueueEv"
+},
+{
+"slot": 3416,
+"symbol": "__ZN21IO80211InfraInterface13getAssocStateEv"
+},
+{
+"slot": 3424,
+"symbol": "__ZN23IO80211SkywalkInterface16notifyQueueStateE17apple80211_wme_act"
+},
+{
+"slot": 3432,
+"symbol": "__ZN23IO80211SkywalkInterface13getTxHeadroomEv"
+},
+{
+"slot": 3440,
+"symbol": "__ZN23IO80211SkywalkInterface14getRxCompQueueEv"
+},
+{
+"slot": 3448,
+"symbol": "__ZN23IO80211SkywalkInterface14getTxCompQueueEv"
+},
+{
+"slot": 3456,
+"symbol": "__ZN23IO80211SkywalkInterface13getTxSubQueueE17apple80211_wme_ac"
+},
+{
+"slot": 3464,
+"symbol": "__ZN23IO80211SkywalkInterface15getTxPacketPoolEv"
+},
+{
+"slot": 3472,
+"symbol": "__ZN23IO80211SkywalkInterface15getRxPacketPoolEv"
+},
+{
+"slot": 3480,
+"symbol": "__ZN23IO80211SkywalkInterface14enableDatapathEv"
+},
+{
+"slot": 3488,
+"symbol": "__ZN23IO80211SkywalkInterface15disableDatapathEv"
+},
+{
+"slot": 3496,
+"symbol": "__ZN23IO80211SkywalkInterface14getNumTxQueuesEv"
+},
+{
+"slot": 3504,
+"symbol": "__ZN21IO80211InfraInterface13getLQMSummaryEP22apple80211_lqm_summary"
+},
+{
+"slot": 3512,
+"symbol": "__ZN23IO80211SkywalkInterface16getEventPipeSizeEv"
+},
+{
+"slot": 3520,
+"symbol": "__ZN23IO80211SkywalkInterface15createEventPipeEP20IO80211APIUserClient"
+},
+{
+"slot": 3528,
+"symbol": "__ZN23IO80211SkywalkInterface16destroyEventPipeEP20IO80211APIUserClient"
+},
+{
+"slot": 3536,
+"symbol": "__ZN23IO80211SkywalkInterface17setUserBufferInfoEP18IOMemoryDescriptory"
+},
+{
+"slot": 3544,
+"symbol": "__ZN23IO80211SkywalkInterface15postMessageIOUCEPKcjPvm"
+},
+{
+"slot": 3552,
+"symbol": "__ZN23IO80211SkywalkInterface16isIOUCPipeOpenedEv"
+},
+{
+"slot": 3560,
+"symbol": "__ZN23IO80211SkywalkInterface9getRingMDEP20IO80211APIUserClienty"
+},
+{
+"slot": 3568,
+"symbol": "__ZN23IO80211SkywalkInterface10attachPeerEP10ether_addr"
+},
+{
+"slot": 3576,
+"symbol": "__ZN23IO80211SkywalkInterface10detachPeerEP10ether_addr"
+},
+{
+"slot": 3584,
+"symbol": "__ZN23IO80211SkywalkInterface21setDebugTrafficReportEb"
+},
+{
+"slot": 3592,
+"symbol": "__ZN23IO80211SkywalkInterface25getDataPathInterfaceStatsEP36apple80211_data_path_interface_stats"
+},
+{
+"slot": 3600,
+"symbol": "__ZN23IO80211SkywalkInterface20getDataPathPeerStatsEP31apple80211_data_path_peer_stats"
+},
+{
+"slot": 3608,
+"symbol": "__ZN23IO80211SkywalkInterface22getLastQueuePacketTimeEP10ether_addr"
+},
+{
+"slot": 3616,
+"symbol": "__ZN23IO80211SkywalkInterface32getLastRxUnicastLinkActivityTimeEP10ether_addr"
+},
+{
+"slot": 3624,
+"symbol": "__ZN23IO80211SkywalkInterface24updateInterfaceDataStatsEP36apple80211_data_path_interface_stats"
+},
+{
+"slot": 3632,
+"symbol": "__ZN23IO80211SkywalkInterface19updatePeerDataStatsEP31apple80211_data_path_peer_stats"
+},
+{
+"slot": 3640,
+"symbol": "__ZN23IO80211SkywalkInterface12logTxLatencyEPhjy"
+},
+{
+"slot": 3648,
+"symbol": "__ZN23IO80211SkywalkInterface12logRxLatencyEjy"
+},
+{
+"slot": 3656,
+"symbol": "__ZN23IO80211SkywalkInterface20getNClearTxRxLatencyEP25apple80211_latency_all_acS1_"
+},
+{
+"slot": 3664,
+"symbol": "__ZN23IO80211SkywalkInterface18getLastTxTimeStampERy"
+},
+{
+"slot": 3672,
+"symbol": "__ZN23IO80211SkywalkInterface18getLastRxTimeStampERy"
+},
+{
+"slot": 3680,
+"symbol": "__ZN21IO80211InfraInterface20setLinkStateInternalE16IO80211LinkStatejbj"
+},
+{
+"slot": 3688,
+"symbol": "__ZN21IO80211InfraInterface19setCurrentApAddressEP10ether_addr"
+},
+{
+"slot": 3696,
+"symbol": "__ZN21IO80211InfraInterface21setWCL_ADVISORTY_INFOEP28apple80211_wcl_advisory_info"
+},
+{
+"slot": 3704,
+"symbol": "__ZN21IO80211InfraInterface20getWCL_TX_RX_LATENCYEP28apple80211_wcl_tx_rx_latency"
+},
+{
+"slot": 3712,
+"symbol": "__ZN21IO80211InfraInterface13createLQMDataEv"
+},
+{
+"slot": 3720,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3728,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3736,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3744,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3752,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3760,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3768,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3776,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3784,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3792,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3800,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3808,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3816,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3824,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3832,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3840,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3848,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3856,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3864,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3872,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3880,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3888,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3896,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3904,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3912,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3920,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3928,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3936,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3944,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3952,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3960,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3968,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3976,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3984,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 3992,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4000,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4008,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4016,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4024,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4032,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4040,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4048,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4056,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4064,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4072,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4080,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4088,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4096,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4104,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4112,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4120,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4128,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4136,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4144,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4152,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4160,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4168,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4176,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4184,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4192,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4200,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4208,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4216,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4224,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4232,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4240,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4248,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4256,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4264,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4272,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4280,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4288,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4296,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4304,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4312,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4320,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4328,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4336,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4344,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4352,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4360,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4368,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4376,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4384,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4392,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4400,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4408,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4416,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4424,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4432,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4440,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4448,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4456,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4464,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4472,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4480,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4488,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4496,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4504,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4512,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4520,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4528,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4536,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4544,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4552,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4560,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4568,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4576,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4584,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4592,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4600,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4608,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4616,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4624,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4632,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4640,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4648,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4656,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4664,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4672,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4680,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4688,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4696,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4704,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4712,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4720,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4728,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4736,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4744,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4752,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4760,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4768,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4776,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4784,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4792,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4800,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4808,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4816,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4824,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4832,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4840,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4848,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4856,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4864,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4872,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4880,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4888,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4896,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4904,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4912,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4920,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4928,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4936,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4944,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4952,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4960,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4968,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4976,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4984,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 4992,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5000,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5008,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5016,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5024,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5032,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5040,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5048,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5056,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5064,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5072,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5080,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5088,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5096,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5104,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5112,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5120,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5128,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5136,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5144,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5152,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5160,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5168,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5176,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5184,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5192,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5200,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5208,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5216,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5224,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5232,
+"symbol": "___cxa_pure_virtual"
+},
+{
+"slot": 5240,
+"symbol": "0"
+}
+]
+},
+"AppleBCMWLANLowLatencyInterface": {
+"entries": [
+{
+"slot": 0,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterfaceD1Ev"
+},
+{
+"slot": 8,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterfaceD0Ev"
+},
+{
+"slot": 16,
+"symbol": "__ZNK8OSObject7releaseEi"
+},
+{
+"slot": 24,
+"symbol": "__ZNK8OSObject14getRetainCountEv"
+},
+{
+"slot": 32,
+"symbol": "__ZNK8OSObject6retainEv"
+},
+{
+"slot": 40,
+"symbol": "__ZNK8OSObject7releaseEv"
+},
+{
+"slot": 48,
+"symbol": "__ZNK8OSObject9serializeEP11OSSerialize"
+},
+{
+"slot": 56,
+"symbol": "__ZNK31AppleBCMWLANLowLatencyInterface12getMetaClassEv"
+},
+{
+"slot": 64,
+"symbol": "__ZNK15OSMetaClassBase9isEqualToEPKS_"
+},
+{
+"slot": 72,
+"symbol": "__ZNK8OSObject12taggedRetainEPKv"
+},
+{
+"slot": 80,
+"symbol": "__ZNK8OSObject13taggedReleaseEPKv"
+},
+{
+"slot": 88,
+"symbol": "__ZNK8OSObject13taggedReleaseEPKvi"
+},
+{
+"slot": 96,
+"symbol": "__ZN9IOService8DispatchE5IORPC"
+},
+{
+"slot": 104,
+"symbol": "__ZN15OSMetaClassBase25_RESERVEDOSMetaClassBase4Ev"
+},
+{
+"slot": 112,
+"symbol": "__ZN15OSMetaClassBase25_RESERVEDOSMetaClassBase5Ev"
+},
+{
+"slot": 120,
+"symbol": "__ZN15OSMetaClassBase25_RESERVEDOSMetaClassBase6Ev"
+},
+{
+"slot": 128,
+"symbol": "__ZN15OSMetaClassBase25_RESERVEDOSMetaClassBase7Ev"
+},
+{
+"slot": 136,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface4initEv"
+},
+{
+"slot": 144,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface4freeEv"
+},
+{
+"slot": 152,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject0Ev"
+},
+{
+"slot": 160,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject1Ev"
+},
+{
+"slot": 168,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject2Ev"
+},
+{
+"slot": 176,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject3Ev"
+},
+{
+"slot": 184,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject4Ev"
+},
+{
+"slot": 192,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject5Ev"
+},
+{
+"slot": 200,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject6Ev"
+},
+{
+"slot": 208,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject7Ev"
+},
+{
+"slot": 216,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject8Ev"
+},
+{
+"slot": 224,
+"symbol": "__ZN8OSObject18_RESERVEDOSObject9Ev"
+},
+{
+"slot": 232,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject10Ev"
+},
+{
+"slot": 240,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject11Ev"
+},
+{
+"slot": 248,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject12Ev"
+},
+{
+"slot": 256,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject13Ev"
+},
+{
+"slot": 264,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject14Ev"
+},
+{
+"slot": 272,
+"symbol": "__ZN8OSObject19_RESERVEDOSObject15Ev"
+},
+{
+"slot": 280,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPKcPK15IORegistryPlanej"
+},
+{
+"slot": 288,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPK8OSStringPK15IORegistryPlanej"
+},
+{
+"slot": 296,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPK8OSSymbolPK15IORegistryPlanej"
+},
+{
+"slot": 304,
+"symbol": "__ZNK15IORegistryEntry15copyParentEntryEPK15IORegistryPlane"
+},
+{
+"slot": 312,
+"symbol": "__ZNK15IORegistryEntry14copyChildEntryEPK15IORegistryPlane"
+},
+{
+"slot": 320,
+"symbol": "__ZN15IORegistryEntry17runPropertyActionEPFiP8OSObjectPvS2_S2_S2_ES1_S2_S2_S2_S2_"
+},
+{
+"slot": 328,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry0Ev"
+},
+{
+"slot": 336,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry1Ev"
+},
+{
+"slot": 344,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry2Ev"
+},
+{
+"slot": 352,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry3Ev"
+},
+{
+"slot": 360,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry4Ev"
+},
+{
+"slot": 368,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry5Ev"
+},
+{
+"slot": 376,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry6Ev"
+},
+{
+"slot": 384,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry7Ev"
+},
+{
+"slot": 392,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry8Ev"
+},
+{
+"slot": 400,
+"symbol": "__ZN15IORegistryEntry25_RESERVEDIORegistryEntry9Ev"
+},
+{
+"slot": 408,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry10Ev"
+},
+{
+"slot": 416,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry11Ev"
+},
+{
+"slot": 424,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry12Ev"
+},
+{
+"slot": 432,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry13Ev"
+},
+{
+"slot": 440,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry14Ev"
+},
+{
+"slot": 448,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry15Ev"
+},
+{
+"slot": 456,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry16Ev"
+},
+{
+"slot": 464,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry17Ev"
+},
+{
+"slot": 472,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry18Ev"
+},
+{
+"slot": 480,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry19Ev"
+},
+{
+"slot": 488,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry20Ev"
+},
+{
+"slot": 496,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry21Ev"
+},
+{
+"slot": 504,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry22Ev"
+},
+{
+"slot": 512,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry23Ev"
+},
+{
+"slot": 520,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry24Ev"
+},
+{
+"slot": 528,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry25Ev"
+},
+{
+"slot": 536,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry26Ev"
+},
+{
+"slot": 544,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry27Ev"
+},
+{
+"slot": 552,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry28Ev"
+},
+{
+"slot": 560,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry29Ev"
+},
+{
+"slot": 568,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry30Ev"
+},
+{
+"slot": 576,
+"symbol": "__ZN15IORegistryEntry26_RESERVEDIORegistryEntry31Ev"
+},
+{
+"slot": 584,
+"symbol": "__ZN26IOSkywalkEthernetInterface4initEP12OSDictionary"
+},
+{
+"slot": 592,
+"symbol": "__ZN15IORegistryEntry16setPropertyTableEP12OSDictionary"
+},
+{
+"slot": 600,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPK8OSSymbolP8OSObject"
+},
+{
+"slot": 608,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPK8OSStringP8OSObject"
+},
+{
+"slot": 616,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPKcP8OSObject"
+},
+{
+"slot": 624,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPKcS1_"
+},
+{
+"slot": 632,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPKcb"
+},
+{
+"slot": 640,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPKcyj"
+},
+{
+"slot": 648,
+"symbol": "__ZN15IORegistryEntry11setPropertyEPKcPvj"
+},
+{
+"slot": 656,
+"symbol": "__ZN15IORegistryEntry14removePropertyEPK8OSSymbol"
+},
+{
+"slot": 664,
+"symbol": "__ZN15IORegistryEntry14removePropertyEPK8OSString"
+},
+{
+"slot": 672,
+"symbol": "__ZN15IORegistryEntry14removePropertyEPKc"
+},
+{
+"slot": 680,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPK8OSSymbol"
+},
+{
+"slot": 688,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPK8OSString"
+},
+{
+"slot": 696,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPKc"
+},
+{
+"slot": 704,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPK8OSSymbolPK15IORegistryPlanej"
+},
+{
+"slot": 712,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPK8OSStringPK15IORegistryPlanej"
+},
+{
+"slot": 720,
+"symbol": "__ZNK15IORegistryEntry11getPropertyEPKcPK15IORegistryPlanej"
+},
+{
+"slot": 728,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPK8OSSymbol"
+},
+{
+"slot": 736,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPK8OSString"
+},
+{
+"slot": 744,
+"symbol": "__ZNK15IORegistryEntry12copyPropertyEPKc"
+},
+{
+"slot": 752,
+"symbol": "__ZNK15IORegistryEntry24dictionaryWithPropertiesEv"
+},
+{
+"slot": 760,
+"symbol": "__ZNK9IOService19serializePropertiesEP11OSSerialize"
+},
+{
+"slot": 768,
+"symbol": "__ZN15IORegistryEntry13setPropertiesEP8OSObject"
+},
+{
+"slot": 776,
+"symbol": "__ZNK15IORegistryEntry17getParentIteratorEPK15IORegistryPlane"
+},
+{
+"slot": 784,
+"symbol": "__ZNK15IORegistryEntry14applyToParentsEPFvPS_PvES1_PK15IORegistryPlane"
+},
+{
+"slot": 792,
+"symbol": "__ZNK15IORegistryEntry14getParentEntryEPK15IORegistryPlane"
+},
+{
+"slot": 800,
+"symbol": "__ZNK15IORegistryEntry16getChildIteratorEPK15IORegistryPlane"
+},
+{
+"slot": 808,
+"symbol": "__ZNK15IORegistryEntry15applyToChildrenEPFvPS_PvES1_PK15IORegistryPlane"
+},
+{
+"slot": 816,
+"symbol": "__ZNK15IORegistryEntry13getChildEntryEPK15IORegistryPlane"
+},
+{
+"slot": 824,
+"symbol": "__ZNK15IORegistryEntry7isChildEPS_PK15IORegistryPlaneb"
+},
+{
+"slot": 832,
+"symbol": "__ZNK15IORegistryEntry8isParentEPS_PK15IORegistryPlaneb"
+},
+{
+"slot": 840,
+"symbol": "__ZNK15IORegistryEntry7inPlaneEPK15IORegistryPlane"
+},
+{
+"slot": 848,
+"symbol": "__ZNK15IORegistryEntry8getDepthEPK15IORegistryPlane"
+},
+{
+"slot": 856,
+"symbol": "__ZN15IORegistryEntry14attachToParentEPS_PK15IORegistryPlane"
+},
+{
+"slot": 864,
+"symbol": "__ZN15IORegistryEntry16detachFromParentEPS_PK15IORegistryPlane"
+},
+{
+"slot": 872,
+"symbol": "__ZN15IORegistryEntry13attachToChildEPS_PK15IORegistryPlane"
+},
+{
+"slot": 880,
+"symbol": "__ZN15IORegistryEntry15detachFromChildEPS_PK15IORegistryPlane"
+},
+{
+"slot": 888,
+"symbol": "__ZN15IORegistryEntry11detachAboveEPK15IORegistryPlane"
+},
+{
+"slot": 896,
+"symbol": "__ZN15IORegistryEntry9detachAllEPK15IORegistryPlane"
+},
+{
+"slot": 904,
+"symbol": "__ZNK15IORegistryEntry7getNameEPK15IORegistryPlane"
+},
+{
+"slot": 912,
+"symbol": "__ZNK15IORegistryEntry8copyNameEPK15IORegistryPlane"
+},
+{
+"slot": 920,
+"symbol": "__ZNK15IORegistryEntry12compareNamesEP8OSObjectPP8OSString"
+},
+{
+"slot": 928,
+"symbol": "__ZNK15IORegistryEntry11compareNameEP8OSStringPS1_"
+},
+{
+"slot": 936,
+"symbol": "__ZN15IORegistryEntry7setNameEPK8OSSymbolPK15IORegistryPlane"
+},
+{
+"slot": 944,
+"symbol": "__ZN15IORegistryEntry7setNameEPKcPK15IORegistryPlane"
+},
+{
+"slot": 952,
+"symbol": "__ZNK15IORegistryEntry11getLocationEPK15IORegistryPlane"
+},
+{
+"slot": 960,
+"symbol": "__ZNK15IORegistryEntry12copyLocationEPK15IORegistryPlane"
+},
+{
+"slot": 968,
+"symbol": "__ZN15IORegistryEntry11setLocationEPK8OSSymbolPK15IORegistryPlane"
+},
+{
+"slot": 976,
+"symbol": "__ZN15IORegistryEntry11setLocationEPKcPK15IORegistryPlane"
+},
+{
+"slot": 984,
+"symbol": "__ZNK15IORegistryEntry7getPathEPcPiPK15IORegistryPlane"
+},
+{
+"slot": 992,
+"symbol": "__ZNK15IORegistryEntry16getPathComponentEPcPiPK15IORegistryPlane"
+},
+{
+"slot": 1000,
+"symbol": "__ZN15IORegistryEntry13childFromPathEPKcPK15IORegistryPlanePcPi"
+},
+{
+"slot": 1008,
+"symbol": "__ZN9IOService4initEP15IORegistryEntryPK15IORegistryPlane"
+},
+{
+"slot": 1016,
+"symbol": "__ZN9IOService16requestTerminateEPS_j"
+},
+{
+"slot": 1024,
+"symbol": "__ZN18IOSkywalkInterface13willTerminateEP9IOServicej"
+},
+{
+"slot": 1032,
+"symbol": "__ZN18IOSkywalkInterface12didTerminateEP9IOServicejPb"
+},
+{
+"slot": 1040,
+"symbol": "__ZN9IOService15nextIdleTimeoutEyyj"
+},
+{
+"slot": 1048,
+"symbol": "__ZN9IOService18systemWillShutdownEj"
+},
+{
+"slot": 1056,
+"symbol": "__ZN9IOService22copyClientWithCategoryEPK8OSSymbol"
+},
+{
+"slot": 1064,
+"symbol": "__ZN21IO80211InfraInterface15configureReportEP19IOReportChannelListjPvS2_"
+},
+{
+"slot": 1072,
+"symbol": "__ZN21IO80211InfraInterface12updateReportEP19IOReportChannelListjPvS2_"
+},
+{
+"slot": 1080,
+"symbol": "__ZN9IOService19_RESERVEDIOService2Ev"
+},
+{
+"slot": 1088,
+"symbol": "__ZN9IOService19_RESERVEDIOService3Ev"
+},
+{
+"slot": 1096,
+"symbol": "__ZN9IOService19_RESERVEDIOService4Ev"
+},
+{
+"slot": 1104,
+"symbol": "__ZN9IOService19_RESERVEDIOService5Ev"
+},
+{
+"slot": 1112,
+"symbol": "__ZN9IOService19_RESERVEDIOService6Ev"
+},
+{
+"slot": 1120,
+"symbol": "__ZN9IOService19_RESERVEDIOService7Ev"
+},
+{
+"slot": 1128,
+"symbol": "__ZN9IOService19_RESERVEDIOService8Ev"
+},
+{
+"slot": 1136,
+"symbol": "__ZN9IOService19_RESERVEDIOService9Ev"
+},
+{
+"slot": 1144,
+"symbol": "__ZN9IOService20_RESERVEDIOService10Ev"
+},
+{
+"slot": 1152,
+"symbol": "__ZN9IOService20_RESERVEDIOService11Ev"
+},
+{
+"slot": 1160,
+"symbol": "__ZN9IOService20_RESERVEDIOService12Ev"
+},
+{
+"slot": 1168,
+"symbol": "__ZN9IOService20_RESERVEDIOService13Ev"
+},
+{
+"slot": 1176,
+"symbol": "__ZN9IOService20_RESERVEDIOService14Ev"
+},
+{
+"slot": 1184,
+"symbol": "__ZN9IOService20_RESERVEDIOService15Ev"
+},
+{
+"slot": 1192,
+"symbol": "__ZN9IOService20_RESERVEDIOService16Ev"
+},
+{
+"slot": 1200,
+"symbol": "__ZN9IOService20_RESERVEDIOService17Ev"
+},
+{
+"slot": 1208,
+"symbol": "__ZN9IOService20_RESERVEDIOService18Ev"
+},
+{
+"slot": 1216,
+"symbol": "__ZN9IOService20_RESERVEDIOService19Ev"
+},
+{
+"slot": 1224,
+"symbol": "__ZN9IOService20_RESERVEDIOService20Ev"
+},
+{
+"slot": 1232,
+"symbol": "__ZN9IOService20_RESERVEDIOService21Ev"
+},
+{
+"slot": 1240,
+"symbol": "__ZN9IOService20_RESERVEDIOService22Ev"
+},
+{
+"slot": 1248,
+"symbol": "__ZN9IOService20_RESERVEDIOService23Ev"
+},
+{
+"slot": 1256,
+"symbol": "__ZN9IOService20_RESERVEDIOService24Ev"
+},
+{
+"slot": 1264,
+"symbol": "__ZN9IOService20_RESERVEDIOService25Ev"
+},
+{
+"slot": 1272,
+"symbol": "__ZN9IOService20_RESERVEDIOService26Ev"
+},
+{
+"slot": 1280,
+"symbol": "__ZN9IOService20_RESERVEDIOService27Ev"
+},
+{
+"slot": 1288,
+"symbol": "__ZN9IOService20_RESERVEDIOService28Ev"
+},
+{
+"slot": 1296,
+"symbol": "__ZN9IOService20_RESERVEDIOService29Ev"
+},
+{
+"slot": 1304,
+"symbol": "__ZN9IOService20_RESERVEDIOService30Ev"
+},
+{
+"slot": 1312,
+"symbol": "__ZN9IOService20_RESERVEDIOService31Ev"
+},
+{
+"slot": 1320,
+"symbol": "__ZN9IOService20_RESERVEDIOService32Ev"
+},
+{
+"slot": 1328,
+"symbol": "__ZN9IOService20_RESERVEDIOService33Ev"
+},
+{
+"slot": 1336,
+"symbol": "__ZN9IOService20_RESERVEDIOService34Ev"
+},
+{
+"slot": 1344,
+"symbol": "__ZN9IOService20_RESERVEDIOService35Ev"
+},
+{
+"slot": 1352,
+"symbol": "__ZN9IOService20_RESERVEDIOService36Ev"
+},
+{
+"slot": 1360,
+"symbol": "__ZN9IOService20_RESERVEDIOService37Ev"
+},
+{
+"slot": 1368,
+"symbol": "__ZN9IOService20_RESERVEDIOService38Ev"
+},
+{
+"slot": 1376,
+"symbol": "__ZN9IOService20_RESERVEDIOService39Ev"
+},
+{
+"slot": 1384,
+"symbol": "__ZN9IOService20_RESERVEDIOService40Ev"
+},
+{
+"slot": 1392,
+"symbol": "__ZN9IOService20_RESERVEDIOService41Ev"
+},
+{
+"slot": 1400,
+"symbol": "__ZN9IOService20_RESERVEDIOService42Ev"
+},
+{
+"slot": 1408,
+"symbol": "__ZN9IOService20_RESERVEDIOService43Ev"
+},
+{
+"slot": 1416,
+"symbol": "__ZN9IOService20_RESERVEDIOService44Ev"
+},
+{
+"slot": 1424,
+"symbol": "__ZN9IOService20_RESERVEDIOService45Ev"
+},
+{
+"slot": 1432,
+"symbol": "__ZN9IOService20_RESERVEDIOService46Ev"
+},
+{
+"slot": 1440,
+"symbol": "__ZN9IOService20_RESERVEDIOService47Ev"
+},
+{
+"slot": 1448,
+"symbol": "__ZNK9IOService8getStateEv"
+},
+{
+"slot": 1456,
+"symbol": "__ZN9IOService15registerServiceEj"
+},
+{
+"slot": 1464,
+"symbol": "__ZN9IOService5probeEPS_Pi"
+},
+{
+"slot": 1472,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface5startEP9IOService"
+},
+{
+"slot": 1480,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface4stopEP9IOService"
+},
+{
+"slot": 1488,
+"symbol": "__ZN9IOService4openEPS_jPv"
+},
+{
+"slot": 1496,
+"symbol": "__ZN9IOService5closeEPS_j"
+},
+{
+"slot": 1504,
+"symbol": "__ZNK9IOService6isOpenEPKS_"
+},
+{
+"slot": 1512,
+"symbol": "__ZN18IOSkywalkInterface10handleOpenEP9IOServicejPv"
+},
+{
+"slot": 1520,
+"symbol": "__ZN18IOSkywalkInterface11handleCloseEP9IOServicej"
+},
+{
+"slot": 1528,
+"symbol": "__ZNK18IOSkywalkInterface12handleIsOpenEPK9IOService"
+},
+{
+"slot": 1536,
+"symbol": "__ZN9IOService9terminateEj"
+},
+{
+"slot": 1544,
+"symbol": "__ZN9IOService8finalizeEj"
+},
+{
+"slot": 1552,
+"symbol": "__ZN9IOService18lockForArbitrationEb"
+},
+{
+"slot": 1560,
+"symbol": "__ZN9IOService20unlockForArbitrationEv"
+},
+{
+"slot": 1568,
+"symbol": "__ZN9IOService15terminateClientEPS_j"
+},
+{
+"slot": 1576,
+"symbol": "__ZN9IOService12getBusyStateEv"
+},
+{
+"slot": 1584,
+"symbol": "__ZN9IOService10adjustBusyEi"
+},
+{
+"slot": 1592,
+"symbol": "__ZN9IOService18matchPropertyTableEP12OSDictionaryPi"
+},
+{
+"slot": 1600,
+"symbol": "__ZN9IOService18matchPropertyTableEP12OSDictionary"
+},
+{
+"slot": 1608,
+"symbol": "__ZN9IOService13matchLocationEPS_"
+},
+{
+"slot": 1616,
+"symbol": "__ZN9IOService17addNeededResourceEPKc"
+},
+{
+"slot": 1624,
+"symbol": "__ZN9IOService15comparePropertyEP12OSDictionaryPKc"
+},
+{
+"slot": 1632,
+"symbol": "__ZN9IOService15comparePropertyEP12OSDictionaryPK8OSString"
+},
+{
+"slot": 1640,
+"symbol": "__ZN9IOService17comparePropertiesEP12OSDictionaryP12OSCollection"
+},
+{
+"slot": 1648,
+"symbol": "__ZN9IOService6attachEPS_"
+},
+{
+"slot": 1656,
+"symbol": "__ZN9IOService6detachEPS_"
+},
+{
+"slot": 1664,
+"symbol": "__ZNK9IOService11getProviderEv"
+},
+{
+"slot": 1672,
+"symbol": "__ZNK9IOService11getWorkLoopEv"
+},
+{
+"slot": 1680,
+"symbol": "__ZNK9IOService19getProviderIteratorEv"
+},
+{
+"slot": 1688,
+"symbol": "__ZNK9IOService23getOpenProviderIteratorEv"
+},
+{
+"slot": 1696,
+"symbol": "__ZNK9IOService9getClientEv"
+},
+{
+"slot": 1704,
+"symbol": "__ZNK9IOService17getClientIteratorEv"
+},
+{
+"slot": 1712,
+"symbol": "__ZNK9IOService21getOpenClientIteratorEv"
+},
+{
+"slot": 1720,
+"symbol": "__ZN9IOService20callPlatformFunctionEPK8OSSymbolbPvS3_S3_S3_"
+},
+{
+"slot": 1728,
+"symbol": "__ZN9IOService20callPlatformFunctionEPKcbPvS2_S2_S2_"
+},
+{
+"slot": 1736,
+"symbol": "__ZN9IOService12getResourcesEv"
+},
+{
+"slot": 1744,
+"symbol": "__ZN9IOService20getDeviceMemoryCountEv"
+},
+{
+"slot": 1752,
+"symbol": "__ZN9IOService24getDeviceMemoryWithIndexEj"
+},
+{
+"slot": 1760,
+"symbol": "__ZN9IOService24mapDeviceMemoryWithIndexEjj"
+},
+{
+"slot": 1768,
+"symbol": "__ZN9IOService15getDeviceMemoryEv"
+},
+{
+"slot": 1776,
+"symbol": "__ZN9IOService15setDeviceMemoryEP7OSArray"
+},
+{
+"slot": 1784,
+"symbol": "__ZN9IOService17registerInterruptEiP8OSObjectPFvS1_PvPS_iES2_"
+},
+{
+"slot": 1792,
+"symbol": "__ZN9IOService19unregisterInterruptEi"
+},
+{
+"slot": 1800,
+"symbol": "__ZN9IOService16getInterruptTypeEiPi"
+},
+{
+"slot": 1808,
+"symbol": "__ZN9IOService15enableInterruptEi"
+},
+{
+"slot": 1816,
+"symbol": "__ZN9IOService16disableInterruptEi"
+},
+{
+"slot": 1824,
+"symbol": "__ZN9IOService14causeInterruptEi"
+},
+{
+"slot": 1832,
+"symbol": "__ZN9IOService12requestProbeEj"
+},
+{
+"slot": 1840,
+"symbol": "__ZN9IOService7messageEjPS_Pv"
+},
+{
+"slot": 1848,
+"symbol": "__ZN9IOService13messageClientEjP8OSObjectPvm"
+},
+{
+"slot": 1856,
+"symbol": "__ZN9IOService14messageClientsEjPvm"
+},
+{
+"slot": 1864,
+"symbol": "__ZN9IOService16registerInterestEPK8OSSymbolPFiPvS3_jPS_S3_mES3_S3_"
+},
+{
+"slot": 1872,
+"symbol": "__ZN9IOService16applyToProvidersEPFvPS_PvES1_"
+},
+{
+"slot": 1880,
+"symbol": "__ZN9IOService14applyToClientsEPFvPS_PvES1_"
+},
+{
+"slot": 1888,
+"symbol": "__ZN9IOService17applyToInterestedEPK8OSSymbolPFvP8OSObjectPvES5_"
+},
+{
+"slot": 1896,
+"symbol": "__ZN9IOService23acknowledgeNotificationEPvj"
+},
+{
+"slot": 1904,
+"symbol": "__ZN23IO80211SkywalkInterface13newUserClientEP4taskPvjP12OSDictionaryPP12IOUserClient"
+},
+{
+"slot": 1912,
+"symbol": "__ZN9IOService13newUserClientEP4taskPvjPP12IOUserClient"
+},
+{
+"slot": 1920,
+"symbol": "__ZN23IO80211SkywalkInterface16stringFromReturnEi"
+},
+{
+"slot": 1928,
+"symbol": "__ZN23IO80211SkywalkInterface15errnoFromReturnEi"
+},
+{
+"slot": 1936,
+"symbol": "__ZN9IOService6PMinitEv"
+},
+{
+"slot": 1944,
+"symbol": "__ZN9IOService6PMstopEv"
+},
+{
+"slot": 1952,
+"symbol": "__ZN25IOSkywalkNetworkInterface10joinPMtreeEP9IOService"
+},
+{
+"slot": 1960,
+"symbol": "__ZN9IOService19registerPowerDriverEPS_P14IOPMPowerStatem"
+},
+{
+"slot": 1968,
+"symbol": "__ZN9IOService23requestPowerDomainStateEmP17IOPowerConnectionm"
+},
+{
+"slot": 1976,
+"symbol": "__ZN9IOService14activityTickleEmm"
+},
+{
+"slot": 1984,
+"symbol": "__ZN25IOSkywalkNetworkInterface17setAggressivenessEmm"
+},
+{
+"slot": 1992,
+"symbol": "__ZN9IOService17getAggressivenessEmPm"
+},
+{
+"slot": 2000,
+"symbol": "__ZN9IOService13addPowerChildEPS_"
+},
+{
+"slot": 2008,
+"symbol": "__ZN9IOService16removePowerChildEP17IOPowerConnection"
+},
+{
+"slot": 2016,
+"symbol": "__ZN9IOService18setIdleTimerPeriodEm"
+},
+{
+"slot": 2024,
+"symbol": "__ZN21IO80211InfraInterface13setPowerStateEmP9IOService"
+},
+{
+"slot": 2032,
+"symbol": "__ZN23IO80211SkywalkInterface27maxCapabilityForDomainStateEm"
+},
+{
+"slot": 2040,
+"symbol": "__ZN23IO80211SkywalkInterface31initialPowerStateForDomainStateEm"
+},
+{
+"slot": 2048,
+"symbol": "__ZN9IOService24powerStateForDomainStateEm"
+},
+{
+"slot": 2056,
+"symbol": "__ZN9IOService22powerStateWillChangeToEmmPS_"
+},
+{
+"slot": 2064,
+"symbol": "__ZN9IOService21powerStateDidChangeToEmmPS_"
+},
+{
+"slot": 2072,
+"symbol": "__ZN9IOService13askChangeDownEm"
+},
+{
+"slot": 2080,
+"symbol": "__ZN9IOService14tellChangeDownEm"
+},
+{
+"slot": 2088,
+"symbol": "__ZN9IOService16tellNoChangeDownEm"
+},
+{
+"slot": 2096,
+"symbol": "__ZN9IOService12tellChangeUpEm"
+},
+{
+"slot": 2104,
+"symbol": "__ZN9IOService16allowPowerChangeEm"
+},
+{
+"slot": 2112,
+"symbol": "__ZN9IOService17cancelPowerChangeEm"
+},
+{
+"slot": 2120,
+"symbol": "__ZN9IOService15powerChangeDoneEm"
+},
+{
+"slot": 2128,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface6enableEj"
+},
+{
+"slot": 2136,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface7disableEj"
+},
+{
+"slot": 2144,
+"symbol": "__ZN18IOSkywalkInterface21clientConnectWithTaskEP4taskP9IOServicej"
+},
+{
+"slot": 2152,
+"symbol": "__ZN18IOSkywalkInterface16clientDisconnectEP9IOServicej"
+},
+{
+"slot": 2160,
+"symbol": "__ZN18IOSkywalkInterface13isTerminatingEv"
+},
+{
+"slot": 2168,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface0Ev"
+},
+{
+"slot": 2176,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface1Ev"
+},
+{
+"slot": 2184,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface2Ev"
+},
+{
+"slot": 2192,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface3Ev"
+},
+{
+"slot": 2200,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface4Ev"
+},
+{
+"slot": 2208,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface5Ev"
+},
+{
+"slot": 2216,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface6Ev"
+},
+{
+"slot": 2224,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface7Ev"
+},
+{
+"slot": 2232,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface8Ev"
+},
+{
+"slot": 2240,
+"symbol": "__ZN18IOSkywalkInterface28_RESERVEDIOSkywalkInterface9Ev"
+},
+{
+"slot": 2248,
+"symbol": "__ZN18IOSkywalkInterface29_RESERVEDIOSkywalkInterface10Ev"
+},
+{
+"slot": 2256,
+"symbol": "__ZN25IOSkywalkNetworkInterface39registerNetworkInterfaceWithLogicalLinkEPKNS_16RegistrationInfoEP20IOSkywalkLogicalLinkP25IOSkywalkPacketBufferPoolS6_j"
+},
+{
+"slot": 2264,
+"symbol": "__ZN25IOSkywalkNetworkInterface21deregisterLogicalLinkEv"
+},
+{
+"slot": 2272,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface26initBSDInterfaceParametersEP18ifnet_init_eparamsPP11sockaddr_dl"
+},
+{
+"slot": 2280,
+"symbol": "__ZN21IO80211InfraInterface19prepareBSDInterfaceEP7__ifnetj"
+},
+{
+"slot": 2288,
+"symbol": "__ZN25IOSkywalkNetworkInterface20finalizeBSDInterfaceEP7__ifnetj"
+},
+{
+"slot": 2296,
+"symbol": "__ZNK25IOSkywalkNetworkInterface15getBSDInterfaceEv"
+},
+{
+"slot": 2304,
+"symbol": "__ZN25IOSkywalkNetworkInterface10setBSDNameEPKc"
+},
+{
+"slot": 2312,
+"symbol": "__ZNK25IOSkywalkNetworkInterface10getBSDNameEv"
+},
+{
+"slot": 2320,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface17processBSDCommandEP7__ifnetjPv"
+},
+{
+"slot": 2328,
+"symbol": "__ZN25IOSkywalkNetworkInterface23processInterfaceCommandEP5ifdrv"
+},
+{
+"slot": 2336,
+"symbol": "__ZN25IOSkywalkNetworkInterface23interfaceAdvisoryEnableEb"
+},
+{
+"slot": 2344,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface18setInterfaceEnableEb"
+},
+{
+"slot": 2352,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface15setRunningStateEb"
+},
+{
+"slot": 2360,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface17handleChosenMediaEj"
+},
+{
+"slot": 2368,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface22getSupportedMediaArrayEPjS0_"
+},
+{
+"slot": 2376,
+"symbol": "__ZN26IOSkywalkEthernetInterface16getPacketTapInfoEPjS0_"
+},
+{
+"slot": 2384,
+"symbol": "__ZNK25IOSkywalkNetworkInterface22getUnsentDataByteCountEPjS0_j"
+},
+{
+"slot": 2392,
+"symbol": "__ZN25IOSkywalkNetworkInterface21getSupportedWakeFlagsEPj"
+},
+{
+"slot": 2400,
+"symbol": "__ZN26IOSkywalkEthernetInterface17enableNetworkWakeEj"
+},
+{
+"slot": 2408,
+"symbol": "__ZNK25IOSkywalkNetworkInterface25calculateRingSizeForQueueEPK20IOSkywalkPacketQueuePj"
+},
+{
+"slot": 2416,
+"symbol": "__ZN26IOSkywalkEthernetInterface18getMaxTransferUnitEv"
+},
+{
+"slot": 2424,
+"symbol": "__ZN25IOSkywalkNetworkInterface18setMaxTransferUnitEj"
+},
+{
+"slot": 2432,
+"symbol": "__ZN26IOSkywalkEthernetInterface16getMinPacketSizeEv"
+},
+{
+"slot": 2440,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface18getHardwareAssistsEv"
+},
+{
+"slot": 2448,
+"symbol": "__ZN25IOSkywalkNetworkInterface18setHardwareAssistsEjj"
+},
+{
+"slot": 2456,
+"symbol": "__ZN26IOSkywalkEthernetInterface18getInterfaceFamilyEv"
+},
+{
+"slot": 2464,
+"symbol": "__ZN26IOSkywalkEthernetInterface21getInterfaceSubFamilyEv"
+},
+{
+"slot": 2472,
+"symbol": "__ZN26IOSkywalkEthernetInterface15getInitialMediaEv"
+},
+{
+"slot": 2480,
+"symbol": "__ZN23IO80211SkywalkInterface15getFeatureFlagsEv"
+},
+{
+"slot": 2488,
+"symbol": "__ZN25IOSkywalkNetworkInterface15getTxDataOffsetEv"
+},
+{
+"slot": 2496,
+"symbol": "__ZN25IOSkywalkNetworkInterface21captureInterfaceStateEj"
+},
+{
+"slot": 2504,
+"symbol": "__ZN25IOSkywalkNetworkInterface21restoreInterfaceStateEj"
+},
+{
+"slot": 2512,
+"symbol": "__ZN25IOSkywalkNetworkInterface6setMTUEj"
+},
+{
+"slot": 2520,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface6bpfTapEjj"
+},
+{
+"slot": 2528,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface16getBSDNamePrefixEv"
+},
+{
+"slot": 2536,
+"symbol": "__ZN25IOSkywalkNetworkInterface16getBSDUnitNumberEv"
+},
+{
+"slot": 2544,
+"symbol": "__ZN23IO80211SkywalkInterface17classNameOverrideEv"
+},
+{
+"slot": 2552,
+"symbol": "__ZN25IOSkywalkNetworkInterface14deferBSDAttachEb"
+},
+{
+"slot": 2560,
+"symbol": "__ZN25IOSkywalkNetworkInterface24reportDetailedLinkStatusEPK14if_link_status"
+},
+{
+"slot": 2568,
+"symbol": "__ZN25IOSkywalkNetworkInterface13getTSOOptionsEPNS_19IOSkywalkTSOOptionsE"
+},
+{
+"slot": 2576,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface0Ev"
+},
+{
+"slot": 2584,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface1Ev"
+},
+{
+"slot": 2592,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface2Ev"
+},
+{
+"slot": 2600,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface3Ev"
+},
+{
+"slot": 2608,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface4Ev"
+},
+{
+"slot": 2616,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface5Ev"
+},
+{
+"slot": 2624,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface6Ev"
+},
+{
+"slot": 2632,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface7Ev"
+},
+{
+"slot": 2640,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface8Ev"
+},
+{
+"slot": 2648,
+"symbol": "__ZN25IOSkywalkNetworkInterface35_RESERVEDIOSkywalkNetworkInterface9Ev"
+},
+{
+"slot": 2656,
+"symbol": "__ZN23IO80211SkywalkInterface18getHardwareAddressEP10ether_addr"
+},
+{
+"slot": 2664,
+"symbol": "__ZN23IO80211SkywalkInterface18setHardwareAddressEP10ether_addr"
+},
+{
+"slot": 2672,
+"symbol": "__ZN26IOSkywalkEthernetInterface19setLinkLayerAddressEP10ether_addr"
+},
+{
+"slot": 2680,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface24configureMulticastFilterEjPK10ether_addrj"
+},
+{
+"slot": 2688,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface21setMulticastAddressesEPK10ether_addrj"
+},
+{
+"slot": 2696,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface25setAllMulticastModeEnableEb"
+},
+{
+"slot": 2704,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface24setPromiscuousModeEnableEbj"
+},
+{
+"slot": 2712,
+"symbol": "__ZN26IOSkywalkEthernetInterface20reportNicProxyLimitsE22nicproxy_limits_info_s"
+},
+{
+"slot": 2720,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface20hwConfigNicProxyDataEP15nicproxy_info_s"
+},
+{
+"slot": 2728,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface0Ev"
+},
+{
+"slot": 2736,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface1Ev"
+},
+{
+"slot": 2744,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface2Ev"
+},
+{
+"slot": 2752,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface3Ev"
+},
+{
+"slot": 2760,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface4Ev"
+},
+{
+"slot": 2768,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface5Ev"
+},
+{
+"slot": 2776,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface6Ev"
+},
+{
+"slot": 2784,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface7Ev"
+},
+{
+"slot": 2792,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface8Ev"
+},
+{
+"slot": 2800,
+"symbol": "__ZN26IOSkywalkEthernetInterface36_RESERVEDIOSkywalkEthernetInterface9Ev"
+},
+{
+"slot": 2808,
+"symbol": "__ZN26IOSkywalkEthernetInterface37_RESERVEDIOSkywalkEthernetInterface10Ev"
+},
+{
+"slot": 2816,
+"symbol": "__ZN23IO80211SkywalkInterface17createPeerManagerEv"
+},
+{
+"slot": 2824,
+"symbol": "__ZN23IO80211SkywalkInterface10createPeerEPKhP18IO80211PeerManager"
+},
+{
+"slot": 2832,
+"symbol": "__ZN21IO80211InfraInterface11postMessageEjPvmb"
+},
+{
+"slot": 2840,
+"symbol": "__ZN23IO80211SkywalkInterface20reportDataPathEventsEjPvmb"
+},
+{
+"slot": 2848,
+"symbol": "__ZN21IO80211InfraInterface19recordOutputPacketsEP24TxSubmissionDequeueStatsS1_"
+},
+{
+"slot": 2856,
+"symbol": "__ZN23IO80211SkywalkInterface18recordOutputPacketE17apple80211_wme_acii"
+},
+{
+"slot": 2864,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface11logTxPacketEP20IO80211NetworkPacketP20PacketSkywalkScratch17apple80211_wme_acb"
+},
+{
+"slot": 2872,
+"symbol": "__ZN21IO80211InfraInterface21logTxCompletionPacketEP20IO80211NetworkPacketP20PacketSkywalkScratchPh17apple80211_wme_acijbb"
+},
+{
+"slot": 2880,
+"symbol": "__ZN21IO80211InfraInterface23recordCompletionPacketsEP24TxCompletionEnqueueStatsS1_"
+},
+{
+"slot": 2888,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface11inputPacketEP20IO80211NetworkPacketP15packet_info_tagP12ether_headerPbb"
+},
+{
+"slot": 2896,
+"symbol": "__ZN23IO80211SkywalkInterface24forwardInfraRelayPacketsEP20IO80211NetworkPacketP12ether_header"
+},
+{
+"slot": 2904,
+"symbol": "__ZN23IO80211SkywalkInterface21logSkywalkTxReqPacketEP20IO80211NetworkPacketP20PacketSkywalkScratchPh17apple80211_wme_acb"
+},
+{
+"slot": 2912,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface14pendingPacketsEh"
+},
+{
+"slot": 2920,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface11packetSpaceEh"
+},
+{
+"slot": 2928,
+"symbol": "__ZN23IO80211SkywalkInterface20isChipInterfaceReadyEv"
+},
+{
+"slot": 2936,
+"symbol": "__ZN21IO80211InfraInterface17isDebounceOnGoingEv"
+},
+{
+"slot": 2944,
+"symbol": "__ZN21IO80211InfraInterface12setLinkStateE16IO80211LinkStatejbj"
+},
+{
+"slot": 2952,
+"symbol": "__ZN21IO80211InfraInterface9linkStateEv"
+},
+{
+"slot": 2960,
+"symbol": "__ZN21IO80211InfraInterface16setScanningStateEjbP20apple80211_scan_datai"
+},
+{
+"slot": 2968,
+"symbol": "__ZN21IO80211InfraInterface16setDataPathStateEb"
+},
+{
+"slot": 2976,
+"symbol": "__ZN21IO80211InfraInterface14getScanManagerEv"
+},
+{
+"slot": 2984,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface13getControllerEv"
+},
+{
+"slot": 2992,
+"symbol": "__ZN21IO80211InfraInterface20updateLinkParametersEP33apple80211_interface_availability"
+},
+{
+"slot": 3000,
+"symbol": "__ZN21IO80211InfraInterface26updateInterfaceCoexRiskPctEy"
+},
+{
+"slot": 3008,
+"symbol": "__ZN21IO80211InfraInterface6setLQMEy"
+},
+{
+"slot": 3016,
+"symbol": "__ZN21IO80211InfraInterface16updateLinkStatusEv"
+},
+{
+"slot": 3024,
+"symbol": "__ZN21IO80211InfraInterface21updateLinkStatusGatedEv"
+},
+{
+"slot": 3032,
+"symbol": "__ZN21IO80211InfraInterface23setInterfaceExtendedCCAE18apple80211_channelP21apple80211_cca_report"
+},
+{
+"slot": 3040,
+"symbol": "__ZN21IO80211InfraInterface15setInterfaceCCAE18apple80211_channeli"
+},
+{
+"slot": 3048,
+"symbol": "__ZN21IO80211InfraInterface14setInterfaceNFE18apple80211_channelx"
+},
+{
+"slot": 3056,
+"symbol": "__ZN21IO80211InfraInterface23setInterfaceOFDMDesenseE18apple80211_channelx"
+},
+{
+"slot": 3064,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface17removePacketQueueEP20IO80211FlowQueueHash"
+},
+{
+"slot": 3072,
+"symbol": "__ZN21IO80211InfraInterface13setDebugFlagsEyj"
+},
+{
+"slot": 3080,
+"symbol": "__ZN21IO80211InfraInterface10debugFlagsEv"
+},
+{
+"slot": 3088,
+"symbol": "__ZN21IO80211InfraInterface24setInterfaceChipCountersEP22apple80211_stat_reportP27apple80211_chip_counters_txP33apple80211_chip_error_counters_txP27apple80211_chip_counters_rx"
+},
+{
+"slot": 3096,
+"symbol": "__ZN21IO80211InfraInterface20setInterfaceMIBdot11EP22apple80211_stat_reportP50apple80211_ManagementInformationBasedot11_counters"
+},
+{
+"slot": 3104,
+"symbol": "__ZN21IO80211InfraInterface13setFrameStatsEP22apple80211_stat_reportP25apple80211_frame_counters"
+},
+{
+"slot": 3112,
+"symbol": "__ZN21IO80211InfraInterface26setInfraSpecificFrameStatsEP22apple80211_stat_reportP31apple80211_infra_specific_stats"
+},
+{
+"slot": 3120,
+"symbol": "__ZN21IO80211InfraInterface16getWmeTxCountersEPy"
+},
+{
+"slot": 3128,
+"symbol": "__ZN21IO80211InfraInterface21setPeerManagerLogFlagEjjj"
+},
+{
+"slot": 3136,
+"symbol": "__ZN21IO80211InfraInterface13setWoWEnabledEb"
+},
+{
+"slot": 3144,
+"symbol": "__ZN21IO80211InfraInterface10wowEnabledEv"
+},
+{
+"slot": 3152,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface13printDataPathEP12userPrintCtx"
+},
+{
+"slot": 3160,
+"symbol": "__ZN23IO80211SkywalkInterface17getDataQueueDepthEv"
+},
+{
+"slot": 3168,
+"symbol": "__ZN23IO80211SkywalkInterface21findOrCreateFlowQueueE20IO80211FlowQueueHash"
+},
+{
+"slot": 3176,
+"symbol": "__ZN23IO80211SkywalkInterface30findOrCreateFlowQueueWithCacheE20IO80211FlowQueueHashPb"
+},
+{
+"slot": 3184,
+"symbol": "__ZN23IO80211SkywalkInterface21findExistingFlowQueueE20IO80211FlowQueueHash"
+},
+{
+"slot": 3192,
+"symbol": "__ZN23IO80211SkywalkInterface17removePacketQueueEPK20IO80211FlowQueueHash"
+},
+{
+"slot": 3200,
+"symbol": "__ZN23IO80211SkywalkInterface17flushPacketQueuesEv"
+},
+{
+"slot": 3208,
+"symbol": "__ZN23IO80211SkywalkInterface9cachePeerEP10ether_addrPj"
+},
+{
+"slot": 3216,
+"symbol": "__ZN23IO80211SkywalkInterface9shouldLogEy"
+},
+{
+"slot": 3224,
+"symbol": "__ZN23IO80211SkywalkInterface9vlogDebugEyPKcP13__va_list_tag"
+},
+{
+"slot": 3232,
+"symbol": "__ZN23IO80211SkywalkInterface12vlogDebugBPFEyPKcP13__va_list_tag"
+},
+{
+"slot": 3240,
+"symbol": "__ZN21IO80211InfraInterface24createLinkQualityMonitorEP11IO80211PeerP9IOService"
+},
+{
+"slot": 3248,
+"symbol": "__ZN21IO80211InfraInterface25releaseLinkQualityMonitorEP11IO80211Peer"
+},
+{
+"slot": 3256,
+"symbol": "__ZN23IO80211SkywalkInterface20getP2PSkywalkPeerMgrEv"
+},
+{
+"slot": 3264,
+"symbol": "__ZN23IO80211SkywalkInterface19isCommandProhibitedEi"
+},
+{
+"slot": 3272,
+"symbol": "__ZN23IO80211SkywalkInterface8findPeerER10ether_addr"
+},
+{
+"slot": 3280,
+"symbol": "__ZN23IO80211SkywalkInterface23setNotificationPropertyEPK8OSSymbolPK8OSObject"
+},
+{
+"slot": 3288,
+"symbol": "__ZN23IO80211SkywalkInterface21getWorkerMatchingDictEP8OSString"
+},
+{
+"slot": 3296,
+"symbol": "__ZN23IO80211SkywalkInterface4initEP9IOServiceP10ether_addr"
+},
+{
+"slot": 3304,
+"symbol": "__ZN23IO80211SkywalkInterface18isInterfaceEnabledEv"
+},
+{
+"slot": 3312,
+"symbol": "__ZN23IO80211SkywalkInterface14getSelfMacAddrEv"
+},
+{
+"slot": 3320,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface13setMacAddressER10ether_addr"
+},
+{
+"slot": 3328,
+"symbol": "__ZN23IO80211SkywalkInterface13getPacketPoolEP8OSString"
+},
+{
+"slot": 3336,
+"symbol": "__ZNK28AppleBCMWLANSkywalkInterface9getLoggerEv"
+},
+{
+"slot": 3344,
+"symbol": "__ZN23IO80211SkywalkInterface17handleSIOCSIFADDREv"
+},
+{
+"slot": 3352,
+"symbol": "__ZN23IO80211SkywalkInterface12debugHandlerEP24apple80211_debug_command"
+},
+{
+"slot": 3360,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface9statsDumpEv"
+},
+{
+"slot": 3368,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface19powerOnNotificationEv"
+},
+{
+"slot": 3376,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface20powerOffNotificationEv"
+},
+{
+"slot": 3384,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface15getTxQueueDepthEv"
+},
+{
+"slot": 3392,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface18getRxQueueCapacityEv"
+},
+{
+"slot": 3400,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface15updateRxCounterEy"
+},
+{
+"slot": 3408,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface17getMultiCastQueueEv"
+},
+{
+"slot": 3416,
+"symbol": "__ZN21IO80211InfraInterface13getAssocStateEv"
+},
+{
+"slot": 3424,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface16notifyQueueStateE17apple80211_wme_act"
+},
+{
+"slot": 3432,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface13getTxHeadroomEv"
+},
+{
+"slot": 3440,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface14getRxCompQueueEv"
+},
+{
+"slot": 3448,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface14getTxCompQueueEv"
+},
+{
+"slot": 3456,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface13getTxSubQueueE17apple80211_wme_ac"
+},
+{
+"slot": 3464,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface15getTxPacketPoolEv"
+},
+{
+"slot": 3472,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface15getRxPacketPoolEv"
+},
+{
+"slot": 3480,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface14enableDatapathEv"
+},
+{
+"slot": 3488,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface15disableDatapathEv"
+},
+{
+"slot": 3496,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface14getNumTxQueuesEv"
+},
+{
+"slot": 3504,
+"symbol": "__ZN21IO80211InfraInterface13getLQMSummaryEP22apple80211_lqm_summary"
+},
+{
+"slot": 3512,
+"symbol": "__ZN23IO80211SkywalkInterface16getEventPipeSizeEv"
+},
+{
+"slot": 3520,
+"symbol": "__ZN23IO80211SkywalkInterface15createEventPipeEP20IO80211APIUserClient"
+},
+{
+"slot": 3528,
+"symbol": "__ZN23IO80211SkywalkInterface16destroyEventPipeEP20IO80211APIUserClient"
+},
+{
+"slot": 3536,
+"symbol": "__ZN23IO80211SkywalkInterface17setUserBufferInfoEP18IOMemoryDescriptory"
+},
+{
+"slot": 3544,
+"symbol": "__ZN23IO80211SkywalkInterface15postMessageIOUCEPKcjPvm"
+},
+{
+"slot": 3552,
+"symbol": "__ZN23IO80211SkywalkInterface16isIOUCPipeOpenedEv"
+},
+{
+"slot": 3560,
+"symbol": "__ZN23IO80211SkywalkInterface9getRingMDEP20IO80211APIUserClienty"
+},
+{
+"slot": 3568,
+"symbol": "__ZN23IO80211SkywalkInterface10attachPeerEP10ether_addr"
+},
+{
+"slot": 3576,
+"symbol": "__ZN23IO80211SkywalkInterface10detachPeerEP10ether_addr"
+},
+{
+"slot": 3584,
+"symbol": "__ZN23IO80211SkywalkInterface21setDebugTrafficReportEb"
+},
+{
+"slot": 3592,
+"symbol": "__ZN23IO80211SkywalkInterface25getDataPathInterfaceStatsEP36apple80211_data_path_interface_stats"
+},
+{
+"slot": 3600,
+"symbol": "__ZN23IO80211SkywalkInterface20getDataPathPeerStatsEP31apple80211_data_path_peer_stats"
+},
+{
+"slot": 3608,
+"symbol": "__ZN23IO80211SkywalkInterface22getLastQueuePacketTimeEP10ether_addr"
+},
+{
+"slot": 3616,
+"symbol": "__ZN23IO80211SkywalkInterface32getLastRxUnicastLinkActivityTimeEP10ether_addr"
+},
+{
+"slot": 3624,
+"symbol": "__ZN23IO80211SkywalkInterface24updateInterfaceDataStatsEP36apple80211_data_path_interface_stats"
+},
+{
+"slot": 3632,
+"symbol": "__ZN23IO80211SkywalkInterface19updatePeerDataStatsEP31apple80211_data_path_peer_stats"
+},
+{
+"slot": 3640,
+"symbol": "__ZN23IO80211SkywalkInterface12logTxLatencyEPhjy"
+},
+{
+"slot": 3648,
+"symbol": "__ZN23IO80211SkywalkInterface12logRxLatencyEjy"
+},
+{
+"slot": 3656,
+"symbol": "__ZN23IO80211SkywalkInterface20getNClearTxRxLatencyEP25apple80211_latency_all_acS1_"
+},
+{
+"slot": 3664,
+"symbol": "__ZN23IO80211SkywalkInterface18getLastTxTimeStampERy"
+},
+{
+"slot": 3672,
+"symbol": "__ZN23IO80211SkywalkInterface18getLastRxTimeStampERy"
+},
+{
+"slot": 3680,
+"symbol": "__ZN21IO80211InfraInterface20setLinkStateInternalE16IO80211LinkStatejbj"
+},
+{
+"slot": 3688,
+"symbol": "__ZN28AppleBCMWLANSkywalkInterface19setCurrentApAddressEP10ether_addr"
+},
+{
+"slot": 3696,
+"symbol": "__ZN21IO80211InfraInterface21setWCL_ADVISORTY_INFOEP28apple80211_wcl_advisory_info"
+},
+{
+"slot": 3704,
+"symbol": "__ZN21IO80211InfraInterface20getWCL_TX_RX_LATENCYEP28apple80211_wcl_tx_rx_latency"
+},
+{
+"slot": 3712,
+"symbol": "__ZN21IO80211InfraInterface13createLQMDataEv"
+},
+{
+"slot": 3720,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10getCHANNELEP23apple80211_channel_data"
+},
+{
+"slot": 3728,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol12getPOWERSAVEEP25apple80211_powersave_data"
+},
+{
+"slot": 3736,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10getTXPOWEREP23apple80211_txpower_data"
+},
+{
+"slot": 3744,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol7getRATEEP20apple80211_rate_data"
+},
+{
+"slot": 3752,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10getOP_MODEEP22apple80211_opmode_data"
+},
+{
+"slot": 3760,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol7getRSSIEP20apple80211_rssi_data"
+},
+{
+"slot": 3768,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol21getSUPPORTED_CHANNELSEP27apple80211_sup_channel_data"
+},
+{
+"slot": 3776,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17getGUARD_INTERVALEP30apple80211_guard_interval_data"
+},
+{
+"slot": 3784,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol6getMCSEP19apple80211_mcs_data"
+},
+{
+"slot": 3792,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol19getPOWER_DEBUG_INFOEP27apple80211_power_debug_info"
+},
+{
+"slot": 3800,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16getHT_CAPABILITYEP24apple80211_ht_capability"
+},
+{
+"slot": 3808,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10getMCS_VHTEP23apple80211_mcs_vht_data"
+},
+{
+"slot": 3816,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16getCHANNELS_INFOEP24apple80211_channels_info"
+},
+{
+"slot": 3824,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17getVHT_CAPABILITYEP25apple80211_vht_capability"
+},
+{
+"slot": 3832,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15getROAM_PROFILEEP33apple80211_roam_profile_all_bands"
+},
+{
+"slot": 3840,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol21getCHIP_COUNTER_STATSEP21apple80211_chip_stats"
+},
+{
+"slot": 3848,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol24getDBG_GUARD_TIME_PARAMSEP32apple80211_dbg_guard_time_params"
+},
+{
+"slot": 3856,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol22getLEAKY_AP_STATS_MODEEP27apple80211_leaky_ap_setting"
+},
+{
+"slot": 3864,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol19getCOUNTRY_CHANNELSEP31apple80211_country_channel_data"
+},
+{
+"slot": 3872,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14getPRIVATE_MACEP27apple80211_private_mac_data"
+},
+{
+"slot": 3880,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17getRANGING_ENABLEEP35apple80211_ranging_enable_request_t"
+},
+{
+"slot": 3888,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16getRANGING_STARTEP34apple80211_ranging_start_request_t"
+},
+{
+"slot": 3896,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17getAWDL_RSDB_CAPSEP26apple80211_rsdb_capability"
+},
+{
+"slot": 3904,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol13getTKO_PARAMSEP21apple80211_tko_params"
+},
+{
+"slot": 3912,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol11getTKO_DUMPEP19apple80211_tko_dump"
+},
+{
+"slot": 3920,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol24getHW_SUPPORTED_CHANNELSEP27apple80211_sup_channel_data"
+},
+{
+"slot": 3928,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17getBTCOEX_PROFILEEP25apple80211_btcoex_profile"
+},
+{
+"slot": 3936,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol24getBTCOEX_PROFILE_ACTIVEEP37apple80211_btcoex_profile_active_data"
+},
+{
+"slot": 3944,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol12getTRAP_INFOEP25apple80211_trap_info_data"
+},
+{
+"slot": 3952,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16getTHERMAL_INDEXEP26apple80211_thermal_index_t"
+},
+{
+"slot": 3960,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17getMAX_NSS_FOR_APEP37apple80211_btcoex_max_nss_for_ap_data"
+},
+{
+"slot": 3968,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol26getBTCOEX_2G_CHAIN_DISABLEEP34apple80211_btcoex_2g_chain_disable"
+},
+{
+"slot": 3976,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15getPOWER_BUDGETEP25apple80211_power_budget_t"
+},
+{
+"slot": 3984,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol23getOFFLOAD_TCPKA_ENABLEEP33apple80211_offload_tcpka_enable_t"
+},
+{
+"slot": 3992,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15getRANGING_CAPSEP33apple80211_ranging_capabilities_t"
+},
+{
+"slot": 4000,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol13getLQM_CONFIGEP23apple80211_lqm_config_t"
+},
+{
+"slot": 4008,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol29getTRAP_CRASHTRACER_MINI_DUMPEP30apple80211_trap_mini_dump_data"
+},
+{
+"slot": 4016,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14getBEACON_INFOEP24apple80211_beacon_info_t"
+},
+{
+"slot": 4024,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol19getCHIP_POWER_RANGEEP27apple80211_chip_power_limit"
+},
+{
+"slot": 4032,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol6getNSSEP19apple80211_nss_data"
+},
+{
+"slot": 4040,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10getHW_ADDREP25apple80211_hw_mac_address"
+},
+{
+"slot": 4048,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol13getCHIP_DIAGSEP25appl80211_chip_diags_data"
+},
+{
+"slot": 4056,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol12getHP2P_CTRLEP20apple80211_hp2p_ctrl"
+},
+{
+"slot": 4064,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16getBSS_BLACKLISTEP13bss_blacklist"
+},
+{
+"slot": 4072,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol18getTXRX_CHAIN_INFOEP26apple80211_txrx_chain_info"
+},
+{
+"slot": 4080,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14getMIMO_STATUSEP22apple80211_mimo_status"
+},
+{
+"slot": 4088,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10getCUR_PMKEP14apple80211_pmk"
+},
+{
+"slot": 4096,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16getDYNSAR_DETAILEP24apple80211_dynsar_detail"
+},
+{
+"slot": 4104,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol24getCOUNTRY_CHANNELS_INFOEP24apple80211_channels_info"
+},
+{
+"slot": 4112,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14getLQM_SUMMARYEP22apple80211_lqm_summary"
+},
+{
+"slot": 4120,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol28getSLOW_WIFI_FEATURE_ENABLEDEP36apple80211_slow_wifi_feature_enabled"
+},
+{
+"slot": 4128,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16getTIMESYNC_INFOEP24apple80211_timesync_info"
+},
+{
+"slot": 4136,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15getSENSING_DATAEP25apple80211_sensing_data_t"
+},
+{
+"slot": 4144,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol22getWCL_FW_HOT_CHANNELSEP26apple80211_fw_hot_channels"
+},
+{
+"slot": 4152,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol23getWCL_LOW_LATENCY_INFOEP27apple80211_low_latency_info"
+},
+{
+"slot": 4160,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15getWCL_BSS_INFOEP21apple80211_beacon_msg"
+},
+{
+"slot": 4168,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol23getWCL_TRAFFIC_COUNTERSEP31apple80211_wcl_traffic_counters"
+},
+{
+"slot": 4176,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol29getWCL_GET_TX_BLANKING_STATUSEPj"
+},
+{
+"slot": 4184,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14getHE_COUNTERSEP26apple80211_he_counters_ctl"
+},
+{
+"slot": 4192,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20getWCL_CHANNELS_INFOEP21apple80211ChannelInfo"
+},
+{
+"slot": 4200,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol9getRSN_XEEP22apple80211_rsn_xe_data"
+},
+{
+"slot": 4208,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol18getSIB_COEX_STATUSEP26apple80211_sib_coex_status"
+},
+{
+"slot": 4216,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20getWIFI_BT_5G_POLICYEP30apple80211_wifi_bt_5g_policy_t"
+},
+{
+"slot": 4224,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol24getWCL_EXTENDED_BSS_INFOEP28apple80211_extended_bss_info"
+},
+{
+"slot": 4232,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol29getWCL_LOW_LATENCY_INFO_STATSEP32apple80211_wcl_low_latency_stats"
+},
+{
+"slot": 4240,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol26getWCL_BGSCAN_CACHE_RESULTEP42apple80211_bgscan_cached_network_data_list"
+},
+{
+"slot": 4248,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol18getWCL_WNM_OFFLOADEP28apple80211_wcl_wnm_offload_t"
+},
+{
+"slot": 4256,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol21getWIFI_NOISE_PER_ANTEP26apple80211_noise_per_ant_t"
+},
+{
+"slot": 4264,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16getFW_CLOCK_INFOEP24apple80211_fw_clock_info"
+},
+{
+"slot": 4272,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17getTIMESYNC_STATSEP25apple80211_timesync_stats"
+},
+{
+"slot": 4280,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol22getSYSTEM_SLEEP_CONFIGEP30apple80211_system_sleep_config"
+},
+{
+"slot": 4288,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol13setCIPHER_KEYEP14apple80211_key"
+},
+{
+"slot": 4296,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10setCHANNELEP23apple80211_channel_data"
+},
+{
+"slot": 4304,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol12setPOWERSAVEEP25apple80211_powersave_data"
+},
+{
+"slot": 4312,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10setTXPOWEREP23apple80211_txpower_data"
+},
+{
+"slot": 4320,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol7setRATEEP20apple80211_rate_data"
+},
+{
+"slot": 4328,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol12setIBSS_MODEEP23apple80211_network_data"
+},
+{
+"slot": 4336,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10setAP_MODEEP22apple80211_apmode_data"
+},
+{
+"slot": 4344,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol5setIEEP18apple80211_ie_data"
+},
+{
+"slot": 4352,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol11setWOW_TESTEP24apple80211_wow_test_data"
+},
+{
+"slot": 4360,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setCLEAR_PMKSA_CACHEEPv"
+},
+{
+"slot": 4368,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setVIRTUAL_IF_CREATEEP30apple80211_virt_if_create_data"
+},
+{
+"slot": 4376,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16setHT_CAPABILITYEP24apple80211_ht_capability"
+},
+{
+"slot": 4384,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14setOFFLOAD_ARPEP27apple80211_offload_arp_data"
+},
+{
+"slot": 4392,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14setOFFLOAD_NDPEP27apple80211_offload_ndp_data"
+},
+{
+"slot": 4400,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10setGAS_REQEP22apple80211_gas_query_t"
+},
+{
+"slot": 4408,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17setVHT_CAPABILITYEP25apple80211_vht_capability"
+},
+{
+"slot": 4416,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15setROAM_PROFILEEP33apple80211_roam_profile_all_bands"
+},
+{
+"slot": 4424,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol24setDBG_GUARD_TIME_PARAMSEP32apple80211_dbg_guard_time_params"
+},
+{
+"slot": 4432,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol22setLEAKY_AP_STATS_MODEEP27apple80211_leaky_ap_setting"
+},
+{
+"slot": 4440,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14setPRIVATE_MACEP27apple80211_private_mac_data"
+},
+{
+"slot": 4448,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol13setRESET_CHIPEP24apple80211_reset_command"
+},
+{
+"slot": 4456,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol8setCRASHEP24apple80211_crash_command"
+},
+{
+"slot": 4464,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17setRANGING_ENABLEEP35apple80211_ranging_enable_request_t"
+},
+{
+"slot": 4472,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16setRANGING_STARTEP34apple80211_ranging_start_request_t"
+},
+{
+"slot": 4480,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol23setRANGING_AUTHENTICATEEP41apple80211_ranging_authenticate_request_t"
+},
+{
+"slot": 4488,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol13setTKO_PARAMSEP21apple80211_tko_params"
+},
+{
+"slot": 4496,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17setBTCOEX_PROFILEEP25apple80211_btcoex_profile"
+},
+{
+"slot": 4504,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol24setBTCOEX_PROFILE_ACTIVEEP37apple80211_btcoex_profile_active_data"
+},
+{
+"slot": 4512,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16setTHERMAL_INDEXEP26apple80211_thermal_index_t"
+},
+{
+"slot": 4520,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol26setBTCOEX_2G_CHAIN_DISABLEEP34apple80211_btcoex_2g_chain_disable"
+},
+{
+"slot": 4528,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15setPOWER_BUDGETEP25apple80211_power_budget_t"
+},
+{
+"slot": 4536,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol23setOFFLOAD_TCPKA_ENABLEEP33apple80211_offload_tcpka_enable_t"
+},
+{
+"slot": 4544,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol13setLQM_CONFIGEP23apple80211_lqm_config_t"
+},
+{
+"slot": 4552,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol29setDYNAMIC_RSSI_WINDOW_CONFIGEP37apple80211_dynamic_rssi_window_config"
+},
+{
+"slot": 4560,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol24setUSB_HOST_NOTIFICATIONEP37apple80211_usb_host_notification_data"
+},
+{
+"slot": 4568,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol12setHP2P_CTRLEP20apple80211_hp2p_ctrl"
+},
+{
+"slot": 4576,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16setBSS_BLACKLISTEP13bss_blacklist"
+},
+{
+"slot": 4584,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15setSET_PROPERTYEP41apple80211_set_property_unserialized_data"
+},
+{
+"slot": 4592,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setROAM_CACHE_UPDATEEP26apple80211_roam_cache_data"
+},
+{
+"slot": 4600,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10setPM_MODEEP18apple80211_pm_mode"
+},
+{
+"slot": 4608,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol27setSET_WIFI_ASSERTION_STATEEP30apple80211_wifi_assertion_data"
+},
+{
+"slot": 4616,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setREALTIME_QOS_MSCSEP21apple80211_state_data"
+},
+{
+"slot": 4624,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17setSENSING_ENABLEEP27apple80211_sensing_enable_t"
+},
+{
+"slot": 4632,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol18setSENSING_DISABLEEP28apple80211_sensing_disable_t"
+},
+{
+"slot": 4640,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10set6G_MODEEP18apple80211_6G_mode"
+},
+{
+"slot": 4648,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setWCL_LEAVE_NETWORKEP24apple80211_leave_network"
+},
+{
+"slot": 4656,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14setWCL_REASSOCEP18apple80211_reassoc"
+},
+{
+"slot": 4664,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setWCL_SET_ROAM_LOCKEP24apple80211_set_roam_lock"
+},
+{
+"slot": 4672,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol33setWCL_LEGACY_ROAM_PROFILE_CONFIGEP37apple80211_legacy_roam_profile_config"
+},
+{
+"slot": 4680,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol26setWCL_ROAM_PROFILE_CONFIGEP30apple80211_roam_profile_config"
+},
+{
+"slot": 4688,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol22setWCL_ROAM_USER_CACHEEP26apple80211_user_roam_cache"
+},
+{
+"slot": 4696,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17setWCL_SCAN_ABORTEPv"
+},
+{
+"slot": 4704,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol21setWCL_REAL_TIME_MODEEP29apple80211_wcl_real_time_mode"
+},
+{
+"slot": 4712,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15setWCL_ARP_MODEEP23apple80211_wcl_arp_mode"
+},
+{
+"slot": 4720,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17setWCL_JOIN_ABORTEPv"
+},
+{
+"slot": 4728,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17setWCL_TRIGGER_CCEP9triggerCC"
+},
+{
+"slot": 4736,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15setWCL_SCAN_REQEP21apple80211ScanRequest"
+},
+{
+"slot": 4744,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16setWCL_ASSOCIATEEP25apple80211AssocCandidates"
+},
+{
+"slot": 4752,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17setWCL_QOS_PARAMSEP25apple80211_wcl_qos_params"
+},
+{
+"slot": 4760,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol19setWCL_LINK_UP_DONEEPv"
+},
+{
+"slot": 4768,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol30setWCL_SET_SCAN_HOME_AWAY_TIMEEP19scanHomeAndAwayTime"
+},
+{
+"slot": 4776,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol18setVOICE_IND_STATEEP26apple80211_voice_ind_state"
+},
+{
+"slot": 4784,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol24setWCL_LINK_STATE_UPDATEEP32apple80211_wcl_update_link_state"
+},
+{
+"slot": 4792,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol9setRSN_XEEP22apple80211_rsn_xe_data"
+},
+{
+"slot": 4800,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setWIFI_BT_5G_POLICYEP30apple80211_wifi_bt_5g_policy_t"
+},
+{
+"slot": 4808,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setWCL_ULOFDMA_STATEEP28apple80211_wcl_ulofdma_state"
+},
+{
+"slot": 4816,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol19setWCL_ACTION_FRAMEEP27apple80211_wcl_action_frame"
+},
+{
+"slot": 4824,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol12setGAS_ABORTEPv"
+},
+{
+"slot": 4832,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol19setOS_FEATURE_FLAGSEP24apple80211_feature_flags"
+},
+{
+"slot": 4840,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setDHCP_RENEWAL_DATAEP28apple80211_dhcp_renewal_data"
+},
+{
+"slot": 4848,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol27setBATTERY_POWERSAVE_CONFIGEP28apple80211_battery_ps_config"
+},
+{
+"slot": 4856,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14setMIMO_CONFIGEP22apple80211_mimo_config"
+},
+{
+"slot": 4864,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol30setWCL_CONFIG_BG_MOTIONPROFILEEP28apple80211_bg_motion_profile"
+},
+{
+"slot": 4872,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol24setWCL_CONFIG_BG_NETWORKEP21apple80211_bg_network"
+},
+{
+"slot": 4880,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setWCL_CONFIG_BGSCANEP18apple80211_bg_scan"
+},
+{
+"slot": 4888,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol23setWCL_CONFIG_BG_PARAMSEP20apple80211_bg_params"
+},
+{
+"slot": 4896,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16setPOWER_PROFILEEP24apple80211_power_profile"
+},
+{
+"slot": 4904,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol12setHEARTBEATEPv"
+},
+{
+"slot": 4912,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setINTERFACE_SETTINGEP28apple80211_interface_setting"
+},
+{
+"slot": 4920,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol22setBYPASS_TX_POWER_CAPEP30apple80211_bypass_tx_power_cap"
+},
+{
+"slot": 4928,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol30setFACETIME_WIFICALLING_PARAMSEP38apple80211_facetime_wificalling_params"
+},
+{
+"slot": 4936,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14setIPV4_PARAMSEP22apple80211_ipv4_params"
+},
+{
+"slot": 4944,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14setWCL_WNM_OPSEP27apple80211_wcl_wnm_config_t"
+},
+{
+"slot": 4952,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol18setWCL_WNM_OFFLOADEP28apple80211_wcl_wnm_offload_t"
+},
+{
+"slot": 4960,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol26setWCL_LIMITED_AGGREGATIONEP37apple80211_limited_aggregation_config"
+},
+{
+"slot": 4968,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol22setWCL_BCN_MUTE_CONFIGEP26apple80211_bcn_mute_config"
+},
+{
+"slot": 4976,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol20setEAP_FILTER_CONFIGEP28apple80211_eap_filter_config"
+},
+{
+"slot": 4984,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol21setWOW_LOW_POWER_MODEEP29apple80211_wow_low_power_mode"
+},
+{
+"slot": 4992,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol18setDUAL_POWER_MODEEP33apple80211_dual_power_mode_params"
+},
+{
+"slot": 5000,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol23setWCL_UPDATE_FAST_LANEEP19apple80211_fastlane"
+},
+{
+"slot": 5008,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol23setWCL_ASSOCIATED_SLEEPEP34apple80211_associated_sleep_config"
+},
+{
+"slot": 5016,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol22setCONGESTION_CTRL_INDEP40apple80211_congestion_control_indication"
+},
+{
+"slot": 5024,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol25setSTAND_ALONE_MODE_STATEEP27apple80211_standalone_state"
+},
+{
+"slot": 5032,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol14setIPV6_PARAMSEP22apple80211_ipv6_params"
+},
+{
+"slot": 5040,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol19setINFRA_ENUMERATEDEP27apple80211_infra_enumerated"
+},
+{
+"slot": 5048,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15setLMTPC_CONFIGEP23apple80211_lmtpc_config"
+},
+{
+"slot": 5056,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol21setTRAFFIC_ENG_PARAMSEP29apple80211_traffic_eng_params"
+},
+{
+"slot": 5064,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16setLE_SCAN_PARAMEP25apple80211_le_scan_params"
+},
+{
+"slot": 5072,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol16setTIMESYNC_GPIOEP24apple80211_timesync_gpio"
+},
+{
+"slot": 5080,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol18setHOST_CLOCK_INFOEP26apple80211_host_clock_info"
+},
+{
+"slot": 5088,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol18setFW_CLOCK_SOURCEEP26apple80211_fw_clock_source"
+},
+{
+"slot": 5096,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol21setTIMESYNC_TX_POLICYEP29apple80211_timesync_tx_policy"
+},
+{
+"slot": 5104,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol21setTIMESYNC_RX_POLICYEP29apple80211_timesync_rx_policy"
+},
+{
+"slot": 5112,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol18setTIMESTAMPING_ENEP26apple80211_timestamping_en"
+},
+{
+"slot": 5120,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol17setWCL_SOI_CONFIGEP36appl80211_sleep_on_inactivity_config"
+},
+{
+"slot": 5128,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol28setMWS_TIME_SHARING_WIFI_ENHEP27apple80211_mws_time_sharing"
+},
+{
+"slot": 5136,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol34setMWS_WIFI_TYPE_7_BITMAP_WIFI_ENHEP34apple80211_mws_wifi_channel_bitmap"
+},
+{
+"slot": 5144,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol27setMWS_COEX_BITMAP_WIFI_ENHEP34apple80211_mws_wifi_channel_bitmap"
+},
+{
+"slot": 5152,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol34setMWS_DISABLE_OCL_BITMAP_WIFI_ENHEP34apple80211_mws_wifi_channel_bitmap"
+},
+{
+"slot": 5160,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol27setMWS_RFEM_CONFIG_WIFI_ENHEP26apple80211_mws_rfem_config"
+},
+{
+"slot": 5168,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol39setMWS_ASSOC_PROTECTION_BITMAP_WIFI_ENHEP34apple80211_mws_wifi_channel_bitmap"
+},
+{
+"slot": 5176,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol25setMWS_SCAN_FREQ_WIFI_ENHEP24apple80211_mws_scan_freq"
+},
+{
+"slot": 5184,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol30setMWS_SCAN_FREQ_MODE_WIFI_ENHEP29apple80211_mws_scan_freq_mode"
+},
+{
+"slot": 5192,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol35setMWS_CONDITION_ID_BITMAP_WIFI_ENHEP34apple80211_mws_condition_id_config"
+},
+{
+"slot": 5200,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol33setMWS_ANTENNA_SELECTION_WIFI_ENHEP32apple80211_mws_antenna_selection"
+},
+{
+"slot": 5208,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol10setNDD_REQEP19apple80211_ndd_data"
+},
+{
+"slot": 5216,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol15setDBRG_ENTROPYEP23apple80211_drbg_entropy"
+},
+{
+"slot": 5224,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol13setSDB_ENABLEEP21apple80211_sdb_enable"
+},
+{
+"slot": 5232,
+"symbol": "__ZN25AppleBCMWLANInfraProtocol37setMWS_ACCESSORY_POWER_LIMIT_WIFI_ENHEP36apple80211_mws_accessory_power_limit"
+},
+{
+"slot": 5240,
+"symbol": "__ZN31AppleBCMWLANLowLatencyInterface5startEP16AppleBCMWLANCorePN26IOSkywalkEthernetInterface16RegistrationInfoE"
+},
+{
+"slot": 5248,
+"symbol": "0"
+}
+]
+}
+}

@@ -31,6 +31,9 @@ public:
     bool popTransmit(uint8_t *, size_t, size_t *, const uint8_t *holdPayloadFor, bool holdEverySize = false);
     // Frames macOS has queued that the driver hasn't taken yet.
     unsigned queuedTransmit() const { return transmitQueued; }
+    // Under the shared gate. Puts one Ethernet frame from the companion interface (llw0) into the same ring
+    // awdl0's own frames wait in, so it goes to the same peers on the same schedule. False when it didn't fit.
+    bool queueCompanionTransmit(const uint8_t *ethernet, size_t length);
     unsigned heldShortTransmit() const { return transmitHeldShort; }
     IOReturn initializeNetwork(IO80211Controller*, IOWorkLoop*, const ether_addr&);
     IOReturn receiveManagementFrame(IO80211Controller*, const uint8_t*, size_t, uint32_t, int32_t);
@@ -103,7 +106,7 @@ public:
     IOReturn setAWDL_AWDL_ADVERTISERS(awdl_peer_advert_add*) override { return unsupported("setAWDL_AWDL_ADVERTISERS"); }
     IOReturn setAWDL_DFSP_CONFIG(apple80211_awdl_dfsp_config*) override { return unsupported("setAWDL_DFSP_CONFIG"); }
     IOReturn setAWDL_DFSP_UCSA_CONFIG(apple80211_awdl_dfsp_ucsa_config*) override { return unsupported("setAWDL_DFSP_UCSA_CONFIG"); }
-    IOReturn setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create*) override { return unsupported("setCOMPANION_SKYWALK_IF_CREATE"); }
+    IOReturn setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create*) override;
     IOReturn setAWDL_OOB_SEC_PAYLOAD_REQUEST(apple80211_awdl_af_sec_payload_request*) override { return unsupported("setAWDL_OOB_SEC_PAYLOAD_REQUEST"); }
     IOReturn setLLW_PARAMS(apple80211_llw_params*) override;
     IOReturn setTX_RATE(apple80211_tx_rate*) override { return unsupported("setTX_RATE"); }
@@ -143,7 +146,7 @@ private:
     void noteQueueState(const char *);
     UInt32 acceptTransmit(IOSkywalkPacket *const *, UInt32);
     // Only under the shared gate. Each frame is a copy, so no packet waits on the radio.
-    struct TransmitFrame { uint16_t length; uint8_t bytes[1514]; };
+    struct TransmitFrame { uint16_t length; bool llw; uint8_t bytes[1514]; };   // llw: sent as plain RFC 1042, not AWDL
     // itlawdltxqueue=N, 128 to 4096: frames held while the radio can't send, such as while the
     // peer is on another channel. A full queue drops, and the sender's transport reads that as loss.
     // Set once, before the frames are allocated (about 1.5 KB each).
@@ -165,6 +168,15 @@ private:
     ItlAWDLNativeState nativeState;
     unsigned oobRequests = 0;
     unsigned peerCacheRequests = 0, llwParamRequests = 0;
+#if defined(ITL_AWDL_LLW)
+    // -itlawdlllw: the companion low latency interface (llw0), created when macOS asks for it with request 293.
+    // Owned here and torn down with this interface. itlawdlllwrx chooses which received frames it gets.
+    class ItlLLWInterface *companion = nullptr;
+    IO80211Controller *owner = nullptr;   // not retained: it owns this interface
+    bool companionWanted = false;
+    int companionReceiveRule = 0;
+    unsigned companionRequests = 0, companionTxQueued = 0, companionTxDropped = 0;
+#endif
     // Peer cache control (Continuity Camera, Sidecar traffic registration). The family sleeps after the call until
     // the driver posts event 51 with the same 464-byte record (+4 = 1 added, 3 deleted). A wakeup sent from inside
     // the handler is lost, because the caller has not gone to sleep yet, so the completion is queued here and
