@@ -6038,6 +6038,29 @@ static uint16_t awdlCoexBaSequence;
 static ItlAWDL::BaFilterState awdlCoexBaFilter;
 // What the phone's data looks like: retries, and modulation (index = rate_n_flags mod type), 80 MHz count.
 static uint32_t awdlCoexDataRxRetry, awdlCoexRxModulation[8], awdlCoexRxWide80;
+// Why data frames the listener heard on its channel from a known peer weren't handed on, one count per
+// ItlAWDL::DataReject (tools/awdl_rx_rejects.py names them). Their total is ITLAWDLCoexDataRxMalformed.
+static uint32_t awdlCoexRxReject[unsigned(ItlAWDL::DataReject::Count)];
+// First few aggregated (OuterLength) frames, 128 bytes each preceded by a 2-byte total length, to learn the layout.
+// 802.11 sequence gaps in the BA peer's unicast data, per TID (QoS data numbers each TID separately): frames the
+// peer sent that this radio never heard. Missing = delta-1 for a forward step of 2..2047; retries and reordering
+// (a step of 0 or over 2047) are not counted.
+static int32_t awdlCoexSeqLast[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+static uint32_t awdlCoexSeqSeen, awdlCoexSeqMissing, awdlCoexSeqGapRuns, awdlCoexSeqLongestGap;
+// Frames that arrive behind the newest one (a step back of 1..2047): reordering, or a gap filled late. Per TID, and
+// gap runs by length: 1, 2, 3-4, 5-8, 9-16, 17-32, 33+.
+// What the firmware reports before any of our checks (every frame, before it can be dropped), and where the receive
+// path drops: CRC or overrun failures (the first check in iwx_rx_mpdu_mq), duplicates, frames the reorder buffer keeps.
+static uint32_t awdlRxMpduTotal, awdlRxMpduBadCrc, awdlRxMpduBadOverrun, awdlRxDupDropped, awdlRxReorderHeld;
+static uint32_t awdlRxBadCrcRuns, awdlRxBadCrcRunLongest, awdlRxBadCrcRun;
+// The last gap events: firmware time (gp2, microseconds) of the frame after the gap, frames missing, its sequence
+// number, TID, retry bit and length. Oldest overwritten.
+struct AwdlSeqGapEvent { uint32_t gp2; uint16_t missing; uint16_t seq; uint16_t length; uint8_t tid; uint8_t retry; };
+static AwdlSeqGapEvent awdlCoexSeqGapRing[48];
+static uint32_t awdlCoexSeqGapRingCount;
+static uint32_t awdlCoexSeqLate, awdlCoexSeqTidSeen[8], awdlCoexSeqTidMissing[8], awdlCoexSeqRunBins[7];
+static uint8_t awdlCoexRxSamples[4][130];
+static unsigned awdlCoexRxSampleCount;
 // Unicast data rate for our frames: 0 legacy 24 Mbit/s, then HT MCS 4, 5, 7 (20 MHz, one stream). Steps
 // down after a window with over 20% failures, up after one with under 5%.
 static unsigned awdlCoexRateStep;
@@ -6404,6 +6427,41 @@ static void awdlCoexPublish()
             if (auto *mods = OSData::withBytes(awdlCoexRxModulation, sizeof(awdlCoexRxModulation))) {
                 root->setProperty("ITLAWDLCoexRxModulation", mods);
                 mods->release();
+            }
+            if (auto *why = OSData::withBytes(awdlCoexRxReject, sizeof(awdlCoexRxReject))) {
+                root->setProperty("ITLAWDLCoexRxRejectReasons", why);
+                why->release();
+            }
+            root->setProperty("ITLAWDLRxMpduTotal", awdlRxMpduTotal, 32);
+            root->setProperty("ITLAWDLRxMpduBadCrc", awdlRxMpduBadCrc, 32);
+            root->setProperty("ITLAWDLRxMpduBadOverrun", awdlRxMpduBadOverrun, 32);
+            root->setProperty("ITLAWDLRxBadCrcRuns", awdlRxBadCrcRuns, 32);
+            root->setProperty("ITLAWDLRxBadCrcRunLongest", awdlRxBadCrcRunLongest, 32);
+            root->setProperty("ITLAWDLRxDupDropped", awdlRxDupDropped, 32);
+            root->setProperty("ITLAWDLRxReorderHeld", awdlRxReorderHeld, 32);
+            if (auto *d = OSData::withBytes(awdlCoexSeqGapRing, sizeof(awdlCoexSeqGapRing))) {
+                root->setProperty("ITLAWDLCoexSeqGapRing", d); d->release();
+            }
+            root->setProperty("ITLAWDLCoexSeqGapRingCount", awdlCoexSeqGapRingCount, 32);
+            root->setProperty("ITLAWDLCoexSeqSeen", awdlCoexSeqSeen, 32);
+            root->setProperty("ITLAWDLCoexSeqMissing", awdlCoexSeqMissing, 32);
+            root->setProperty("ITLAWDLCoexSeqGapRuns", awdlCoexSeqGapRuns, 32);
+            root->setProperty("ITLAWDLCoexSeqLongestGap", awdlCoexSeqLongestGap, 32);
+            root->setProperty("ITLAWDLCoexSeqLate", awdlCoexSeqLate, 32);
+            if (auto *d = OSData::withBytes(awdlCoexSeqTidSeen, sizeof(awdlCoexSeqTidSeen))) {
+                root->setProperty("ITLAWDLCoexSeqTidSeen", d); d->release();
+            }
+            if (auto *d = OSData::withBytes(awdlCoexSeqTidMissing, sizeof(awdlCoexSeqTidMissing))) {
+                root->setProperty("ITLAWDLCoexSeqTidMissing", d); d->release();
+            }
+            if (auto *d = OSData::withBytes(awdlCoexSeqRunBins, sizeof(awdlCoexSeqRunBins))) {
+                root->setProperty("ITLAWDLCoexSeqRunBins", d); d->release();
+            }
+            if (awdlCoexRxSampleCount) {
+                if (auto *smp = OSData::withBytes(awdlCoexRxSamples, sizeof(awdlCoexRxSamples))) {
+                    root->setProperty("ITLAWDLCoexRxOuterLengthSamples", smp);
+                    smp->release();
+                }
             }
             root->setProperty("ITLAWDLCoexBaRequests", awdlCoexBaRequests, 32);
             root->setProperty("ITLAWDLCoexBaSessions", awdlCoexBaSessions, 32);
@@ -9129,6 +9187,40 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                 if (awdlVht80TwoStream(rate_n_flags))
                     ++awdlCoexRxVht80TwoStream;
             }
+            if (!(cf[4] & 1) && !(cf[1] & 0x08) && dataLen >= 26 && (cf[0] & 0xf0) == 0x80 && awdlCoexBaPeerAdded &&
+                ItlAWDL::sameAddress(cf + 10, awdlCoexBaPeer)) {
+                const unsigned tid = cf[24] & 7;
+                const int32_t seq = int32_t(((unsigned(cf[22]) | unsigned(cf[23]) << 8) >> 4) & 4095);
+                if (awdlCoexSeqLast[tid] >= 0) {
+                    const int32_t step = (seq - awdlCoexSeqLast[tid]) & 4095;
+                    if (step >= 2 && step < 2048) {
+                        awdlCoexSeqMissing += uint32_t(step - 1);
+                        awdlCoexSeqTidMissing[tid] += uint32_t(step - 1);
+                        const uint32_t run = uint32_t(step - 1);
+                        ++awdlCoexSeqRunBins[run == 1 ? 0 : run == 2 ? 1 : run <= 4 ? 2 : run <= 8 ? 3 : run <= 16 ? 4 : run <= 32 ? 5 : 6];
+                        {
+                            AwdlSeqGapEvent &event = awdlCoexSeqGapRing[awdlCoexSeqGapRingCount++ % nitems(awdlCoexSeqGapRing)];
+                            event.gp2 = device_timestamp;
+                            event.missing = uint16_t(run);
+                            event.seq = uint16_t(seq);
+                            event.length = uint16_t(dataLen);
+                            event.tid = uint8_t(tid);
+                            event.retry = 0;
+                        }
+                        ++awdlCoexSeqGapRuns;
+                        if (uint32_t(step - 1) > awdlCoexSeqLongestGap)
+                            awdlCoexSeqLongestGap = uint32_t(step - 1);
+                    }
+                    if (step >= 2048)
+                        ++awdlCoexSeqLate;
+                    if (step < 2048)
+                        awdlCoexSeqLast[tid] = seq;
+                } else {
+                    awdlCoexSeqLast[tid] = seq;
+                }
+                ++awdlCoexSeqSeen;
+                ++awdlCoexSeqTidSeen[tid];
+            }
             if (awdlCoexData && !mbuf_next(m) && dataLen + 4 <= sizeof(awdlCoexDataBuf)) {
                 ++awdlCoexDataRx;
                 ItlAWDL::DataFrameView view;
@@ -9158,6 +9250,15 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                     awdlCoexLastDataUS = awdlUptimeUS();
                 } else {
                     ++awdlCoexDataRxMalformed;
+                    const ItlAWDL::DataReject why = ItlAWDL::classifyDataFrame(cf, dataLen, false);
+                    ++awdlCoexRxReject[unsigned(why)];
+                    if (why == ItlAWDL::DataReject::OuterLength && awdlCoexRxSampleCount < 4 &&
+                        (awdlCoexRxReject[unsigned(why)] & 0x3ff) == 1) {
+                        uint8_t *smp = awdlCoexRxSamples[awdlCoexRxSampleCount++];
+                        smp[0] = uint8_t(dataLen >> 8);
+                        smp[1] = uint8_t(dataLen);
+                        memcpy(smp + 2, cf, dataLen < 128 ? dataLen : 128);
+                    }
                 }
             }
 #endif
@@ -9690,11 +9791,21 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         mbuf_freem(m);
         return;
     }
+    ++awdlRxMpduTotal;
     if (!(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_CRC_OK)) ||
         !(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_OVERRUN_OK))) {
+        if (!(desc->status & htole16(IWX_RX_MPDU_RES_STATUS_CRC_OK)))
+            ++awdlRxMpduBadCrc;
+        else
+            ++awdlRxMpduBadOverrun;
+        if (!awdlRxBadCrcRun++)
+            ++awdlRxBadCrcRuns;
+        if (awdlRxBadCrcRun > awdlRxBadCrcRunLongest)
+            awdlRxBadCrcRunLongest = awdlRxBadCrcRun;
         mbuf_freem(m);
         return; /* drop */
     }
+    awdlRxBadCrcRun = 0;
     
     len = le16toh(desc->mpdu_len);
     if (ic->ic_opmode == IEEE80211_M_MONITOR) {
@@ -9820,6 +9931,7 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         }
     }
     if (iwx_detect_duplicate(sc, m, desc, &rxi)) {
+        ++awdlRxDupDropped;
         if (awdlPeerData)
             ++awdlRxSequences.counts.duplicatesDropped;
         mbuf_freem(m);
@@ -9849,8 +9961,10 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
     
     if (iwx_rx_reorder(sc, m, chanidx, desc,
                        (phy_info & IWX_RX_MPDU_PHY_SHORT_PREAMBLE),
-                       rate_n_flags, device_timestamp, &rxi, ml))
+                       rate_n_flags, device_timestamp, &rxi, ml)) {
+        ++awdlRxReorderHeld;
         return;
+    }
     
     awdlRxMacMaskValid = sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210;
     awdlRxMacMask = awdlRxMacMaskValid ? desc->v3.mac_context : 0;

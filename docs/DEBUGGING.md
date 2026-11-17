@@ -68,6 +68,40 @@ All under the I/O Registry root (`ioreg -l -w0 | grep ITLAWDLCoex`). Counters on
 | `BaPeerAdded`, `BaPeerAccepted` | The phone's firmware station exists; the phone's Block Ack request was answered |
 | `BaSessions`, `BaRxIdleTeardowns` | Receive sessions opened, and torn down after 60 s idle |
 
+**Where received frames are lost or dropped** (added while chasing Continuity Camera's video loss; all at the registry root). The driver counts at the first point it sees a frame and again at each place it can drop one. (`ITLAWDLRxMpduBadCrc` to `ReorderHeld` and `SeqGapRing`, and the per-TID and bin counters under Sequence gaps, were added most recently and had not been read on hardware when this was written; `SeqSeen`, `SeqMissing`, `SeqGapRuns`, `SeqLongestGap` were.)
+
+| Key | Meaning |
+| --- | --- |
+| `ITLAWDLRxMpduTotal` | Every frame the firmware reports, before any check (all stations and channels, not just AWDL) |
+| `ITLAWDLRxMpduBadCrc`, `ITLAWDLRxMpduBadOverrun` | Frames the firmware flagged as failing the CRC, or overrun, and the driver dropped at its first check. Radio corruption shows up here, and nowhere else: a corrupted frame has no usable sender or sequence number |
+| `ITLAWDLRxBadCrcRuns`, `ITLAWDLRxBadCrcRunLongest` | How many runs of consecutive bad frames, and the longest run |
+| `ITLAWDLRxDupDropped` | Frames dropped as duplicates of one already received (retries) |
+| `ITLAWDLRxReorderHeld` | Frames the receive reorder buffer kept back to deliver in order. They come out later, so this is not loss |
+| `ITLAWDLCoexRxRejectReasons` | Data frames the listener heard from a known peer that were not handed on, by the first check each failed (`DataReject` in `include/AWDLDataFrame.hpp`: short, QoS Null, wrong BSSID, protected, A-MSDU, outer length, not LLC/SNAP, not IPv6, bad IPv6). `python3 -I tools/awdl_rx_rejects.py` reads and explains it; with two registry dumps it shows the change between them. `DataRxMalformed` is its total. In a healthy run it stays 0 |
+| `ITLAWDLCoexRxOuterLengthSamples` | The first few frames rejected for a wrong outer length (128 bytes each, with a 2-byte total length in front), to learn their layout. This is how the camera's plain RFC 1042 frames were identified; the parser now accepts them, so only frames with a genuinely wrong length land here |
+
+**Sequence gaps** measure frames the iPhone sent that this radio never heard. 802.11 numbers each TID's frames; the driver watches the unicast QoS data of its Block Ack peer and counts a forward step of 2 to 2047 as missing frames. A frame that arrives behind the newest one is counted as late (reordering), not missing. Caveat: the sender numbers per receiver, so frames it sent to another device would look like gaps too. Compare with the media stack's own loss figure before treating this as exact.
+
+| Key | Meaning |
+| --- | --- |
+| `ITLAWDLCoexSeqSeen`, `SeqMissing` | Frames seen, and frames missing by sequence number. 7.5% missing broke the camera's video |
+| `SeqGapRuns`, `SeqLongestGap`, `SeqRunBins` | How many gaps, the longest, and their lengths in bins (1, 2, 3-4, 5-8, 9-16, 17-32, 33+). Many short gaps and a few long ones point at different causes |
+| `SeqLate` | Frames that arrived behind the newest one. If it is close to `SeqMissing`, the gaps are reordering, not loss |
+| `SeqTidSeen`, `SeqTidMissing` | Per TID (8 values each). Loss on one TID only is probably another receiver's frames |
+| `SeqGapRing`, `SeqGapRingCount` | The last 48 gap events, 12 bytes each: firmware time (`gp2`, microseconds, u32), frames missing (u16), sequence number (u16), length (u16), TID (u8), retry (u8). The firmware time lets you line the gaps up with the AWDL schedule |
+
+**`llw0`** (with `-itlawdlllw`; `ioreg -l -w0 | grep ItlwmLLW`):
+
+| Key | Meaning |
+| --- | --- |
+| `ItlwmLLWStage` | `registered` once the interface exists |
+| `ItlwmLLWRxWanted`, `RxDelivered`, `RxFailed` | Frames claimed for `llw0`, delivered into its queue, and failed. `RxDelivered` equal to `RxWanted` with `RxFailed` 0 is the healthy state |
+| `ItlwmLLWRxDestinationsSeen`, `TxDestinations` | Frames by IPv6 destination class (link-local, unique local, multicast, other). Camera media is unique local |
+| `ItlwmLLWTxOffered`, `TxForwarded`, `TxDropped`, `TxCompleteFailed` | Packets macOS gave `llw0` to send, those queued onto `awdl0`'s ring, dropped, and failed to complete |
+| `ItlwmLLWEnableCalls`, `DisableCalls`, `Mtu`, `MtuResult`, `CreateResult` | Lifecycle: `Enable` 1 once macOS enabled it, the MTU in force, the result of creating it |
+
+`ifconfig llw0` and `netstat -I llw0 -b` give the kernel's view (`Ipkts`, bytes). `llw0`'s `Ipkts` should track `ItlwmLLWRxDelivered`.
+
 **On the interface** (`ioreg -w0 -r -c ItlAWDLInterface -d 1 -l`): `ItlwmAWDLTxPacketsOffered`, `TxAccepted`, `TxCompleted` and `TxDropped` count packets from macOS into the driver. `TxDropped` should stay 0. `ItlwmAWDLClientEvents` records who opened and closed `awdl0`. `ItlwmAWDLLastUnsupported` names the last call the driver refused, usually `setMacAddress` or `setAWDL_AWDL_ADVERTISERS`, which is expected ([noise](#6-log-noise-that-is-harmless)).
 
 ## 4. Logs
@@ -122,9 +156,13 @@ It pings with payloads from 56 to 1436 (IP sizes 104 to 1484), in shuffled order
 
 For Continuity Camera, `tools/diag/trace_peer_cache.d` (the peer-cache request and its caller), `tools/diag/trace_umi.d` and `tools/diag/trace_umi_chain.d` (each wait on a peer-manager event, each signal, the UMI chain) print one line per call with a short stack. Start one in the foreground, reproduce, then Ctrl-C; the output file is the result. See [Case 3](#case-3-continuity-camera-gets-part-of-the-way).
 
+### Capturing a Continuity Camera attempt (root)
+
+`tools/diag/llw_attempt.sh` runs a 50 s capture to `/var/tmp/izzy-llw-HHMMSS`: `awdl0` and `llw0` packet captures, the registry before and after, the log, Skywalk's own tables (`skywalkctl` interface, channel, flow, flow-owner, flow-switch) and `tools/diag/trace_llw_netif.d`. Start it, then open Photo Booth and choose the iPhone camera within the window. An empty `llw0.pcap` (24 bytes) means no traffic crossed `llw0`: check the iPhone was listed as a camera and the stream was started inside the window before suspecting the driver. `python3 -I tools/awdl_rx_rejects.py` and the counters above read the driver's side.
+
 ### Who refuses a packet (root, `dtrace`)
 
-SIP has to allow `dtrace` (`csrutil status`; it was disabled on the test Mac). Run it in the foreground and stop it with Ctrl-C, so it flushes.
+SIP has to allow `dtrace` (`csrutil status`; it was disabled on the test Mac). Run it in the foreground and stop it with Ctrl-C, so it flushes. **`fbt` could not see this driver's own functions on the test Mac** (`dtrace -l -n 'fbt::*ItlIwx*:entry'` matched nothing although the kext was loaded; a script that probes them runs silently and prints nothing, because `-Z` allows probes that don't exist). `fbt` works for Apple's kernel and IOSkywalkFamily, so probe macOS's side and use the registry counters for the driver's.
 
 ```bash
 sudo dtrace -Z -e -s tools/diag/trace_emsgsize.d              # compile check, no output means it compiled
@@ -162,7 +200,7 @@ sudo dtrace -Z -q -s tools/diag/trace_emsgsize.d -o emsgsize.out
 
 ## Case 3: Continuity Camera gets part of the way
 
-Continuity Camera (the iPhone as the Mac's camera) is the one Continuity feature that needs the AWDL driver to answer more than discovery does. Handoff, Universal Clipboard, calls, Instant Hotspot and AirPlay Receiver need nothing from it; `tools/diag/continuity_check.sh` shows what is ready, and its camera section reports each stage below (the iPhone listed, the driver's peer-cache and UMI counters, the CPU-family check, and how many lines of each failure the log holds). On the test Mac (AX200, macOS Sequoia 15.8.2) the camera still shows a black picture, but the failure moved forward through four stages. Each stage had its own log line, so you can tell where yours stops.
+Continuity Camera (the iPhone as the Mac's camera) is the one Continuity feature that needs the AWDL driver to answer more than discovery does. Handoff, Universal Clipboard, calls, Instant Hotspot and AirPlay Receiver need nothing from it; `tools/diag/continuity_check.sh` shows what is ready, and its camera section reports each stage below (the iPhone listed, the driver's peer-cache and UMI counters, the CPU-family check, and how many lines of each failure the log holds). On the test Mac (AX200, macOS Sequoia 15.8.2) the camera went from a black picture, through the stages below, to a stream that runs but loses packets; each stage had its own log line. You can tell where yours stops from the line each stage logs.
 
 **0. The iPhone isn't in Photo Booth's list at all.** This is the iPhone, not the driver. The camera agent keeps a list of usable devices; look for the iPhone in it:
 
@@ -184,11 +222,13 @@ sysctl -n hw.cpufamily      # decimal; 2028061628 is Penryn, 939270559 is Skylak
 
 Changing the patch's immediate to 0x37fc219f made `canDoHEVC` return true on the test Mac, and the error went away. That value is read by the whole system, so treat it as a change to your own OpenCore setup: try it on a copy of `config.plist`, run `tools/oc/ocvalidate.sh` on it, keep the old file, and watch audio, sleep and the GPU. This repo does not change it for you. The disassembly came from `xcrun dyld_info -disassemble -arch x86_64h /System/Library/PrivateFrameworks/AVConference.framework/Versions/A/AVConference` (it reads the system cache directly).
 
-**4. `VCTransportSessionNW startNWConnection: nw_connection ready timeout` (still failing).** The stream negotiates (`_streamActivationCompletion ... success`, `Negotiation data received`), and then the media stack opens a UDP connection to the iPhone at a per-attempt address like `[fdXX:XXXX:XXXX::NN%awdl0]:577` with the flags "LowLatency Handoff". `awdl0` has only a link-local address, no route and no neighbor for that address, so the connection never becomes ready and the stream fails with `AVCVideoStream create error ... Code=32002`. Earlier runs also logged `Server ignoring low latency without local llw0`, and the driver does not create an `llw0` interface. Whether `llw0` is what installs that address and route is a hypothesis; it has not been confirmed.
+**4. `VCTransportSessionNW startNWConnection: nw_connection ready timeout`, "Server ignoring low latency without local llw0".** The stream negotiates, then the media stack opens a UDP connection to the iPhone at a per-attempt `fdXX:XXXX:XXXX::NN` address with the flags "LowLatency Handoff". With only `awdl0`, that address has no interface, route or neighbor, so the connection never becomes ready (`AVCVideoStream create error ... Code=32002`). Fixed by `llw0` (`-itlawdlllw`). Getting it to exist took four things that are easy to miss: macOS's request 293 wants the BSD name written back at +8; the family's power-state handler deadlocks against the 293 handler on the work loop (override it); two Skywalk interfaces with the same MAC get the same `ifnet` unique id and the second one never appears (use the MAC plus `"ll"`); and every Skywalk interface must stay at power state 1 (`ioreg -p IOPower`). Check with `ifconfig llw0` (`UP,RUNNING`, a link-local address) and the `ItlwmLLW*` keys.
 
-Two probes on the test Mac narrowed stage 4. A 70-second capture of an attempt held no packet to that address or to UDP port 577 at all, and `awdl0` only ever had its link-local address, so the connection fails inside the Mac before anything is sent (nw_connection state "waiting", no path). With `sudo route -n add -inet6 fd00::/8 -interface awdl0` added for one attempt (removed afterwards with `sudo route -n delete -inet6 fd00::/8`), the path became satisfied over `awdl0`, but the connect then failed with `connectx ... [48: Address already in use]`: the media session's own local UDP port collides with its listener. So a missing route is part of it and not all of it.
+**5. The iPhone's frames arrive but the driver rejects them (`DataRxMalformed` in the thousands, almost all "outer length").** This looked like several packets aggregated into one frame; it was not. The frames carry a plain RFC 1042 header (`aa aa 03 00 00 00 86 dd` and then IPv6) with no AWDL header, and the parser read the ethertype `86dd` as a length. `ITLAWDLCoexRxOuterLengthSamples` gave the bytes and `tools/awdl_rx_rejects.py` the split. Plain RFC 1042 frames belong to `llw0`, Apple-header frames to `awdl0` (what Broadcom's host does), and `llw0`'s own transmit frames must be plain too. All three are fixed.
 
-What is not known: whether anything short of a second virtual interface (`llw0`) makes stage 4 pass. A capture on `awdl0` during an attempt (`sudo tcpdump -i awdl0 -n -w cam.pcap 'ip6 and not udp port 5353'`, then `python3 -I tools/diag/awdl_flow.py cam.pcap`) shows whether the Mac sends anything to that address.
+**6. The stream runs, but the video breaks up (current state).** With stages 0 to 5 in place the iPhone's camera stream is delivered to `llw0` (about 40,000 frames and 55 MB in the first minute, `RxFailed` 0). `ContinuityCaptureAgent` then logs `VideoPacketBuffer ... Error while detecting missing packets missingMediaPacketsCount=8 mediaCount=25 parityCount=0` and `Failed to parse reconstructed packet`: a good part of each video frame's packets are missing, and there is no error correction (`parityCount=0`). Where the loss is not: the driver handed on every frame it heard (`DataRxHandedOff` equals `DataRx`), 0 were rejected, `ItlwmLLWRxDelivered` equals `RxWanted`, and the kernel's UDP and IPv6 counters show about 12 drops from full socket buffers in 52,000 datagrams. Where it is: the sequence-gap counters say about 7.5% of the iPhone's unicast frames were never heard, in 342 bursts over the run (longest 100 frames). What decides the next step is what the new counters show (a run with the camera streaming): many bad CRCs (`ITLAWDLRxMpduBadCrc`, in runs) mean radio corruption; few CRC errors but gaps means the frames never reach us and the gap timestamps (`SeqGapRing`) should be compared with the AWDL schedule; `SeqLate` close to `SeqMissing` means reordering. Not yet known which.
+
+What is not known about the UMI: `-itlawdlumiack` only posts the status locally. Apple's own sequence sends a real unicast action frame (the ioctl 149 template with option 1 in TLV 12) to peers that declare the 6E-capable bit; whether the iPhone needs to see it for the stream to be healthy is untested.
 
 ## 6. Log noise that is harmless
 

@@ -116,15 +116,18 @@ inline bool buildMasterIndicationTLVs(const uint8_t *source, size_t length, cons
 // Converts one Ethernet frame from macOS into an FCS-free AWDL data frame. Only
 // IPv6 from our own address is carried. All checks precede writes. Input and
 // output must be disjoint and remain caller-owned.
+// plain: the low latency (llw0) form, a bare RFC 1042 header 'aa aa 03 00 00 00 86 dd' and no AWDL header or
+// sequence, which is what Broadcom's firmware sends for llw0 (its host code adds the Apple SNAP for awdl0 only).
 inline BuildResult buildDataFrameFromEthernet(const uint8_t *eth, size_t length, const uint8_t *own,
-                                              uint16_t sequence, uint8_t *output, size_t available, size_t *written) {
+                                              uint16_t sequence, uint8_t *output, size_t available, size_t *written,
+                                              bool plain = false) {
     if (!eth || !own || !output || !written || length < 14 + 40 || eth[12] != 0x86 || eth[13] != 0xdd)
         return BuildResult::Invalid;
     bool destination = false, sameSource = true;
     for (unsigned i = 0; i < 6; ++i) { destination |= eth[i] != 0; sameSource &= eth[6 + i] == own[i]; }
     if (!destination || !sameSource || (*own & 1) || !validIPv6Payload(eth + 14, length - 14))
         return BuildResult::Invalid;
-    if (available < 24 + 16 + (length - 14)) return BuildResult::NoSpace;
+    if (available < 24 + (plain ? 8 : 16) + (length - 14)) return BuildResult::NoSpace;
     for (unsigned i = 0; i < 24; ++i) output[i] = 0;
     output[0] = 0x08;
     const uint8_t bssid[6] = {0, 0x25, 0, 0xff, 0x94, 0x73};
@@ -134,6 +137,13 @@ inline BuildResult buildDataFrameFromEthernet(const uint8_t *eth, size_t length,
         output[16 + i] = bssid[i];
     }
     write16(output + 22, uint16_t((sequence & 4095) << 4));
+    if (plain) {
+        const uint8_t snap[8] = {0xaa, 0xaa, 3, 0, 0, 0, 0x86, 0xdd};
+        for (unsigned i = 0; i < 8; ++i) output[24 + i] = snap[i];
+        for (size_t i = 0; i < length - 14; ++i) output[32 + i] = eth[14 + i];
+        *written = 32 + (length - 14);
+        return BuildResult::Ready;
+    }
     size_t payload = 0;
     const auto result = buildIPv6DataPayload(eth + 14, length - 14, sequence, output + 24, available - 24, &payload);
     if (result != BuildResult::Ready) return result;

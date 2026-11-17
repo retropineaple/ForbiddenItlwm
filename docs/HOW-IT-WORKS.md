@@ -108,7 +108,11 @@ These two ask the driver for things AirDrop never does. Before it registers real
 - sends low-latency parameters (`setLLW_PARAMS`), which are acknowledged and counted.
 - sends the iPhone a unicast action frame and waits for its transmit status, message 69 (peer address, then a status byte at +6; 0 means acknowledged). macOS sends that frame itself, but only inside an availability window, which this driver does not report. With `-itlawdlumiack` the driver posts the status instead, so the wait ends. Nothing is transmitted for it.
 
-None of this moves data. It lets the registration finish. The video then needs a media connection that this driver does not provide yet: see [DEBUGGING.md Case 3](DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way) for where it stops and what is known.
+None of this moves data. It lets the registration finish. The video itself needs `llw0`:
+
+- **`llw0`** (`-itlawdlllw`, `ForbiddenItlwm/AirportLLWInterface.*`). After registration the media stack opens a UDP connection with the flags "LowLatency Handoff" and wants the low latency interface macOS asks the driver to create (request 293, "companion Skywalk interface"). `llw0` is a second Skywalk interface on the Wi-Fi interface's class chain (role 2, id 9, BSD prefix `llw`, `awdl0` as its parent, same MAC). It needs a few things Apple's class does that the base family doesn't: its power state handler must not take the work loop that the 293 handler holds, its `ifnet` unique id must differ from `awdl0`'s (the 6-byte MAC plus `"ll"`), and its power state has to stay at 1 like every Skywalk interface.
+- **Two frame formats share the radio.** On Broadcom's host code the frames from the air are split by their SNAP header: Apple's OUI (`aa aa 03 00 17 f2 08 00`, then `03 04`, a sequence, `00 00` and the ethertype) goes to `awdl0`; an empty OUI (RFC 1042: `aa aa 03 00 00 00 86 dd`, then IPv6) goes to `llw0`. The same holds for transmit: only `awdl0` gets the Apple header added. This driver does the same in software: the receive parser marks plain RFC 1042 frames and the hand-off delivers them to `llw0` only; `llw0`'s transmit frames are queued on `awdl0`'s ring with a flag and built plain. The iPhone's camera stream is these frames: UDP between `fd00::/8` addresses, up to about 1,400 bytes each, addressed to the Mac's own AWDL address. (The AWDLLab notes describe the Broadcom side: `AWDL_DATA_ENCAP.md`, `AWDL_RX_DATA_TO_SKYWALK.md`, `AWDL_STAGE4_LLW_CLOSURE.md`.)
+- **What is left.** The stream arrives and the media stack reads it, but about 7.5% of the iPhone's frames never reach the radio's receive path (measured by 802.11 sequence number, in bursts of up to 100). The camera's video has no error correction, so a burst breaks a frame. See [DEBUGGING.md Case 3](DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way) for how that is measured and what has been ruled out.
 
 ## Why speed and connect time vary
 
@@ -142,6 +146,7 @@ These each took one or more test boots to learn.
 | Path | Contents |
 | --- | --- |
 | `ForbiddenItlwm/AirportItlwmV2.cpp` | The macOS side: interface setup, Skywalk queues and pools, sync frame bridge, data in and out of `awdl0` |
+| `ForbiddenItlwm/AirportLLWInterface.*`, `AirportLLWHandlers.inc` | `ItlLLWInterface` (`llw0`), and its unsupported-call handlers generated from Apple's virtual table (`tools/abi/gen_llw_handlers.py`) |
 | `ForbiddenItlwm/AirportAWDLInterface.hpp`, `AWDLInactiveProtocol.hpp`, `AWDLRequestedValue.hpp` | `ItlAWDLInterface` and its stored settings |
 | `itlwm/hal_iwx/ItlIwx.cpp` | The radio side: the listener context, country handling, receive and transmit, Block Ack, the send gate |
 | `include/AWDL*.hpp` | Frame parsing and building, data framing, peer schedule, regulatory rules. Mostly host-testable |
@@ -152,7 +157,8 @@ These each took one or more test boots to learn.
 | `tests/`, `tools/test_awdl.py` | Offline tests, many of them on real driver functions extracted into mocks |
 | `tools/build.py`, `tools/sources.txt` | Command Line Tools build of `ForbiddenItlwm.kext` |
 | `tools/build_btleadv.py` | Build of `BTLEAdvFixup.kext` |
-| `tools/abi/` | The virtual table audit against 25G241 (Tahoe), 24H241 (Sequoia) and 23J631 (Sonoma) |
+| `tools/abi/` | The virtual table audit against 25G241 (Tahoe), 24H241 (Sequoia) and 23J631 (Sonoma); for `llw0`, `kc_carve.py` / `kc_vtable.py` carve a kernel collection and read Apple's class tables, and `audit_llw_vtable.py` checks ours (655 slots, 0 problems on 24H232) |
+| `tools/diag/` | Read-only scripts and `dtrace` probes: `continuity_check.sh` (camera stages), `llw_attempt.sh` (one-shot capture of a camera attempt), `trace_*.d` |
 | `ForbiddenItlwm/AWDLBuildGuard.cpp`, `include/AWDLBuildGuard.hpp` | The macOS build check |
 | `tools/awdl_*.py` | Readers for the driver's registry diagnostics |
 | `tools/compat/` | Tester scripts |

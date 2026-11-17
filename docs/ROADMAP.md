@@ -20,7 +20,7 @@ What's being worked on, what comes next, and what's planned further out. These a
 ## Later
 
 - **Instant Hotspot:** joining the iPhone's hotspot from the Wi-Fi menu without typing the password.
-- **Continuity Camera:** using the iPhone as the Mac's webcam.
+- **Continuity Camera:** using the iPhone as the Mac's webcam. In progress on Sequoia with `-itlawdlllw`: the iPhone's stream now reaches the Mac, but packets are lost on the way (about 7.5% by sequence number, in bursts) and the video breaks up. Finding where is the next step ([DEBUGGING.md Case 3](DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way)).
 - **A unified Bluetooth kext that survives macOS updates:** one Bluetooth kext made for ForbiddenItlwm, replacing BTLEAdvFixup, IntelBluetoothFirmware and BlueToolFixup, with patches that keep working across small macOS updates.
 - **Sonoma on hardware, more Sonoma builds, and a look at Ventura 13.** Sonoma 14.8.9 has a test build that nobody has run yet. Ventura needs its own study of that version's Wi-Fi stack first, so it isn't certain.
 - **Sleep and wake:** not tested so far, since sleep is disabled on the test machine.
