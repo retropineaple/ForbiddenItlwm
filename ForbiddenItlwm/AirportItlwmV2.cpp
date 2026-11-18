@@ -1955,6 +1955,8 @@ bool AirportItlwm::startDriver(IOService *provider)
 #ifdef AIRPORT_WCL
     awdlManagementInputEnabled = true;
     bsdInterface->registerService();
+#else
+    awdlManagementInputEnabled = true;
 #endif
     registerService();
     return true;
@@ -2530,6 +2532,10 @@ getCARD_CAPABILITIES(OSObject *object,
                            0x80
                            );
     *(uint16_t *)&cd->capabilities[8] = 0x201;
+
+    if (awdlInterfaceTest) {
+        cd->capabilities[4] |= 0x01;
+    }
 //
 //    cd->capabilities[2] |= 0x10;
 //    cd->capabilities[5] |= 0x1;
