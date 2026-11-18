@@ -103,8 +103,18 @@ struct PeerSchedule {
     bool assumeZero;  // Policy, kept across reset().
     bool refuted;
     uint32_t refutations;
+    // Entries (extended AW number modulo 16, our adopted counter) that our own schedule gives to the router.
+    // The send gate treats them as away; calibration ignores them. Policy, kept across reset().
+    uint8_t ownAway[kPeerSeqEntries];
 
-    void reset() { const bool a = assumeZero; memset(this, 0, sizeof(*this)); assumeZero = a; }
+    void reset() {
+        const bool a = assumeZero;
+        uint8_t own[kPeerSeqEntries];
+        memcpy(own, ownAway, sizeof(own));
+        memset(this, 0, sizeof(*this));
+        assumeZero = a;
+        memcpy(ownAway, own, sizeof(own));
+    }
     // Whether the entry for a time is known: calibrated, or assumed at offset 0 and not refuted.
     bool known() const { return calibrated || (assumeZero && !refuted); }
     uint8_t entryOffset() const { return calibrated ? offset : 0; }
@@ -164,6 +174,10 @@ struct PeerSchedule {
     }
     bool presentInEntry(uint32_t eaw) const {
         return channels[(eaw + entryOffset()) % kPeerSeqEntries] == ourChannel;
+    }
+    // For sending: the peer is on our channel and our own schedule isn't at the router.
+    bool presentForSend(uint32_t eaw) const {
+        return presentInEntry(eaw) && !ownAway[eaw % kPeerSeqEntries];
     }
     // Every frame heard from the peer. Feeds calibration, then checks it.
     void notePeerFrame(uint64_t t) {
@@ -260,8 +274,8 @@ struct PeerSchedule {
         uint64_t into = 0;
         uint32_t eaw = eawAt(t, &into);
         uint64_t limit = kPeerPauseEarlyUS + kPeerResumeLateUS + 2000;
-        if (presentInEntry(eaw)) { limit += eawUS - into; ++eaw; } else { limit -= kPeerPauseEarlyUS; limit += eawUS - into; ++eaw; }
-        for (unsigned k = 0; k < kPeerSeqEntries && !presentInEntry(eaw); ++k, ++eaw) limit += eawUS;
+        if (presentForSend(eaw)) { limit += eawUS - into; ++eaw; } else { limit -= kPeerPauseEarlyUS; limit += eawUS - into; ++eaw; }
+        for (unsigned k = 0; k < kPeerSeqEntries && !presentForSend(eaw); ++k, ++eaw) limit += eawUS;
         return limit > kPeerPauseCeilingUS ? kPeerPauseCeilingUS : limit;
     }
     // Whether sending should be paused at `t`: within the early margin before an away entry,
@@ -270,9 +284,9 @@ struct PeerSchedule {
         if (!known() || !fresh(t) || !eawUS) return false;
         uint64_t into = 0;
         const uint32_t eaw = eawAt(t, &into);
-        if (!presentInEntry(eaw)) return true;
-        if (eawUS - into <= kPeerPauseEarlyUS && !presentInEntry(eaw + 1)) return true;
-        if (into < kPeerResumeLateUS && !presentInEntry(eaw - 1)) return true;
+        if (!presentForSend(eaw)) return true;
+        if (eawUS - into <= kPeerPauseEarlyUS && !presentForSend(eaw + 1)) return true;
+        if (into < kPeerResumeLateUS && !presentForSend(eaw - 1)) return true;
         return false;
     }
     // iface161 send gate, for frames to the peer outside an aggregated bulk send. Away: the schedule has it

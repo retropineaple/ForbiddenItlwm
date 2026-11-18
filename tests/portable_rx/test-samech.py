@@ -95,5 +95,6 @@ import hashlib
 # iwx_rx_pkt: the security fixes add only length checks to fixed-size notifications (audit HL05).
 a=s.index('iwx_rx_pkt(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='b8f0830905eb3f86c3dcb30103a1126ad97a718073cd3154dc19f0776e7f08a7'
 a=s.index('iwx_rx_mpdu_mq(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='761fc4d25edb443d274e376efdd0a7011f20cd0b2f408de292f0ed16a5f38470'
-# iwx_rx_frame: 0.6.0 adds only the phone's 5 GHz channel tracking from its TLV 18 sequence (PR #21).
-a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='af39995bc5ce4c189ab8f28d870750f650072b3e12462aceefc3c1ec6e6efee5'
+# iwx_rx_frame: 0.6.0 adds only the phone's 5 GHz channel tracking from its TLV 18 sequence (PR #21);
+# PR #30 adds only the station data-frame RX counter (awdlInfraRxPkts/Bytes) before ieee80211_inputm.
+a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='1b0edfdd35a7ced3e67d6b4773ccb9a5b6939b9a5b60e8a2a99b77c400e2cca6'

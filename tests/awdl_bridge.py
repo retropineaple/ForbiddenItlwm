@@ -17,6 +17,8 @@ program=r'''
 static unsigned itlAWDLFixedChannel() { return 6; }
 static unsigned itlAWDLChannelClass() { return 0; }
 static bool itlAWDLTwoStreams() { return false; }
+static uint64_t itlAWDLUptimeUS() { return 0; }
+static bool itlAWDLSlotPlan(uint64_t,uint8_t*,uint8_t*,uint16_t*,uint16_t*,uint16_t*) { return false; }
 using IOReturn=unsigned;
 enum { kIOReturnSuccess=0,kIOReturnBadArgument=1,kIOReturnNotReady=2,
        kIOReturnNoMemory=3,kIOReturnUnsupported=4,kIOReturnError=5,MBUF_DONTWAIT=0 };

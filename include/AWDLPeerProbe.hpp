@@ -16,7 +16,8 @@ constexpr size_t peerTLVSuffixBytes = 12;       // Data rate capabilities (7).
 // `twoStreams` advertises MCS 8 to 15 as well, matching the HT capabilities the driver reports to macOS with
 // -itlawdlcaps (dedicated mode's VHT runs had both).
 inline bool extendWithPeerTLVs(uint8_t *tlvs, size_t *length, size_t capacity, const uint8_t *address, uint8_t channel = 6,
-                               uint8_t channelClass = 0, bool twoStreams = false) {
+                               uint8_t channelClass = 0, bool twoStreams = false,
+                               const uint8_t *planChannels = nullptr, const uint8_t *planClasses = nullptr) {
     if (!tlvs || !length || !address) return false;
     // A channel outside the fixed-schedule list can't be described, so nothing is added. An explicit
     // class must be the channel's 20 MHz class, or 128 (80 MHz) for a 5 GHz channel.
@@ -57,7 +58,11 @@ inline bool extendWithPeerTLVs(uint8_t *tlvs, size_t *length, size_t capacity, c
     const uint8_t header[6] = {15, 3, 0, 3, 0xff, 0xff};
     for (unsigned i = 0; i < 6; ++i) p[3 + i] = header[i];
     const uint8_t opClass = channelClass ? channelClass : globalOperatingClass20(channel);
-    for (unsigned i = 0; i < 16; ++i) { p[9 + 2*i] = channel; p[10 + 2*i] = opClass; }
+    for (unsigned i = 0; i < 16; ++i) {
+        const bool planned = planChannels && planClasses && planChannels[i] && planClasses[i];
+        p[9 + 2*i] = planned ? planChannels[i] : channel;
+        p[10 + 2*i] = planned ? planClasses[i] : opClass;
+    }
     if (nativeRates) {
         *length = old + peerTLVPrefixBytes;
         return true;
@@ -94,7 +99,8 @@ inline bool masterIndicationWellFormed(const uint8_t *source, size_t length) {
 }
 inline bool buildMasterIndicationTLVs(const uint8_t *source, size_t length, const uint8_t *address,
                                       uint8_t *output, size_t capacity, size_t *written, uint8_t channel = 6,
-                                      uint8_t channelClass = 0, bool twoStreams = false) {
+                                      uint8_t channelClass = 0, bool twoStreams = false,
+                                      const uint8_t *planChannels = nullptr, const uint8_t *planClasses = nullptr) {
     if (!source || !address || !output || !written || !length) return false;
     size_t used = 0;
     for (size_t offset = 0; offset < length;) {
@@ -109,7 +115,8 @@ inline bool buildMasterIndicationTLVs(const uint8_t *source, size_t length, cons
         }
         offset += 3 + count;
     }
-    if (!extendWithPeerTLVs(output, &used, capacity, address, channel, channelClass, twoStreams)) return false;
+    if (!extendWithPeerTLVs(output, &used, capacity, address, channel, channelClass, twoStreams, planChannels,
+                            planClasses)) return false;
     *written = used;
     return true;
 }
