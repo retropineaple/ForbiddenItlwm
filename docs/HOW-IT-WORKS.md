@@ -36,6 +36,8 @@ Normal Wi-Fi uses the firmware's station context. ForbiddenItlwm adds a second M
 
 The firmware time-shares the radio between the station's channel and the listener's. So normal Wi-Fi stays connected while AirDrop runs.
 
+The listener is added once the Mac's Wi-Fi connection is up and removed when it disconnects, so AirDrop needs the Mac to be on a Wi-Fi network. From 0.6.0-beta.1 ([PR #12](https://github.com/retropineaple/ForbiddenItlwm/pull/12)) it is added only after the connection is fully set up, and removing it first waits for any setup still in progress.
+
 - **Receive:** the driver picks AWDL action frames and data frames out of what the listener receives. It hands action frames to Apple's peer manager with real RSSI metadata, which the peer manager needs before it accepts a peer. IPv6 data goes into `awdl0`.
 - **Transmit:** macOS's sync frames are built from Apple's template and sent every 110 TU. With `-itlawdlsvcmerge` its service records are merged in, and with `-itlawdlawsync` idle frames are timed to the iPhone's windows. `awdl0`'s IPv6 packets go out the listener's queue with AWDL data framing.
 
@@ -67,7 +69,9 @@ The bonding fix was tested on macOS 26.7.2 (25G332) with an Intel Wi-Fi 6 AX200 
 
 Apple's AWDL uses channel 6 on 2.4 GHz and one 5 GHz channel, 149 or 44, which each device picks by its own country rules. From 0.6.0 the listener follows the iPhone: the iPhone's channel sequence (in its sync frames) shows which 5 GHz channel it uses, and the listener takes 44 if the iPhone uses 44, otherwise 149 (`ITLAWDLCoexPeer5GHz`). Slots the iPhone gives to its own Wi-Fi network aren't counted. Before any iPhone is heard, the listener starts on 149.
 
-Intel firmware starts in world mode, where these channels are listen-only. It opens them after it learns the country from a nearby network's beacons, if that country's rules allow it. The driver asks the firmware and follows its answer, with two exceptions taken from Linux: where the firmware marks a channel passive (China's 149 to 161, Japan's 36 to 48, for example), the driver treats it as usable once it has received a beacon from a Wi-Fi network on it (the "beacon hint", `ITLAWDLCoexBeaconHints`), or, if the firmware marks it usable beside a connection, while the Mac's own Wi-Fi is connected on a channel in the same group (`ITLAWDLCoexIrConcurrent`). Hints a new country doesn't allow are cleared. Without either, the listener uses channel 6, which works but is slow: the iPhone spends few slots there, and 2.4 GHz rates are low.
+Intel firmware starts in world mode, where these channels are listen-only. It opens them after it learns the country from a nearby network's beacons, if that country's rules allow it. The driver asks the firmware and follows its answer, with two exceptions where the firmware marks a channel passive (China's 149 to 161, Japan's 36 to 48, for example):
+- **Beacon hint** (`ITLAWDLCoexBeaconHints`): the driver treats the channel as usable once it has received a beacon from a Wi-Fi network on it. Linux's cfg80211 has the same mechanism but applies it only while no country is known (and iwlwifi, whose firmware manages the country, doesn't use it). ForbiddenItlwm also applies it after a country is learned, so it is broader than Linux; without that, the listener would stay on channel 6 in China. Hints a new country doesn't allow are cleared. Beacons aren't authenticated, so anything that sends one on the channel counts, as it does for the firmware's own passive-channel rule.
+- **Beside a connection** (`ITLAWDLCoexIrConcurrent`): if the firmware marks the channel usable for concurrent operation, the listener may use it while the Mac's own Wi-Fi is connected on a channel in the same group (36–48, 52–64, 100–144, 149–165). This is Linux's relaxed rule for Wi-Fi Direct (P2P) interfaces, which iwlwifi turns on; the AWDL listener is the closest equivalent to such an interface. Without either, the listener uses channel 6, which works but is slow: the iPhone spends few slots there, and 2.4 GHz rates are low.
 
 ### 7. Which macOS builds AirDrop starts on
 
@@ -79,7 +83,7 @@ Each macOS version has its own build (`tools/build.py --target tahoe|sequoia|son
   - Every kernel symbol the driver imports exists.
 - **Apple's `IO80211AWDLProtocol` table, read at runtime,** has the expected functions at anchor slots spread across it, its own pure methods where expected, and ends where expected (568 slots on Tahoe, 563 on Sequoia, 547 on Sonoma). This catches a changed table on any build.
 
-When either fails, the driver behaves like plain AirportItlwm. `-itlawdlanybuild` skips the first check, never the second. The result is published as `ItlwmAWDLBuildCheck`. Copying macOS's AirDrop announcement (`-itlawdlmitx`) reads a data layout the table check doesn't cover, so it needs a verified kernel: it stays off on "expected" kernels and with `-itlawdlanybuild`.
+When either fails, the driver behaves like plain AirportItlwm. `-itlawdlanybuild` skips the first check, never the second. The result is published as `ItlwmAWDLBuildCheck`. Copying macOS's AirDrop announcement (`-itlawdlmitx`) reads a data layout the table check doesn't cover, so it needs a verified build: from 0.6.0-beta.1 both the kernel and the macOS build must be on the list (one kernel can ship with more than one IO80211Family). It stays off on "expected" kernels, on an unlisted build with a listed kernel, and with `-itlawdlanybuild`.
 
 **Sequoia differs from Tahoe in a few places the driver depends on.** The 15.8 and 15.8.3 Kernel Debug Kits (identical tables) showed:
 - the same 63 AWDL protocol methods in the same order, with about ten base-class methods added or removed before them, and objects 16 bytes smaller
@@ -99,8 +103,8 @@ When either fails, the driver behaves like plain AirportItlwm. `-itlawdlanybuild
 
 macOS publishes each interface's link-quality metric as `State:/Network/Interface/en0/LinkQuality`. Apple Push (`apsd`) won't connect over an interface rated "off" (-2), and iMessage, FaceTime and the account-device lookups that AirDrop between your own devices relies on all need push.
 - **The original problem:** the pre-Skywalk driver set the metric at link-up. On Tahoe that call was commented out, and `IO80211SkywalkInterface::setLQM` is an empty stub, so en0 stayed "off" forever. Sequoia's IO80211Family has the same stub, so the Sequoia build reports the metric too, and so does the Sonoma build, from its 1-second watchdog.
-- **What ForbiddenItlwm does:** every 2 seconds while connected, it calls `IOSkywalkNetworkInterface::reportLinkQuality` (which sets the kernel's metric) from the signal strength: 100 at -70 dBm or stronger, 50 at -80 dBm or stronger, 10 below. It reports "off" when the link drops.
-- **It also tells WCL the signal (Tahoe only):** the signal strength goes into WCL's link-quality update (byte 0 valid, the RSSI at offset 4), which Apple's `handleLqmUpdate` reads. That structure's layout is only known for Tahoe.
+- **What ForbiddenItlwm does:** every 2 seconds while connected, it calls `IOSkywalkNetworkInterface::reportLinkQuality` (which sets the kernel's metric) from the signal strength: 100 at -70 dBm or stronger, 50 at -80 dBm or stronger, 10 below. It reports "off" when the link drops and, from 0.6.0-beta.1, when the driver stops.
+- **It also tells WCL the signal (Tahoe only):** the signal strength goes into WCL's link-quality update (byte 0 valid, the RSSI at offset 4), which Apple's `handleLqmUpdate` reads. From 0.6.0-beta.1 ([PR #1](https://github.com/retropineaple/ForbiddenItlwm/pull/1)) the update also carries the noise floor and signal-to-noise (offsets 0x0b to 0x10) when the firmware has measured noise; some cards' firmware doesn't report it in normal Wi-Fi (the project's AX211 doesn't), and then those fields stay empty. That structure's layout is only known for Tahoe: checked on 26.7.2 and 26.7.3 for the noise fields.
 
 ## Why speed and connect time vary
 

@@ -72,47 +72,125 @@ int main(){
         // Reset forgets per-set addresses too.
         uint8_t rst[3]={3,0xc,0};onCommand(r,rst,3,true);assert(!r.knownSetAddresses);
     }
+    // Audit P-R07: with no general address, the fallback came from a set. Removing that set (or
+    // clearing all sets) forgets it, so a re-created set isn't given the removed set's address.
+    {
+        uint8_t p[28];const uint8_t x[6]={0x40,0,0,0,0,0x99};
+        State f{};uint8_t m[10]={0x35,0x20,7,5};memcpy(m+4,x,6);onCommand(f,m,10,true);
+        assert(f.haveAddress&&!f.haveGeneralAddress);
+        uint8_t rm[4]={0x3c,0x20,1,5};onCommand(f,rm,4,true);assert(!f.haveAddress);
+        params(p,6,1);assert(!onCommand(f,p,28,true).sendSetAddress);
+        State g{};onCommand(g,m,10,true);uint8_t clr[3]={0x3d,0x20,0};onCommand(g,clr,3,true);assert(!g.haveAddress);
+        // With a general address the fallback stays: it belongs to bluetoothd, not to a set.
+        State h{};uint8_t ga[9]={5,0x20,6};memcpy(ga+3,addr,6);onCommand(h,ga,9,true);onCommand(h,m,10,true);
+        onCommand(h,rm,4,true);assert(h.haveAddress);
+    }
     // LE Data Length Change (OpenIntelWireless#514): two extra copies of LE Read Remote
     // Features, and the two duplicate completions become PHY Update, then Data Length Change.
+    // Tracked per connection handle, each entry expiring after 2 s (audit BT03).
     {
-        DataLengthState d{};uint8_t readFeatures[3]={0x16,0x20,0x02};
-        assert(extraRemoteReads(d,readFeatures,3)==2&&d.outstanding==2&&d.stage==0);
-        // Only that command, and only whole ones.
-        assert(extraRemoteReads(d,em,11)==0&&d.outstanding==2);
-        assert(extraRemoteReads(d,readFeatures,2)==0&&d.outstanding==2);
-        assert(extraRemoteReads(d,nullptr,0)==0);
+        const uint64_t t0 = 1000000000ULL;
+        DataLengthState d{};uint8_t readFeatures[5]={0x16,0x20,0x02,0x53,0x00};
+        assert(extraRemoteReads(d,readFeatures,5,t0)==2&&dataLengthPending(d));
+        assert(findLink(d,0x53)&&findLink(d,0x53)->outstanding==2&&findLink(d,0x53)->stage==0);
+        // Only that command, and only whole ones with the handle.
+        assert(extraRemoteReads(d,em,11,t0)==0&&findLink(d,0x53)->outstanding==2);
+        assert(extraRemoteReads(d,readFeatures,4,t0)==0&&findLink(d,0x53)->outstanding==2);
+        assert(extraRemoteReads(d,readFeatures,2,t0)==0);
+        assert(extraRemoteReads(d,nullptr,0,t0)==0);
         // A copy that couldn't be sent produces no event, so it isn't waited for.
-        forgetRemoteRead(d);assert(d.outstanding==1);
-        // A controller start forgets a command still in flight.
+        forgetRemoteRead(d,readFeatures,5);assert(findLink(d,0x53)->outstanding==1);
+        // A controller start forgets every command still in flight.
         uint8_t rst[3]={0x03,0x0c,0x00};
-        assert(extraRemoteReads(d,rst,3)==0&&!d.outstanding&&!d.stage);
-        forgetRemoteRead(d);assert(!d.outstanding);
+        assert(extraRemoteReads(d,rst,3,t0)==0&&!dataLengthPending(d));
+        forgetRemoteRead(d,readFeatures,5);assert(!dataLengthPending(d));
 
         // The real completion (status 0, handle 0x0053, all-zero features) passes through.
         const uint8_t real[14]={0x3e,12,0x04,0x00,0x53,0x00,0x01,0,0,0,0,0,0,0};
         uint8_t ev[14];memcpy(ev,real,14);
-        assert(extraRemoteReads(d,readFeatures,3)==2);
-        assert(rewriteEvent(d,ev,14)==14&&!memcmp(ev,real,14)&&d.stage==1&&d.outstanding==2);
+        assert(extraRemoteReads(d,readFeatures,5,t0)==2);
+        assert(rewriteEvent(d,ev,14)==14&&!memcmp(ev,real,14)&&findLink(d,0x53)->stage==1);
         // Anything else is left alone while a duplicate is expected.
         const uint8_t other[8]={0x3e,6,0x0c,0x00,0x53,0x00,0x01,0x01};
         memcpy(ev,other,8);assert(rewriteEvent(d,ev,8)==8&&!memcmp(ev,other,8));
         const uint8_t disconn[7]={0x05,3,0x16,0x00,0x53,0x00,0x13};
         memcpy(ev,disconn,7);assert(rewriteEvent(d,ev,7)==7&&!memcmp(ev,disconn,7));
+        // So is the same completion for a link that isn't waiting.
+        uint8_t otherLink[14];memcpy(otherLink,real,14);otherLink[4]=0x40;
+        memcpy(ev,otherLink,14);assert(rewriteEvent(d,ev,14)==14&&!memcmp(ev,otherLink,14));
         // First duplicate: PHY Update Complete, both directions 2M, 8 bytes.
         memcpy(ev,real,14);
-        assert(rewriteEvent(d,ev,14)==8&&d.stage==2&&d.outstanding==1);
+        assert(rewriteEvent(d,ev,14)==8&&findLink(d,0x53)->stage==2&&findLink(d,0x53)->outstanding==1);
         const uint8_t phy[8]={0x3e,6,0x0c,0x00,0x53,0x00,0x02,0x02};assert(!memcmp(ev,phy,8));
         // Second: LE Data Length Change, 27 octets and 328 us each way, 13 bytes.
         memcpy(ev,real,14);
-        assert(rewriteEvent(d,ev,14)==13&&!d.stage&&!d.outstanding);
+        assert(rewriteEvent(d,ev,14)==13&&!dataLengthPending(d));
         const uint8_t len[13]={0x3e,11,0x07,0x53,0x00,0x1b,0x00,0x48,0x01,0x1b,0x00,0x48,0x01};
         assert(!memcmp(ev,len,13));
         // Nothing expected any more: the same completion is a plain pass-through.
         memcpy(ev,real,14);assert(rewriteEvent(d,ev,14)==14&&!memcmp(ev,real,14));
         // Short and null events are never touched.
         uint8_t tiny[5]={0x3e,3,0x04,0x00,0x53};
-        extraRemoteReads(d,readFeatures,3);
+        extraRemoteReads(d,readFeatures,5,t0);
         assert(rewriteEvent(d,tiny,5)==5&&rewriteEvent(d,nullptr,14)==14);
+        d=DataLengthState{};
+
+        // Two links at once: each keeps its own stage and its own handle in the fake events.
+        uint8_t readB[5]={0x16,0x20,0x02,0x40,0x00};
+        const uint8_t realB[14]={0x3e,12,0x04,0x00,0x40,0x00,0x01,0,0,0,0,0,0,0};
+        assert(extraRemoteReads(d,readFeatures,5,t0)==2);
+        memcpy(ev,real,14);assert(rewriteEvent(d,ev,14)==14);            // A: real
+        assert(extraRemoteReads(d,readB,5,t0)==2);                         // B starts; A untouched
+        assert(findLink(d,0x53)->stage==1&&findLink(d,0x40)->stage==0);
+        memcpy(ev,real,14);assert(rewriteEvent(d,ev,14)==8&&ev[4]==0x53);  // A: PHY update
+        memcpy(ev,realB,14);assert(rewriteEvent(d,ev,14)==14);           // B: real
+        memcpy(ev,realB,14);assert(rewriteEvent(d,ev,14)==8&&ev[4]==0x40); // B: PHY update
+        memcpy(ev,real,14);assert(rewriteEvent(d,ev,14)==13&&ev[3]==0x53); // A: data length
+        memcpy(ev,realB,14);assert(rewriteEvent(d,ev,14)==13&&ev[3]==0x40);// B: data length
+        assert(!dataLengthPending(d));
+        // The handle's flag bits are ignored.
+        uint8_t flagged[5]={0x16,0x20,0x02,0x53,0x20};
+        assert(extraRemoteReads(d,flagged,5,t0)==2&&findLink(d,0x53));
+        d=DataLengthState{};
+
+        // No completion ever comes (a Command Status error): the entry expires after 2 s, and
+        // nothing is waited for afterwards.
+        assert(extraRemoteReads(d,readFeatures,5,t0)==2);
+        assert(expireLinks(d,t0+kDataLengthExpiryNs)&&d.expired==0);
+        assert(!expireLinks(d,t0+kDataLengthExpiryNs+1)&&d.expired==1&&!dataLengthPending(d));
+        memcpy(ev,real,14);assert(rewriteEvent(d,ev,14)==14&&!memcmp(ev,real,14));
+        // A reset keeps the expiry count.
+        assert(extraRemoteReads(d,rst,3,t0)==0&&d.expired==1);
+
+        // Every slot busy: no copies for a ninth link, so it is handled as without the fix.
+        d=DataLengthState{};
+        for (uint8_t h=1;h<=kDataLengthLinks;++h){uint8_t r[5]={0x16,0x20,0x02,h,0};assert(extraRemoteReads(d,r,5,t0)==2);}
+        uint8_t ninth[5]={0x16,0x20,0x02,0x70,0};assert(extraRemoteReads(d,ninth,5,t0)==0&&!findLink(d,0x70));
+        // Expired slots are reused.
+        assert(extraRemoteReads(d,ninth,5,t0+kDataLengthExpiryNs+1)==2&&findLink(d,0x70)&&d.expired==kDataLengthLinks);
+
+        // PR #61: reads are wrapped only while a link waits, only into a buffer that can hold the
+        // longest rewritten event, and at most kMaxWrappedReads per round; a spent budget drops the round.
+        d=DataLengthState{};
+        assert(!wrapRead(d,t0,64));                                         // nothing waiting
+        assert(extraRemoteReads(d,readFeatures,5,t0)==2);
+        assert(!wrapRead(d,t0,kDataLengthEventLength-1)&&d.wrapped==0);     // buffer too small
+        for (uint32_t i=0;i<kMaxWrappedReads;++i) assert(wrapRead(d,t0,64));
+        assert(d.wrapped==kMaxWrappedReads&&dataLengthPending(d));
+        assert(!wrapRead(d,t0,64)&&!dataLengthPending(d)&&d.aborts==1);   // budget spent: round dropped
+        assert(!wrapRead(d,t0,64)&&d.aborts==1);
+        // A new round gets a full budget again.
+        assert(extraRemoteReads(d,readFeatures,5,t0)==2&&d.wrapped==0&&wrapRead(d,t0,64));
+        // An expired round isn't wrapped.
+        assert(!wrapRead(d,t0+kDataLengthExpiryNs+1,64)&&!dataLengthPending(d));
+        // A read nothing could be rewritten into drops every pending link; later events pass through.
+        assert(extraRemoteReads(d,readFeatures,5,t0)==2&&extraRemoteReads(d,readB,5,t0)==2);
+        abortLinks(d);
+        assert(!dataLengthPending(d)&&d.aborts==2);
+        memcpy(ev,real,14);assert(rewriteEvent(d,ev,14)==14&&!memcmp(ev,real,14));
+        // A reset keeps both counters.
+        const uint32_t exp=d.expired;
+        assert(extraRemoteReads(d,rst,3,t0)==0&&d.aborts==2&&d.expired==exp);
     }
     puts("BTLEAdvFixup HCI decisions: passed (host only)");
 }

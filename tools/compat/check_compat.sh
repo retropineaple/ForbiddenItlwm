@@ -203,7 +203,15 @@ kext_version() { printf '%s\n' "$KEXTS" | awk -v id="$1" '$1 == id { gsub(/[()]/
 FORBIDDEN=$(kext_version org.forbiddenitlwm.ForbiddenItlwm)
 AIRPORT=$(kext_version com.zxystd.AirportItlwm)
 ITLWM=$(kext_version com.zxystd.itlwm)
-if [ -n "$FORBIDDEN" ]; then
+# kmutil doesn't list it on every machine (#73, macOS 26.7.4 RC); the driver's own registry entry still shows it.
+FORBIDDEN_IOREG=""
+if [ -z "$FORBIDDEN" ] && ioreg -l -w0 2>/dev/null | grep -q '"CFBundleIdentifier" = "org.forbiddenitlwm.ForbiddenItlwm"'; then
+    FORBIDDEN_IOREG=1
+fi
+if [ -n "$FORBIDDEN_IOREG" ]; then
+    pass "ForbiddenItlwm is loaded (found in the I/O Registry; kmutil didn't list it)."
+    [ -n "$AIRPORT" ] && fail "AirportItlwm $AIRPORT is loaded too. Remove it: the two can't run side by side."
+elif [ -n "$FORBIDDEN" ]; then
     pass "ForbiddenItlwm $FORBIDDEN is loaded."
     [ -n "$AIRPORT" ] && fail "AirportItlwm $AIRPORT is loaded too. Remove it: the two can't run side by side."
 elif [ -n "$AIRPORT" ]; then
@@ -346,9 +354,20 @@ fi
 if [ -z "$SP" ]; then
     warn "macOS returned no Wi-Fi details (is Wi-Fi on?)."
 elif [ -z "$CC" ] || [ "$CC" = "ZZ" ] || [ "$CC" = "00" ]; then
-    warn "Country code: ${CC:-none}. The firmware hasn't learned a country, so channels 149 and 44 are listen-only for now."
-    warn "AirDrop will use channel 6 (very slow) until a nearby network advertises the country."
-    CH149_STATE=no-country
+    # Without a country, the driver still uses 149 or 44 once it has heard a router beaconing there (or the
+    # station is connected in the same band), so the listener's own channel decides, when the build runs.
+    LISTEN_CH=""
+    [ -n "$MARKER" ] && LISTEN_CH=$(ioreg -l -w0 2>/dev/null | sed -n 's/.*"ITLAWDLCoexChannel" = \([0-9]*\).*/\1/p' | head -1)
+    if [ "$LISTEN_CH" = "149" ] || [ "$LISTEN_CH" = "44" ]; then
+        info "Country code: ${CC:-none}. The firmware hasn't learned a country, but the listener is on channel $LISTEN_CH:"
+        info "routers heard on that channel (or your Wi-Fi in the same band) let the driver use it anyway."
+        CH149_STATE=no-country-open
+    else
+        warn "Country code: ${CC:-none}. The firmware hasn't learned a country, so channels 149 and 44 are listen-only for now."
+        warn "AirDrop will use channel 6 (very slow) until a nearby network advertises the country, or until routers"
+        warn "are heard on 149 or 44."
+        CH149_STATE=no-country
+    fi
 else
     pass "Country code: $CC. The firmware (or macOS's location, when the firmware has none) reports a country."
     CH149_STATE=country
@@ -456,14 +475,75 @@ if [ -n "$MARKER" ]; then
         fi
     fi
     ARGS=$(sysctl -n kern.bootargs 2>/dev/null)
+    # The tested set from docs/BOOT-FLAGS.md; keep the two in step. Flags without a value must match
+    # whole words; the two with a value (itlawdlintcoal=, itlawdltxqueue=) match by name.
     MISSING=""
     for f in -btleadv -itlawdlcoexprobe -itlawdliface -itlawdlnativeup -itlawdlcoexrx -itlawdlcoextx -itlawdlcoexmulti \
-             -itlawdlcoexdata -itlawdlcoexbatx -itlawdlcoexpeerpause; do
+             -itlawdlcoexdata -itlawdlmitx -itlawdlelicit -itlawdlcaps -itlawdlsvcmerge -itlawdlawsync \
+             -itlawdlcoexbatx -itlawdlcoexpeerpause -itlawdlcoexbatrace; do
         case " $ARGS " in *" $f "*) ;; *) MISSING="$MISSING $f";; esac
     done
-    [ -z "$MISSING" ] && pass "The main AirDrop boot flags are set." || warn "Missing AirDrop boot flags:$MISSING"
+    for f in itlawdlintcoal itlawdltxqueue; do
+        case " $ARGS" in *" $f="*) ;; *) MISSING="$MISSING $f=";; esac
+    done
+    if [ -z "$MISSING" ]; then
+        pass "All AirDrop boot flags of the tested set are set."
+    else
+        warn "Missing AirDrop boot flags:$MISSING"
+        warn "Use the whole tested set from docs/BOOT-FLAGS.md: a partial set can pass every other check here and still not work."
+        FLAGS_MISSING=1
+    fi
+    # Without the announcement (-itlawdlmitx) the sync frames carry no name or services, so other devices
+    # hear this Mac but never learn it offers AirDrop: nothing is listed and no AirDrop data arrives.
+    MI_STATE=$(ioreg -l -w0 2>/dev/null | sed -n 's/.*"ItlwmAWDLMiState" = "\([^"]*\)".*/\1/p' | head -1)
+    case "$MI_STATE" in
+        on) pass "The AirDrop announcement is on (ItlwmAWDLMiState = on).";;
+        on*) warn "The AirDrop announcement is on, on a build the driver hasn't verified: ItlwmAWDLMiState = $MI_STATE.";;
+        "") ;;
+        off) case " $ARGS " in
+                 *" -itlawdlmitx "*) warn "The AirDrop announcement is off (ItlwmAWDLMiState = off) although -itlawdlmitx is set.";;
+                 *) fail "The AirDrop announcement is off (ItlwmAWDLMiState = off) because -itlawdlmitx isn't set. Other devices"
+                    fail "can't discover this Mac: the radios hear each other, but no AirDrop data arrives (ITLAWDLCoexDataRx stays 0).";;
+             esac
+             MI_OFF=1;;
+        blocked*)
+            # Not a flag problem: on a build the driver hasn't verified, the announcement stays off (section 1).
+            warn "The AirDrop announcement is blocked: ItlwmAWDLMiState = $MI_STATE."
+            warn "The driver only sends it on verified macOS builds (or with -itlawdlanybuild, at the risk of a panic),"
+            warn "so other devices won't list this Mac.";;
+        *)  warn "The AirDrop announcement isn't running: ItlwmAWDLMiState = $MI_STATE."; MI_OFF=1;;
+    esac
 else
     info "Skipped: the AirDrop build isn't running."
+fi
+
+# ---------------------------------------------------------------- network stack
+head1 "7. Network stack (QUIC for AirDrop)"
+# When pf holds rules macOS doesn't recognise, the kernel turns off the flowswitch transport agent
+# (net.link.generic.system.enable_netagent = 0). Network.framework then falls back from Skywalk
+# channel flows to plain sockets, QUIC's pacer stops working, and AirDrop's QUIC transfers degrade
+# (sharingd logs "quic_time_delta start time X is after end time Y" many times per transfer).
+# On Tahoe (kernel 25.6) OpenCore's PowerTimeoutKernelPanic quirk causes this by itself: it rewrites
+# the kernel string "com.apple" to "not.apple", and pf's anchor check uses the same string, so the
+# stock /etc/pf.conf (anchor "com.apple/*") counts as custom rules.
+FILTER_STATE=$(sysctl -n net.filter_state 2>/dev/null)
+NETAGENT=$(sysctl -n net.link.generic.system.enable_netagent 2>/dev/null)
+NET_STACK=""
+if [ -z "$NETAGENT" ]; then
+    info "Couldn't read net.link.generic.system.enable_netagent on this macOS."
+elif [ "$NETAGENT" = "0" ] && printf '%s' "$FILTER_STATE" | grep -q pf; then
+    NET_STACK=pf
+    warn "pf is marked incompatible (net.filter_state = $FILTER_STATE), so macOS turned off its user-space"
+    warn "network path (enable_netagent = 0). QUIC, which AirDrop uses, loses its pacing and transfers can be slower."
+    if [ "${OS_MAJOR:-0}" -ge 26 ] 2>/dev/null; then
+        warn "Most likely cause on Tahoe: OpenCore Kernel > Quirks > PowerTimeoutKernelPanic. If your hackintosh"
+        warn "doesn't need it (it stops a panic when a driver is slow to change power state), set it to false and reboot."
+    fi
+    info "Other causes: your own pf rules or a firewall app that loads pf anchors."
+elif [ "$NETAGENT" = "0" ]; then
+    warn "macOS's user-space network path is off (enable_netagent = 0, net.filter_state = '${FILTER_STATE}')."
+else
+    pass "pf state is normal and the user-space network path is on (enable_netagent = $NETAGENT)."
 fi
 
 # ---------------------------------------------------------------- verdict
@@ -483,6 +563,12 @@ case "${CH149_STATE:-}" in
     law)        echo "  ${YEL}This country's rules don't allow 149 at 80 MHz. From 0.6.0 AirDrop uses channel 44 if your iPhone does and the firmware allows it; otherwise channel 6 (very slow).${RST}";;
     not-in-map) echo "  ${YEL}Neither 149 nor 44 at 80 MHz is in the channel map here, so AirDrop can only use channel 6 (very slow).${RST}";;
 esac
+if [ "$NET_STACK" = pf ]; then
+    echo "  ${YEL}pf has turned off macOS's user-space network path (section 7): AirDrop works, but transfers can be slower.${RST}"
+fi
+if [ -n "${FLAGS_MISSING:-}" ] || [ -n "${MI_OFF:-}" ]; then
+    echo "  ${YEL}The AirDrop boot flags are incomplete (section 6). Set the whole tested set from docs/BOOT-FLAGS.md before testing.${RST}"
+fi
 if [ "$BLOCKERS" -gt 0 ]; then
     echo "  ${RED}$BLOCKERS blocker(s) above stop it working on this Mac regardless of the card.${RST}"
 fi

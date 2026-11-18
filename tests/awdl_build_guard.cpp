@@ -9,6 +9,9 @@ int main() {
     assert(checkBuild(n9, "23J631") == BuildCheck::Verified);
     assert(checkBuild(n9, nullptr) == BuildCheck::Verified);
     assert(checkBuild(n9, "23J630") == BuildCheck::UnknownBuild);   // build and kernel must agree
+    // The master indication copy needs the pair, never the kernel alone (audit P-A08).
+    assert(buildPairVerified(n9, "23J631") && !buildPairVerified(n9, nullptr) && !buildPairVerified(n9, "") &&
+           !buildPairVerified(n9, "23J632"));
     // Only 14.8.9 so far: an earlier 14.8.x kernel isn't "expected", it's unknown.
     assert(checkBuild("root:xnu-10063.141.1.712.5~1/RELEASE_X86_64", nullptr) == BuildCheck::UnknownKernel);
     assert(checkBuild("root:xnu-10063.141.1.713.39~1/DEVELOPMENT_X86_64", nullptr) == BuildCheck::UnknownKernel);
@@ -23,6 +26,8 @@ int main() {
     assert(checkBuild(s1, "24H23") == BuildCheck::Verified);
     assert(checkBuild(s3, nullptr) == BuildCheck::Verified);
     assert(checkBuild(sx, nullptr) == BuildCheck::Expected);
+    assert(buildPairVerified(s1, "24H23") && buildPairVerified(s3, "24H241") && !buildPairVerified(s3, nullptr));
+    assert(!buildPairVerified(s1, "24H241") && !buildPairVerified(sx, "24H32"));   // expected is never verified
     assert(checkBuild("root:xnu-11417.140.69.712.80~3/DEVELOPMENT_X86_64", nullptr) == BuildCheck::UnknownKernel);
     assert(checkBuild("root:xnu-11417.121.6~2/RELEASE_X86_64", nullptr) == BuildCheck::UnknownKernel);   // older Sequoia
     assert(checkBuild("root:xnu-12377.161.15.700.19~2/RELEASE_X86_64", "25G241") == BuildCheck::UnknownKernel);  // Tahoe kernel
@@ -39,6 +44,11 @@ int main() {
     assert(checkBuild(k2, nullptr) == BuildCheck::Verified);
     assert(checkBuild(k1, "25G332") == BuildCheck::UnknownBuild); // build and kernel must agree
     assert(checkBuild(k2, "25G350") == BuildCheck::UnknownBuild); // a later build on the same kernel
+    // The master indication copy needs the pair (audit P-A08): a later 26.7.x on the 26.7.2/26.7.3 kernel
+    // is allowed by the kernel check but not verified.
+    assert(buildPairVerified(k1, "25G241") && buildPairVerified(k2, "25G332") && buildPairVerified(k2, "25G342"));
+    assert(!buildPairVerified(k2, "25G350") && !buildPairVerified(k2, "") && !buildPairVerified(k2, nullptr));
+    assert(!buildPairVerified(k1, "25G332") && !buildPairVerified(kx, "25H10"));
     assert(checkBuild(kx, "25H10") == BuildCheck::UnknownKernel);
     assert(checkBuild(kx, "") == BuildCheck::UnknownKernel);
     assert(checkBuild(nullptr, "25G241") == BuildCheck::UnknownKernel);

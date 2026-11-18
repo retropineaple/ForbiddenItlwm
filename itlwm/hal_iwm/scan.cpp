@@ -123,6 +123,8 @@
 #include "rs.h"
 #ifdef AIRPORT_WCL
 #include "../../ForbiddenItlwm/WCL/WCL.hpp"
+// Away cap for full scans while associated, from itlwm_scanout (0 = default 120 TU); defined in ItlIwx.cpp.
+extern uint32_t itlScanMaxOutTU;
 #endif
 
 uint16_t ItlIwm::
@@ -387,7 +389,7 @@ iwm_lmac_scan(struct iwm_softc *sc, int bgscan)
     int err, async = bgscan;
 #ifdef AIRPORT_WCL
     const auto timing = AirportWCL::scanTiming(ic->ic_wcl_scan_away_time_ms, bgscan,
-        isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_FRAGMENTED_SCAN));
+        isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_FRAGMENTED_SCAN), itlScanMaxOutTU);
 #endif
     
     req_len = sizeof(struct iwm_scan_req_lmac) +
@@ -662,7 +664,7 @@ iwm_umac_scan(struct iwm_softc *sc, int bgscan)
     int err, async = bgscan;
 #ifdef AIRPORT_WCL
     const auto timing = AirportWCL::scanTiming(ic->ic_wcl_scan_away_time_ms, bgscan,
-        isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_FRAGMENTED_SCAN));
+        isset(sc->sc_ucode_api, IWM_UCODE_TLV_API_FRAGMENTED_SCAN), itlScanMaxOutTU);
 #endif
     
     req_len = iwm_umac_scan_size(sc);
@@ -957,6 +959,12 @@ iwm_scan(struct iwm_softc *sc)
             return err;
         }
     }
+    // A foreground scan replaces any background scan, so net80211's flag goes too. Aborting the firmware's
+    // background scan clears only the driver's own flags, and if this scan then finds nothing to join (after a
+    // disconnect, say), ieee80211_end_scan just scans again without clearing IEEE80211_F_BGSCAN. The flag then
+    // stayed set until the next firmware stop, and the WCL scan path refused every macOS scan as busy, so Wi-Fi
+    // never reconnected until it was turned off and on.
+    ic->ic_flags &= ~IEEE80211_F_BGSCAN;
     
     if (isset(sc->sc_enabled_capa, IWM_UCODE_TLV_CAPA_UMAC_SCAN))
         err = iwm_umac_scan(sc, 0);

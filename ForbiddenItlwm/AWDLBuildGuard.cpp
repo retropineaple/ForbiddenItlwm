@@ -14,6 +14,7 @@
 
 #include <IOKit/IOLib.h>
 #include <libkern/version.h>
+#include <sys/sysctl.h>
 #include <AWDLBuildGuard.hpp>
 
 #if !defined(ITL_AWDL_NATIVE)
@@ -21,6 +22,7 @@
 // may reference Apple's AWDL classes, which this kext would then need at load time.
 bool itlAWDLBuildAllowed() { return false; }
 bool itlAWDLBuildVerified() { return false; }
+bool itlAWDLBuildForced() { return false; }
 const char *itlAWDLBuildStatus() { return "unavailable: AirDrop isn't ported to this macOS version yet"; }
 #else
 
@@ -46,6 +48,7 @@ struct Anchor { unsigned slot; uintptr_t expected; };
 
 int gAllowed = -1;
 bool gVerified = false;
+bool gForced = false;   // allowed only because of -itlawdlanybuild
 const char *gStatus = "not-checked";
 
 bool vtableMatches()
@@ -120,6 +123,7 @@ bool itlAWDLBuildAllowed()
     } else if (anyBuild) {
         gStatus = "unverified build, allowed by -itlawdlanybuild";
         gAllowed = 1;
+        gForced = true;
     } else {
         gStatus = "blocked: unverified macOS build";
         gAllowed = 0;
@@ -131,9 +135,38 @@ bool itlAWDLBuildAllowed()
 // True only for a kernel on the verified list whose table matched. Code that relies on native data
 // layouts the vtable anchors don't cover (such as the master indication request) needs this, not
 // just itlAWDLBuildAllowed(): an "expected" or -itlawdlanybuild build stays off.
+//
+// gVerified only says the kernel is on the list. The macOS build must pair with it too (audit P-A08);
+// kern.osversion can still be empty when the driver starts, so it's read here, when first needed (the
+// peer manager's start), and the answer kept once the build is known.
+// True when AirDrop runs only because the tester set -itlawdlanybuild on a build the driver hasn't verified.
+// From 0.6.0-beta.2 the master indication is sent there too, so the build can be tested for real; its request
+// layout is then unchecked, the risk the flag already carries (BOOT-FLAGS).
+bool itlAWDLBuildForced()
+{
+    itlAWDLBuildAllowed();
+    return gForced;
+}
+
 bool itlAWDLBuildVerified()
 {
-    return itlAWDLBuildAllowed() && gVerified;
+    static int pairVerified = -1;
+    static char statusText[96];
+    if (!itlAWDLBuildAllowed() || !gVerified)
+        return false;
+    if (pairVerified >= 0)
+        return pairVerified == 1;
+    char osBuild[32] = {};
+    size_t length = sizeof(osBuild) - 1;
+    if (sysctlbyname("kern.osversion", osBuild, &length, nullptr, 0) != 0 || !osBuild[0])
+        return false;   // not known yet: stays off, asked again next time
+    pairVerified = ItlAWDL::buildPairVerified(version, osBuild) ? 1 : 0;
+    if (!pairVerified) {
+        snprintf(statusText, sizeof(statusText), "allowed: kernel verified, macOS build %s not verified", osBuild);
+        gStatus = statusText;
+        IOLog("ForbiddenItlwm: AirDrop %s; the master indication copy stays off\n", gStatus);
+    }
+    return pairVerified == 1;
 }
 
 const char *itlAWDLBuildStatus()

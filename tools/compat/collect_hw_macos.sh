@@ -43,15 +43,29 @@ echo "Collecting. The report will be saved as:"
 echo "  $OUT"
 
 HOST_SHORT=$(scutil --get LocalHostName 2>/dev/null || true)
+COMPUTER_NAME=$(scutil --get ComputerName 2>/dev/null || true)
 USER_NAME=$(id -un 2>/dev/null || true)
-# Replaces MAC addresses, UUIDs, the user name, the home folder and the local host name.
+# A name used as a sed pattern is escaped first: a / . [ or * in it broke or widened the pattern. Names
+# shorter than 3 characters aren't replaced (they'd match all over the report); the user is told to check
+# the file by hand instead (audit T04).
+sed_escape() { printf '%s' "$1" | sed -e 's/[][\/.^$*+?(){}|]/\\&/g'; }
+REDACT_ARGS=(-e 's/([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}/<mac>/g'
+             -e 's/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/<uuid>/g')
+SHORT_NAMES=""
+add_redaction() {
+    local value=$1 label=$2
+    [ -n "$value" ] || return 0
+    if [ "${#value}" -lt 3 ]; then SHORT_NAMES="$SHORT_NAMES $label"; return 0; fi
+    REDACT_ARGS+=(-e "s/$(sed_escape "$value")/<$label>/g")
+}
+# Longest first, so the home folder goes before the user name inside it.
+add_redaction "${HOME:-}" home
+add_redaction "$COMPUTER_NAME" host
+add_redaction "$HOST_SHORT" host
+add_redaction "$USER_NAME" user
+# Replaces MAC addresses, UUIDs, the home folder, the computer and local host names and the user name.
 redact() {
-    sed -E \
-        -e 's/([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}/<mac>/g' \
-        -e 's/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/<uuid>/g' \
-        -e "s#${HOME:-/nonexistent}#~#g" \
-        ${USER_NAME:+-e "s/${USER_NAME}/<user>/g"} \
-        ${HOST_SHORT:+-e "s/${HOST_SHORT}/<host>/g"}
+    sed -E "${REDACT_ARGS[@]}"
 }
 section() { printf '\n===== %s =====\n' "$1"; }
 
@@ -155,3 +169,7 @@ echo "To show it in Finder:  open -R \"$OUT\""
 echo "To read it:            open -e \"$OUT\""
 echo
 echo "Read it before sharing. It should contain no serial numbers, addresses, network names or devices."
+if [ -n "$SHORT_NAMES" ]; then
+    echo "Your$SHORT_NAMES name is shorter than 3 characters, so it wasn't replaced automatically."
+    echo "Search the report for it and remove it by hand before sharing."
+fi

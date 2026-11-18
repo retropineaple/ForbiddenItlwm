@@ -9,6 +9,7 @@
 #ifndef AirportItlwmSkywalkInterface_hpp
 #define AirportItlwmSkywalkInterface_hpp
 
+#include <ItlScanCursor.hpp>
 #ifdef AIRPORT_WCL
 #include "WCL/WCL.hpp"
 #endif
@@ -115,7 +116,7 @@ public:
     virtual bool init(IOService *) AIRPORT_SKYWALK_OVERRIDE;
 //    virtual ifnet_t getBSDInterface(void) AIRPORT_SKYWALK_OVERRIDE;
     
-    void associateSSID(uint8_t *ssid, uint32_t ssid_len, const struct ether_addr &bssid, uint32_t authtype_lower, uint32_t authtype_upper, uint8_t *key, uint32_t key_len, int key_index);
+    IOReturn associateSSID(uint8_t *ssid, uint32_t ssid_len, const struct ether_addr &bssid, uint32_t authtype_lower, uint32_t authtype_upper, uint8_t *key, uint32_t key_len, int key_index);
     void setPTK(const u_int8_t *key, size_t key_len);
     void setGTK(const u_int8_t *key, size_t key_len, u_int8_t kid, u_int8_t *rsc);
     
@@ -423,6 +424,7 @@ public:
     void handleWCLLink(bool);
     // Called from the controller's 1 s watchdog: posts the link's RSSI to WCL every few seconds.
     void wclPostLinkQuality();
+    bool wclLqmPostAllowed(int32_t rssi);
     void completeWCLScan();
 private:
     static IOReturn wclCommand(OSObject *, void *, void *, void *, void *);
@@ -461,6 +463,9 @@ private:
     uint32_t wclLqmTicks = 0, wclLqmPeriodicPosts = 0, wclLqmBeaconPosts = 0;
     int32_t wclLinkQualityReported = 0;   // 0: nothing reported since the link came up
     uint32_t wclLqmReportedBeacons = 0;
+    uint64_t wclLqmLastPostNs = 0;        // itlwm_lqmint gate: last LqmUpdate posted
+    int32_t wclLqmLastPostRssi = 0;
+    uint32_t wclLqmSuppressed = 0;
     int wclReportedLinkQuality = -2;
     ifnet_t wclLinkQualityInterface = nullptr;
     bool joinPending;
@@ -487,9 +492,10 @@ private:
     ItlHalService *fHalService;
     
     //IO80211
-    struct ieee80211_node *fNextNodeToSend;
     IOTimerEventSource *scanSource;
-    bool fScanResultWrapping;
+    // Scan-result cursor: the MAC address of the last node returned, not a pointer kept between requests
+    // (audit ST02: the node could be freed in between). include/ItlScanCursor.hpp.
+    ItlScan::Cursor fScanCursor;
     
     u_int32_t current_authtype_lower;
     u_int32_t current_authtype_upper;

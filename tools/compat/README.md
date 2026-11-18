@@ -23,6 +23,7 @@ It also checks channels 149 and 44 and the country:
 - **Your network:** which channel your Wi-Fi network is on.
 - **Nearby networks:** how many nearby networks macOS lists, and how many are on 149 to 165.
 - **With the AirDrop build running,** also whether the firmware learned a country this boot, which 5 GHz channel the iPhone uses (once it has been heard), and why the firmware refused the listener's channel if it did.
+- **Network stack (section 7):** whether pf has turned off macOS's user-space network path, which can slow AirDrop's QUIC transfers. On Tahoe, OpenCore's PowerTimeoutKernelPanic quirk causes it.
 
 The check prints your country code on screen. Leave it out if you paste the output somewhere public.
 
@@ -46,12 +47,12 @@ What the verdict means:
 | Unsupported | Pre-2013 cards, Wi-Fi 7 (BE200, BE201), Meteor Lake CNVi | Not supported |
 
 Two things stop it working whatever the card:
-- **The macOS build.** With the Tahoe kexts, AirDrop starts on macOS 26.7.1 (25G241), 26.7.2 (25G332) and 26.7.3 (25G342). With the Sequoia kexts, on 15.8 (24H23), 15.8.1 (24H32) and 15.8.2 (24H232), which run checked kernels, and 15.8.3 (24H241), and as "expected" on other 15.8.x builds. With the Sonoma kexts (test build), on 14.8.9 (23J631). On other builds the driver keeps AirDrop off and works as plain Wi-Fi. The check also tests whether BTLEAdvFixup's patterns for your macOS version (taken from 26.7.1, 26.7.3, 15.8.3 or 14.8.9; the Sequoia set also matches 15.8 and 15.8.2) match your `bluetoothd`.
+- **The macOS build.** With the Tahoe kexts, AirDrop starts on macOS 26.7.1 (25G241), 26.7.2 (25G332) and 26.7.3 (25G342). With the Sequoia kexts, on 15.8 (24H23), 15.8.1 (24H32) and 15.8.2 (24H232), which run checked kernels, and 15.8.3 (24H241), and as "expected" on other 15.8.x builds. With the Sonoma kexts (test build), on 14.8.9 (23J631). On other builds the driver keeps AirDrop off and works as plain Wi-Fi. The check also tests whether BTLEAdvFixup's patterns for your macOS version (taken from 26.7.1, 26.7.3 and 26.7.2's own site, 15.8.3 or 14.8.9; 26.7.3's set covers the rest of 26.7.2, and the Sequoia set also matches 15.8 and 15.8.2) match your `bluetoothd`.
 - **Bluetooth.** AirDrop finds devices over Bluetooth LE first, so it needs a working Intel Bluetooth controller.
 
-A good card can still be slow. The firmware opens channel 149 or 44, the fast mode, only after a nearby network tells it which country it is in. Until then the driver falls back to channel 6, which is very slow. Most home and office routers advertise their country. In the project's tests, an iPhone's Personal Hotspot switched on nearby (without joining it) also taught the firmware. Where the firmware marks 149 to 161 passive (China, for example), 0.5.0 uses them once it has heard a network's beacon there, as Linux does. Otherwise the driver follows the firmware's choice, and setting `itlwm_cc` doesn't help: it only changes the code macOS displays.
+A good card can still be slow. The firmware opens channel 149 or 44, the fast mode, only after a nearby network tells it which country it is in. Until then the driver falls back to channel 6, which is very slow. Most home and office routers advertise their country. In the project's tests, an iPhone's Personal Hotspot switched on nearby (without joining it) also taught the firmware. Where the firmware marks 149 to 161 passive (China, for example), 0.5.0 uses them once it has heard a network's beacon there. Otherwise the driver follows the firmware's choice, and setting `itlwm_cc` doesn't help: it only changes the code macOS displays.
 
-**User reports:** users have reported AirDrop working with the AX201 (Tahoe 26.7.1 and 26.7.3, Sequoia 15.8.1 to 15.8.3), AX211s in other machines (26.7.1), the AX210 (26.7.2, 26.7.3, Sequoia 15.8.1), an AX1690i (26.7.2) and the AX200 (Sequoia 15.6). The project hasn't verified these reports. See [docs/TESTED-HARDWARE.md](../../docs/TESTED-HARDWARE.md#user-reports).
+**User reports:** users have reported AirDrop working with the AX201 (Tahoe 26.7.1 and 26.7.3, Sequoia 15.8.1 to 15.8.3, and on channel 44 in Japan), AX211s in other machines (26.7.1, 26.7.3), the AX210 (26.7.2, 26.7.3, Sequoia 15.8.1), an AX1690i (26.7.2) and the AX200 (Sequoia 15.6). The project hasn't verified these reports. See [docs/TESTED-HARDWARE.md](../../docs/TESTED-HARDWARE.md#user-reports).
 
 On a CNVi laptop (Alder Lake and newer) the PCI ID alone can't tell an AX211 from an AX201 or a 9560. Load ForbiddenItlwm (or AirportItlwm) and run the check again: the firmware it loads names the radio.
 

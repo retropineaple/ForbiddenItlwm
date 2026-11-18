@@ -1151,11 +1151,12 @@ ieee80211_enqueue_data(struct ieee80211com *ic, mbuf_t m,
             ml_enqueue(ml, m);
 #else
 #ifdef IO80211FAMILY_V2
+            // 802.1X: a copy goes to user space with the other received frames, as in the WCL branch
+            // (audit NX02: the copy was delivered straight to ifp->iface without checking it or mbuf_dup).
             if (ieee80211_is_8021x_akm((enum ieee80211_akm)ni->ni_rsnakms)) {
-                XYLog("%s Duplicate EAPOL packet to user space\n", __FUNCTION__);
-                mbuf_dup(m, MBUF_DONTWAIT, &m2);
-                if (m2 != NULL)
-                    ifp->iface->inputPacket(m2, mbuf_len(m2));
+                m2 = NULL;
+                if (mbuf_dup(m, MBUF_DONTWAIT, &m2) == 0 && m2)
+                    ml_enqueue(ml, m2);
             }
 #endif
             ieee80211_eapol_key_input(ic, m, ni);
@@ -2123,11 +2124,9 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, mbuf_t m,
         (ic->ic_flags & IEEE80211_F_BGSCAN)) {
         struct ieee80211_rsnparams rsn, wpa;
         
-#ifdef AIRPORT_WCL
+        // Elements start after the 8-byte timestamp, 2-byte interval and 2-byte capabilities. The non-WCL
+        // form had a stray + 1 and saved one byte past the frame (audit NX01).
         uint32_t tlv_len = (mtod(m, u_int8_t *) + mbuf_len(m)) - (u_int8_t *)&wh[1] - 8 - 2 - 2;
-#else
-        uint32_t tlv_len = (mtod(m, u_int8_t *) + mbuf_len(m)) - (u_int8_t *)&wh[1] + 1 - 8 - 2 - 2;
-#endif
         ieee80211_save_ie_tlv(((u_int8_t *)&wh[1]) + 8 + 2 + 2, &ni->ni_rsnie_tlv, &ni->ni_rsnie_tlv_len, tlv_len);
         ni->ni_rsnprotos = IEEE80211_PROTO_NONE;
         ni->ni_supported_rsnprotos = IEEE80211_PROTO_NONE;
@@ -2900,6 +2899,12 @@ ieee80211_recv_assoc_resp(struct ieee80211com *ic, mbuf_t m,
         ieee80211_setup_htcaps(ni, htcaps + 2, htcaps[1]);
     if (htop)
         ieee80211_setup_htop(ni, htop + 2, htop[1], 0);
+    /* As the beacon parser does: a short VHT element is ignored, and the pair is applied only when both
+     * are whole. The association response passed them on unchecked (audit P-V01). */
+    if (vhtcap != NULL && vhtcap[1] < sizeof(struct ieee80211_ie_vhtcap) - 2)
+        vhtcap = NULL;
+    if (vhtopmode != NULL && vhtopmode[1] < sizeof(struct ieee80211_ie_vht_operation) - 2)
+        vhtopmode = NULL;
     if (vhtcap != NULL && vhtopmode != NULL) {
         ieee80211_setup_vhtcaps(ic, ni, vhtcap);
         ieee80211_setup_vhtopmode(ni, vhtopmode);
