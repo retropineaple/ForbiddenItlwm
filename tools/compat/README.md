@@ -99,6 +99,7 @@ Linux's driver reports the card's exact name, radio, firmware version and firmwa
 - **Boot flags:** only the AirDrop and Bluetooth ones.
 - **Wi-Fi interface:** supported channels, plus the current channel and width.
 - **Channel 149 and country:** whether the firmware has learned a country (the code itself only with `--include-country`), and the channels of nearby networks, without their names. On Linux, the state of channels 149 to 165.
+- **Wired interface MTU:** the MTU of `awdl0` and of each active wired interface (Wi-Fi is left out), to warn about big AirDrop sends dying with `unexpected-40` when a wired interface is larger. See docs/TROUBLESHOOTING.md.
 - **AirDrop driver:** its status counters, if its build is running.
 
 ### What they leave out

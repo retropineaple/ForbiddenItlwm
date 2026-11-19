@@ -109,6 +109,8 @@ Users on Reddit and GitHub have reported:
 | Intel AX210 (AMD Ryzen 9 7945HX) | macOS 26.7.2, with 0.5.4-beta.2: AirDrop finds nothing; the iPhone sends no data to the Mac (issue #46, open) |
 | Intel AX211 (desktop) | macOS Sequoia: Wi-Fi and Bluetooth work, AirDrop and Handoff don't (issue #35, open) |
 
+| Intel AX200 (AMD Ryzen 9 5950X desktop) | macOS Sequoia 15.8.2 (24H232), with 0.5.4-beta.2 plus the filter fix: AirDrop works both ways. A 2.8 GB Mac → iPhone send over AWDL ran at 34 MB/s once the wired interface's MTU was 1484 (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#big-airdrop-sends-die-after-a-couple-of-seconds-unexpected-40)) |
+
 The project hasn't verified these reports. The platforms, and which features were tried, vary between them.
 
 ## Not tested

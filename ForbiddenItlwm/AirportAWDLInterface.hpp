@@ -4,6 +4,7 @@
 #include <Airport/IOSkywalkQueueFactories.h>
 #include "AWDLRequestedValue.hpp"
 #include "AWDLInactiveProtocol.hpp"
+#include "AWDLPeerCache.hpp"
 #include <IOKit/IOLocks.h>
 
 class ItlAWDLInterface : public IO80211AWDLProtocol {
@@ -30,6 +31,9 @@ public:
     bool popTransmit(uint8_t *, size_t, size_t *, const uint8_t *holdPayloadFor, bool holdEverySize = false);
     // Frames macOS has queued that the driver hasn't taken yet.
     unsigned queuedTransmit() const { return transmitQueued; }
+    // Under the shared gate. Puts one Ethernet frame from the companion interface (llw0) into the same ring
+    // awdl0's own frames wait in, so it goes to the same peers on the same schedule. False when it didn't fit.
+    bool queueCompanionTransmit(const uint8_t *ethernet, size_t length);
     unsigned heldShortTransmit() const { return transmitHeldShort; }
     IOReturn initializeNetwork(IO80211Controller*, IOWorkLoop*, const ether_addr&);
     IOReturn receiveManagementFrame(IO80211Controller*, const uint8_t*, size_t, uint32_t, int32_t);
@@ -57,7 +61,7 @@ public:
     IOReturn getAWDL_ELECTION_ID(apple80211_awdl_election_id *data) override { return readRequested(requested_AWDL_ELECTION_ID, data); }
     IOReturn getAWDL_ELECTION_METRIC(apple80211_awdl_election_metric *data) override { return readRequested(requested_AWDL_ELECTION_METRIC, data); }
     IOReturn getAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(apple80211_awdl_sync_channel_sequence *data) override { return readRequested(requested_AWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE, data); }
-    IOReturn getPEER_CACHE_MAXIMUM_SIZE(apple80211_peer_cache_maximum_size*) override { return unsupported("getPEER_CACHE_MAXIMUM_SIZE"); }
+    IOReturn getPEER_CACHE_MAXIMUM_SIZE(apple80211_peer_cache_maximum_size*) override;
     IOReturn getAWDL_MASTER_CHANNEL(apple80211_awdl_master_channel *data) override { return readRequested(requested_AWDL_MASTER_CHANNEL, data); }
     IOReturn getAWDL_SYNC_STATE(apple80211_awdl_sync_state *data) override { return nativeState.getState(data); }
     IOReturn getAWDL_ELECTION_RSSI_THRESHOLDS(apple80211_awdl_election_rssi_thresholds *data) override { return readRequested(requested_AWDL_ELECTION_RSSI_THRESHOLDS, data); }
@@ -87,7 +91,7 @@ public:
     IOReturn setAWDL_SYNC_STATE(apple80211_awdl_sync_state *data) override;
     IOReturn setAWDL_ELECTION_RSSI_THRESHOLDS(apple80211_awdl_election_rssi_thresholds *data) override { return storeRequested(requested_AWDL_ELECTION_RSSI_THRESHOLDS, data, "AWDL_ELECTION_RSSI_THRESHOLDS"); }
     IOReturn setAWDL_PRESENCE_MODE(apple80211_awdl_presence_mode *data) override { return storeRequested(requested_AWDL_PRESENCE_MODE, data, "AWDL_PRESENCE_MODE"); }
-    IOReturn setPEER_CACHE_CONTROL(apple80211_peer_cache_control*) override { return unsupported("setPEER_CACHE_CONTROL"); }
+    IOReturn setPEER_CACHE_CONTROL(apple80211_peer_cache_control*) override;
     IOReturn setAWDL_OOB_REQUEST(apple80211_awdl_oob_request *) override;
     IOReturn setAWDL_SYNC_FRAME_TEMPLATE(apple80211_awdl_sync_frame_template *data) override;
     IOReturn setAWDL_ELECTION_PARAMS(apple80211_awdl_election_params *) override;
@@ -102,9 +106,9 @@ public:
     IOReturn setAWDL_AWDL_ADVERTISERS(awdl_peer_advert_add*) override { return unsupported("setAWDL_AWDL_ADVERTISERS"); }
     IOReturn setAWDL_DFSP_CONFIG(apple80211_awdl_dfsp_config*) override { return unsupported("setAWDL_DFSP_CONFIG"); }
     IOReturn setAWDL_DFSP_UCSA_CONFIG(apple80211_awdl_dfsp_ucsa_config*) override { return unsupported("setAWDL_DFSP_UCSA_CONFIG"); }
-    IOReturn setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create*) override { return unsupported("setCOMPANION_SKYWALK_IF_CREATE"); }
+    IOReturn setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create*) override;
     IOReturn setAWDL_OOB_SEC_PAYLOAD_REQUEST(apple80211_awdl_af_sec_payload_request*) override { return unsupported("setAWDL_OOB_SEC_PAYLOAD_REQUEST"); }
-    IOReturn setLLW_PARAMS(apple80211_llw_params*) override { return unsupported("setLLW_PARAMS"); }
+    IOReturn setLLW_PARAMS(apple80211_llw_params*) override;
     IOReturn setTX_RATE(apple80211_tx_rate*) override { return unsupported("setTX_RATE"); }
     IOReturn setP2P_COEX_PROTECTION(apple80211_p2p_coex_protection*) override { return unsupported("setP2P_COEX_PROTECTION"); }
     IOReturn setPSF_DWELL(apple80211_awdl_psf_dwell_params*) override { return unsupported("setPSF_DWELL"); }
@@ -142,7 +146,7 @@ private:
     void noteQueueState(const char *);
     UInt32 acceptTransmit(IOSkywalkPacket *const *, UInt32);
     // Only under the shared gate. Each frame is a copy, so no packet waits on the radio.
-    struct TransmitFrame { uint16_t length; uint8_t bytes[1514]; };
+    struct TransmitFrame { uint16_t length; bool llw; uint8_t bytes[1514]; };   // llw: sent as plain RFC 1042, not AWDL
     // itlawdltxqueue=N, 128 to 4096: frames held while the radio can't send, such as while the
     // peer is on another channel. A full queue drops, and the sender's transport reads that as loss.
     // Set once, before the frames are allocated (about 1.5 KB each).
@@ -163,6 +167,44 @@ private:
     bool dataTransmitEnabled = false;
     ItlAWDLNativeState nativeState;
     unsigned oobRequests = 0;
+    unsigned peerCacheRequests = 0, llwParamRequests = 0;
+#if defined(ITL_AWDL_LLW)
+    // -itlawdlllw: the companion low latency interface (llw0), created when macOS asks for it with request 293.
+    // Owned here and torn down with this interface. itlawdlllwrx chooses which received frames it gets.
+    class ItlLLWInterface *companion = nullptr;
+    IO80211Controller *owner = nullptr;   // not retained: it owns this interface
+    bool companionWanted = false;
+    int companionReceiveRule = 0;
+    unsigned companionRequests = 0, companionTxQueued = 0, companionTxDropped = 0;
+#endif
+    // Peer cache control (Continuity Camera, Sidecar traffic registration). The family sleeps after the call until
+    // the driver posts event 51 with the same 464-byte record (+4 = 1 added, 3 deleted). A wakeup sent from inside
+    // the handler is lost, because the caller has not gone to sleep yet, so the completion is queued here and
+    // posted by a timer on the interface work loop after the handler has returned.
+    static constexpr unsigned peerCacheBytes = itlawdl::peerCacheRecordBytes, peerCacheQueueDepth = 8;
+    struct PeerCacheDone { uint8_t bytes[peerCacheBytes]; };
+    PeerCacheDone peerCacheDone[peerCacheQueueDepth];
+    unsigned peerCacheDoneCount = 0, peerCacheCompleted = 0, peerCacheDropped = 0;
+    IOTimerEventSource *peerCacheTimer = nullptr;
+    static void peerCacheTick(OSObject *, IOTimerEventSource *);
+    void postPeerCacheCompletions();
+    // -itlawdlumiack: Continuity Camera registers a real-time group by sending the peer a "UMI" action frame and
+    // waiting for its transmit status (message 69: peer address, then a status byte at +6, 0 = acknowledged).
+    // The family sends that frame from a timer that only runs inside an availability window, and this driver
+    // reports no windows, so the status never comes and the registration fails after 3 s. With the flag set the
+    // driver reports the status itself, shortly after it has answered the peer cache add that precedes it.
+    bool umiAckWanted = false;
+    static constexpr unsigned umiAckQueueDepth = 8;
+    uint8_t umiAckPeers[umiAckQueueDepth][6] = {};
+    unsigned umiAckCount = 0, umiAckPosted = 0;
+    // The peer of the last cache add. Once a peer is cached the family stops asking for it, so later
+    // registrations (each begins with two LLW_PARAMS requests) are answered for this peer.
+    uint8_t umiLastPeer[6] = {};
+    bool umiLastPeerValid = false;
+    void queueUmiAck(const uint8_t *peer);
+    IOTimerEventSource *umiAckTimer = nullptr;
+    static void umiAckTick(OSObject *, IOTimerEventSource *);
+    void postUmiAcks();
     bool oobSampled = false, debugFlagsSet = false, debugFlagsWanted = false;
     IOReturn noteOobRequest(const apple80211_awdl_oob_request *, const char *);
     // Native 25G241 layout read from both the sender and Apple's Broadcom handler:

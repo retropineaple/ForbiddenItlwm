@@ -89,9 +89,22 @@ static void testPendingAddbaRequests() {
     assert(pending.take(1U << 2, result) && result.tid == 5 && result.token == 9);
     assert(pending.has(2) && !pending.take(1U << 2, result));
     assert(pending.take(0, result) && result.tid == 2 && result.token == 8 && pending.empty());
+    // Highest TID first: Continuity Camera ADDBA is TID 7; must not lose to TID 0 re-requests.
+    first.tid = 0;
+    first.token = 1;
+    next.tid = 7;
+    next.token = 2;
+    memcpy(next.peer, peer, sizeof(next.peer));
+    assert(pending.note(first) && pending.note(next));
+    assert(pending.take(0, result) && result.tid == 7 && result.token == 2);
+    assert(pending.take(0, result) && result.tid == 0 && result.token == 1 && pending.empty());
     assert(pending.note(first));
-    pending.discard(2);
+    pending.discard(0);
     assert(pending.empty());
+    first.tid = 2;
+    first.token = 8;
+    next.tid = 5;
+    next.token = 9;
     assert(pending.note(first));
     pending.keepPeer(own);
     assert(pending.empty() && pending.note(next));

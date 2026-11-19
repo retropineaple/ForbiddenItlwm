@@ -7,7 +7,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="forbiddenitlwm-tests-") as directory:
-    for name in ("awdl_requested_configuration", "awdl_protocol", "awdl_frame_builder", "awdl_sync_prefix", "awdl_local_schedule", "awdl_probe_policy", "awdl_data_payload", "awdl_data_frame", "awdl_observation", "awdl_regulatory", "awdl_tx_burst", "awdl_peer_schedule", "awdl_build_guard", "btleadv_hci", "eapol_key_length", "wcl_transition", "counted_copy", "scan_cursor"):
+    for name in ("awdl_requested_configuration", "awdl_protocol", "awdl_frame_builder", "awdl_sync_prefix", "awdl_local_schedule", "awdl_probe_policy", "awdl_peer_cache", "awdl_data_payload", "awdl_data_frame", "awdl_observation", "awdl_regulatory", "awdl_tx_burst", "awdl_peer_schedule", "awdl_build_guard", "btleadv_hci", "eapol_key_length", "wcl_transition", "counted_copy", "scan_cursor"):
         output = Path(directory) / name
         subprocess.run([
             "xcrun", "clang++", "-std=c++14",
@@ -33,6 +33,22 @@ subprocess.run(["python3", str(root / "tests/monitor_channel.py")], check=True)
 subprocess.run(["python3", str(root / "tests/monitor_probe.py")], check=True)
 # AWDL recovery across Wi-Fi reassociation: extracted production methods under ASan/UBSan (PR #12).
 subprocess.run(["python3", str(root / "tests/awdl_reconnect_recovery.py")], check=True)
+
+# Plain RFC 1042 Continuity frames: accepted only with ITL_AWDL_LLW (Sequoia). Tahoe/Sonoma keep them dropped.
+with tempfile.TemporaryDirectory(prefix="forbidden-llw-rfc-") as directory:
+    for label, macros in (
+        ("tahoe", ["-D__IO80211_TARGET=__MAC_26_0"]),
+        ("sequoia-llw", ["-D__MAC_15_2=150200", "-D__IO80211_TARGET=150200", "-DAIRPORT_WCL"]),
+    ):
+        output = Path(directory) / ("awdl_data_reject_" + label)
+        subprocess.run([
+            "xcrun", "clang++", "-std=c++14",
+            *macros, "-I" + str(root / "include"),
+            "-fsanitize=address,undefined", str(root / "tests" / "awdl_data_reject.cpp"),
+            "-o", str(output),
+        ], check=True)
+        subprocess.run([str(output)], check=True)
+
 # Joins in crowded places and on 802.1X networks: extracted net80211 bodies (#69, runmain).
 subprocess.run(["python3", str(root / "tests/node_cache_join.py")], check=True)
 subprocess.run(["python3", str(root / "tests/wcl_enterprise_link.py")], check=True)

@@ -17,7 +17,7 @@ ForbiddenItlwm makes macOS's native stack (IO80211Family with Skywalk, on Tahoe,
    Block Ack, send gate
                                │
             Intel firmware: station context (normal Wi-Fi)
-                          + listener context on 149/80 or 44/80 (AirDrop)
+                          + listener context on 149/80 (AirDrop)
 ```
 
 ### 1. The interface: `awdl0`
@@ -30,13 +30,11 @@ ForbiddenItlwm makes macOS's native stack (IO80211Family with Skywalk, on Tahoe,
 ### 2. The radio: a second firmware context
 
 Normal Wi-Fi uses the firmware's station context. ForbiddenItlwm adds a second MAC context, a **listener**, with:
-- its own PHY context on the 5 GHz channel the iPhone uses for AirDrop, 149 or 44 (from 0.6.0), at 80 MHz when allowed; channel 6 when neither is
+- its own PHY context on channel 149 at 80 MHz (channel 6 when 149 isn't allowed)
 - its own firmware station and transmit queue
 - the AWDL address
 
 The firmware time-shares the radio between the station's channel and the listener's. So normal Wi-Fi stays connected while AirDrop runs.
-
-The listener is added once the Mac's Wi-Fi connection is up and removed when it disconnects, so AirDrop needs the Mac to be on a Wi-Fi network. From 0.6.0-beta.1 ([PR #12](https://github.com/retropineaple/ForbiddenItlwm/pull/12)) it is added only after the connection is fully set up, and removing it first waits for any setup still in progress.
 
 - **Receive:** the driver picks AWDL action frames and data frames out of what the listener receives. It hands action frames to Apple's peer manager with real RSSI metadata, which the peer manager needs before it accepts a peer. IPv6 data goes into `awdl0`.
 - **Transmit:** macOS's sync frames are built from Apple's template and sent every 110 TU. With `-itlawdlsvcmerge` its service records are merged in, and with `-itlawdlawsync` idle frames are timed to the iPhone's windows. `awdl0`'s IPv6 packets go out the listener's queue with AWDL data framing.
@@ -65,13 +63,9 @@ Its byte patterns are exact bytes from specific `bluetoothd` builds: 25G241's (2
 
 The bonding fix was tested on macOS 26.7.2 (25G332) with an Intel Wi-Fi 6 AX200 (PCI 8086:2723, Bluetooth function USB 8087:0029) on a MacBookPro16,4 SMBIOS, running this plugin with IntelBTPatcher disabled: a new Bluetooth LE mouse bonds, and bluetoothd stays stable afterwards. Reports for other Intel cards are welcome.
 
-### 6. Country and channels 149 and 44
+### 6. Country and channel 149
 
-Apple's AWDL uses channel 6 on 2.4 GHz and one 5 GHz channel, 149 or 44, which each device picks by its own country rules. From 0.6.0 the listener follows the iPhone: the iPhone's channel sequence (in its sync frames) shows which 5 GHz channel it uses, and the listener takes 44 if the iPhone uses 44, otherwise 149 (`ITLAWDLCoexPeer5GHz`). Slots the iPhone gives to its own Wi-Fi network aren't counted. Before any iPhone is heard, the listener starts on 149.
-
-Intel firmware starts in world mode, where these channels are listen-only. It opens them after it learns the country from a nearby network's beacons, if that country's rules allow it. The driver asks the firmware and follows its answer, with two exceptions where the firmware marks a channel passive (China's 149 to 161, Japan's 36 to 48, for example):
-- **Beacon hint** (`ITLAWDLCoexBeaconHints`): the driver treats the channel as usable once it has received a beacon from a Wi-Fi network on it. Linux's cfg80211 has the same mechanism but applies it only while no country is known (and iwlwifi, whose firmware manages the country, doesn't use it). ForbiddenItlwm also applies it after a country is learned, so it is broader than Linux; without that, the listener would stay on channel 6 in China. Hints a new country doesn't allow are cleared. Beacons aren't authenticated, so anything that sends one on the channel counts, as it does for the firmware's own passive-channel rule.
-- **Beside a connection** (`ITLAWDLCoexIrConcurrent`): if the firmware marks the channel usable for concurrent operation, the listener may use it while the Mac's own Wi-Fi is connected on a channel in the same group (36–48, 52–64, 100–144, 149–165). This is Linux's relaxed rule for Wi-Fi Direct (P2P) interfaces, which iwlwifi turns on; the AWDL listener is the closest equivalent to such an interface. Without either, the listener uses channel 6, which works but is slow: the iPhone spends few slots there, and 2.4 GHz rates are low.
+Intel firmware starts in world mode, where channels 149 to 161 are listen-only. It opens them after it learns the country from a nearby network's beacons, if that country's rules allow 80 MHz there. The driver asks the firmware and follows its answer. One exception, as on Linux: where the firmware marks 149 to 161 passive (China, for example), the driver treats a channel as usable once it has received a beacon from a Wi-Fi network on it (the "beacon hint", `ITLAWDLCoexBeaconHints`), and clears the hints when the country changes. Until then the listener uses channel 6, which works but is slow: the iPhone spends few slots there, and 2.4 GHz rates are low.
 
 ### 7. Which macOS builds AirDrop starts on
 
@@ -83,7 +77,7 @@ Each macOS version has its own build (`tools/build.py --target tahoe|sequoia|son
   - Every kernel symbol the driver imports exists.
 - **Apple's `IO80211AWDLProtocol` table, read at runtime,** has the expected functions at anchor slots spread across it, its own pure methods where expected, and ends where expected (568 slots on Tahoe, 563 on Sequoia, 547 on Sonoma). This catches a changed table on any build.
 
-When either fails, the driver behaves like plain AirportItlwm. `-itlawdlanybuild` skips the first check, never the second. The result is published as `ItlwmAWDLBuildCheck`. Copying macOS's AirDrop announcement (`-itlawdlmitx`) reads a data layout the table check doesn't cover, so it needs a verified build: from 0.6.0-beta.1 both the kernel and the macOS build must be on the list (one kernel can ship with more than one IO80211Family). It stays off on "expected" kernels, on an unlisted build with a listed kernel, and with `-itlawdlanybuild`.
+When either fails, the driver behaves like plain AirportItlwm. `-itlawdlanybuild` skips the first check, never the second. The result is published as `ItlwmAWDLBuildCheck`. Copying macOS's AirDrop announcement (`-itlawdlmitx`) reads a data layout the table check doesn't cover, so it needs a verified kernel: it stays off on "expected" kernels and with `-itlawdlanybuild`.
 
 **Sequoia differs from Tahoe in a few places the driver depends on.** The 15.8 and 15.8.3 Kernel Debug Kits (identical tables) showed:
 - the same 63 AWDL protocol methods in the same order, with about ten base-class methods added or removed before them, and objects 16 bytes smaller
@@ -103,8 +97,22 @@ When either fails, the driver behaves like plain AirportItlwm. `-itlawdlanybuild
 
 macOS publishes each interface's link-quality metric as `State:/Network/Interface/en0/LinkQuality`. Apple Push (`apsd`) won't connect over an interface rated "off" (-2), and iMessage, FaceTime and the account-device lookups that AirDrop between your own devices relies on all need push.
 - **The original problem:** the pre-Skywalk driver set the metric at link-up. On Tahoe that call was commented out, and `IO80211SkywalkInterface::setLQM` is an empty stub, so en0 stayed "off" forever. Sequoia's IO80211Family has the same stub, so the Sequoia build reports the metric too, and so does the Sonoma build, from its 1-second watchdog.
-- **What ForbiddenItlwm does:** every 2 seconds while connected, it calls `IOSkywalkNetworkInterface::reportLinkQuality` (which sets the kernel's metric) from the signal strength: 100 at -70 dBm or stronger, 50 at -80 dBm or stronger, 10 below. It reports "off" when the link drops and, from 0.6.0-beta.1, when the driver stops.
-- **It also tells WCL the signal (Tahoe only):** the signal strength goes into WCL's link-quality update (byte 0 valid, the RSSI at offset 4), which Apple's `handleLqmUpdate` reads. From 0.6.0-beta.1 ([PR #1](https://github.com/retropineaple/ForbiddenItlwm/pull/1)) the update also carries the noise floor and signal-to-noise (offsets 0x0b to 0x10) when the firmware has measured noise; some cards' firmware doesn't report it in normal Wi-Fi (the project's AX211 doesn't), and then those fields stay empty. That structure's layout is only known for Tahoe: checked on 26.7.2 and 26.7.3 for the noise fields.
+- **What ForbiddenItlwm does:** every 2 seconds while connected, it calls `IOSkywalkNetworkInterface::reportLinkQuality` (which sets the kernel's metric) from the signal strength: 100 at -70 dBm or stronger, 50 at -80 dBm or stronger, 10 below. It reports "off" when the link drops.
+- **It also tells WCL the signal (Tahoe only):** the signal strength goes into WCL's link-quality update (byte 0 valid, the RSSI at offset 4), which Apple's `handleLqmUpdate` reads. That structure's layout is only known for Tahoe.
+
+### 9. Continuity Camera and Sidecar: what the driver answers
+
+These two ask the driver for things AirDrop never does. Before it registers real-time traffic with the iPhone, macOS:
+
+- asks the driver to add the peer to a firmware cache (`setPEER_CACHE_CONTROL`, a 464-byte record: version at +0, operation at +4, peer address at +8) and sleeps until the driver posts event 51 with the same record and +4 set to 1 (added) or 3 (deleted). The driver posts it from a timer on the interface work loop a few milliseconds after its handler returns; posted from inside the handler, the wakeup would arrive before the caller sleeps and be lost. The record layout, the event number and this timing rule were first worked out by DrogaBox's [RTL8814Native](https://github.com/DrogaBox/RTL8814Native) for Tahoe; here they were checked on Sequoia.
+- sends low-latency parameters (`setLLW_PARAMS`), which are acknowledged and counted.
+- sends the iPhone a unicast action frame and waits for its transmit status, message 69 (peer address, then a status byte at +6; 0 means acknowledged). macOS sends that frame itself, but only inside an availability window, which this driver does not report. With `-itlawdlumiack` the driver posts the status instead, so the wait ends. Nothing is transmitted for it.
+
+None of this moves data. It lets the registration finish. The video itself needs `llw0`:
+
+- **`llw0`** (`-itlawdlllw`, `ForbiddenItlwm/AirportLLWInterface.*`). After registration the media stack opens a UDP connection with the flags "LowLatency Handoff" and wants the low latency interface macOS asks the driver to create (request 293, "companion Skywalk interface"). `llw0` is a second Skywalk interface on the Wi-Fi interface's class chain (role 2, id 9, BSD prefix `llw`, `awdl0` as its parent, same MAC). It needs a few things Apple's class does that the base family doesn't: its power state handler must not take the work loop that the 293 handler holds, its `ifnet` unique id must differ from `awdl0`'s (the 6-byte MAC plus `"ll"`), and its power state has to stay at 1 like every Skywalk interface.
+- **Two frame formats share the radio.** On Broadcom's host code the frames from the air are split by their SNAP header: Apple's OUI (`aa aa 03 00 17 f2 08 00`, then `03 04`, a sequence, `00 00` and the ethertype) goes to `awdl0`; an empty OUI (RFC 1042: `aa aa 03 00 00 00 86 dd`, then IPv6) goes to `llw0`. The same holds for transmit: only `awdl0` gets the Apple header added. This driver does the same in software: the receive parser marks plain RFC 1042 frames and the hand-off delivers them to `llw0` only; `llw0`'s transmit frames are queued on `awdl0`'s ring with a flag and built plain. The iPhone's camera stream is these frames: UDP between `fd00::/8` addresses, up to about 1,400 bytes each, addressed to the Mac's own AWDL address. (The AWDLLab notes describe the Broadcom side: `AWDL_DATA_ENCAP.md`, `AWDL_RX_DATA_TO_SKYWALK.md`, `AWDL_STAGE4_LLW_CLOSURE.md`.)
+- **What is left.** The stream arrives and the media stack reads it, but about 7.5% of the iPhone's frames never reach the radio's receive path (measured by 802.11 sequence number, in bursts of up to 100). The camera's video has no error correction, so a burst breaks a frame. See [DEBUGGING.md Case 3](DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way) for how that is measured and what has been ruled out.
 
 ## Why speed and connect time vary
 
@@ -125,7 +133,9 @@ These each took one or more test boots to learn.
 - **Peer creation needs real RSSI** in the frame metadata. With 0 there, the peer manager never adds the peer.
 - **`awdl0` is receive-restricted.** Ordinary sockets can't receive on it, so `nc` and similar tools time out even when replies arrive. Judge connectivity with a packet capture.
 - **Use `/usr/bin/log`.** In zsh, `log` is a built-in, so a bare `log show` prints nothing useful. `sharingd`, `rapportd`, `mDNSResponder` and `wifip2pd` logs show what AirDrop is doing.
-- **The firmware gives a listener context group data only in promiscuous mode,** whatever the multicast filter says.
+- **The firmware gives a listener context group data only in promiscuous mode,** whatever the multicast filter says. So with promiscuous receive off, which is the normal state while a peer is active (next point), the Mac receives almost no group frames: in one test run 13 group frames arrived against 247 sent, so the iPhone's multicast mDNS answers don't reach it. Discovery and connections still worked in the tests.
+- **Promiscuous receive follows the peer's firmware station.** The firmware doesn't acknowledge a station's frames while promiscuous receive is on, so the driver keeps it off for as long as the peer's station exists (up to ten minutes after the last traffic). Keying it on the receive Block Ack session instead let it come back on 60 s after that session went idle, and a send started in that gap got no replies for about two minutes (`awdlCoexBaHandle`, [TROUBLESHOOTING.md](TROUBLESHOOTING.md#a-send-from-the-mac-stalls-for-a-minute-or-more-after-the-iphone-sat-idle)).
+- **QUIC sizes its packets from the wired MTU.** `awdl0` is 1484. With an Ethernet interface at 1500 up beside it, a big AirDrop send builds packets of up to 1500 bytes, macOS refuses those on `awdl0` with `EMSGSIZE`, and the transfer dies (`unexpected-40`). The fix is the wired interface's MTU, not the driver ([TROUBLESHOOTING.md](TROUBLESHOOTING.md#big-airdrop-sends-die-after-a-couple-of-seconds-unexpected-40)).
 - **Cross-band retunes on a live binding crash the firmware.** Band changes are refused.
 - **Firmware TX status depends on the frame:** for broadcasts it only means the frame left the queue.
 - **ACKs must match the MAC context's address.** The listener carries the AWDL address so the firmware credits the peer's ACKs.
@@ -136,6 +146,7 @@ These each took one or more test boots to learn.
 | Path | Contents |
 | --- | --- |
 | `ForbiddenItlwm/AirportItlwmV2.cpp` | The macOS side: interface setup, Skywalk queues and pools, sync frame bridge, data in and out of `awdl0` |
+| `ForbiddenItlwm/AirportLLWInterface.*`, `AirportLLWHandlers.inc` | `ItlLLWInterface` (`llw0`), and its unsupported-call handlers generated from Apple's virtual table (`tools/abi/gen_llw_handlers.py`) |
 | `ForbiddenItlwm/AirportAWDLInterface.hpp`, `AWDLInactiveProtocol.hpp`, `AWDLRequestedValue.hpp` | `ItlAWDLInterface` and its stored settings |
 | `itlwm/hal_iwx/ItlIwx.cpp` | The radio side: the listener context, country handling, receive and transmit, Block Ack, the send gate |
 | `include/AWDL*.hpp` | Frame parsing and building, data framing, peer schedule, regulatory rules. Mostly host-testable |
@@ -146,7 +157,8 @@ These each took one or more test boots to learn.
 | `tests/`, `tools/test_awdl.py` | Offline tests, many of them on real driver functions extracted into mocks |
 | `tools/build.py`, `tools/sources.txt` | Command Line Tools build of `ForbiddenItlwm.kext` |
 | `tools/build_btleadv.py` | Build of `BTLEAdvFixup.kext` |
-| `tools/abi/` | The virtual table audit against 25G241 (Tahoe), 24H241 (Sequoia) and 23J631 (Sonoma) |
+| `tools/abi/` | The virtual table audit against 25G241 (Tahoe), 24H241 (Sequoia) and 23J631 (Sonoma); for `llw0`, `kc_carve.py` / `kc_vtable.py` carve a kernel collection and read Apple's class tables, and `audit_llw_vtable.py` checks ours (655 slots, 0 problems on 24H232) |
+| `tools/diag/` | Read-only scripts and `dtrace` probes: `continuity_check.sh` (camera stages), `llw_attempt.sh` (one-shot capture of a camera attempt), `trace_*.d` |
 | `ForbiddenItlwm/AWDLBuildGuard.cpp`, `include/AWDLBuildGuard.hpp` | The macOS build check |
 | `tools/awdl_*.py` | Readers for the driver's registry diagnostics |
 | `tools/compat/` | Tester scripts |

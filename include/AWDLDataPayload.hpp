@@ -2,8 +2,10 @@
 // seemoo-lab/owl src/frame.h, src/tx.c and src/rx.c. No radio/queue ownership.
 #pragma once
 #include <AWDLFrameBuilder.hpp>
+#include <ItlAWDLTargets.hpp>
 namespace ItlAWDL {
-struct IPv6PayloadView { const uint8_t *bytes; size_t length; uint16_t sequence; };
+// rfc1042: a plain SNAP header with an empty OUI, not the Apple AWDL one. Broadcom sends those to llw0, not awdl0.
+struct IPv6PayloadView { const uint8_t *bytes; size_t length; uint16_t sequence; bool rfc1042; };
 inline bool validIPv6Payload(const uint8_t *p, size_t n) {
     // Initial transport supports a 1500-byte IPv6 MTU and no jumbograms.
     return p && n >= 40 && n <= 1500 && (p[0] >> 4) == 6 &&
@@ -36,6 +38,18 @@ inline bool hasOuterDataHeader(const uint8_t *frame, size_t length) {
 inline ParseResult parseIPv6DataPayload(const uint8_t *frame, size_t length,
                                       IPv6PayloadView *output) {
     if (!frame || !output || length<16) return ParseResult::Malformed;
+    if (hasOuterDataHeader(frame,length) && (frame[6]==0x86 && frame[7]==0xdd)) {
+        // Plain RFC 1042 (empty-OUI SNAP, ethertype IPv6): Continuity Camera / llw0 traffic.
+        // Only accept when llw0 is built. Without ITL_AWDL_LLW these would reach awdl0 and must stay dropped.
+#if defined(ITL_AWDL_LLW)
+        if (!validIPv6Payload(frame+8,length-8)) return ParseResult::Malformed;
+        *output={frame+8,length-8,0,true};
+        return ParseResult::Valid;
+#else
+        (void)output;
+        return ParseResult::Unsupported;
+#endif
+    }
     if (hasOuterDataHeader(frame,length)) {
         // A different length could mean several packets in one frame, which isn't handled.
         if (((size_t(frame[6])<<8)|frame[7])!=length-8) return ParseResult::Unsupported;
@@ -47,7 +61,7 @@ inline ParseResult parseIPv6DataPayload(const uint8_t *frame, size_t length,
     if (read16(frame+8)!=0x0403 || read16(frame+12)!=0 ||
         frame[14]!=0x86 || frame[15]!=0xdd) return ParseResult::Unsupported;
     if (!validIPv6Payload(frame+16,length-16)) return ParseResult::Malformed;
-    *output={frame+16,length-16,read16(frame+10)};
+    *output={frame+16,length-16,read16(frame+10),false};
     return ParseResult::Valid;
 }
 }

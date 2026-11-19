@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased (Continuity Camera draft)
+
+- **Continuity Camera: the iPhone's video stream reaches the Mac (`-itlawdlllw`, Sequoia).** Plain RFC 1042 camera frames go to `llw0` (Apple-header frames stay on `awdl0`). **Draft:** video still loses packets (~7–14% radio-level Seq miss in bursts); see [DEBUGGING.md Case 3](docs/DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way). Plain RFC 1042 is accepted only when `ITL_AWDL_LLW` is built; Tahoe/Sonoma builds without `llw0` keep dropping them.
+- **New: `llw0`, the low latency companion interface (Sequoia, `-itlawdlllw`).** Role 2 / id 9 Skywalk companion; vtable audited by `tools/abi/audit_llw_vtable.py`. Flags `itlawdlllwrx`, `itlawdlllwmtu`. See [BOOT-FLAGS.md](docs/BOOT-FLAGS.md).
+- **Peer cache / UMI:** answers Continuity registration requests; layout notes from DrogaBox/RTL8814Native.
+- **Diagnostics:** `ITLAWDLCoexSeq*`, `ITLAWDLRxMpdu*`, `ItlwmLLW*`, `tools/diag/llw_attempt.sh`, Continuity stages in `continuity_check.sh`, `check_compat.sh` section 8 (wired MTU vs awdl0).
+- **Tests:** `awdl_peer_cache`, `awdl_data_reject` (plain RFC 1042 under ASan/UBSan).
+- **Credits:** [DrogaBox](https://github.com/DrogaBox) / RTL8814Native — peer-cache control layout and event 51 (re-verified on Sequoia 24H232). No code was copied.
+- **Found, outside this driver:** Continuity Camera refused on AMD "Force Penryn" CPU family before any traffic; Skylake family (`0x37fc219f`) passes.
+
 ## 0.6.0-beta.2
 
 **Bluetooth: BTLEAdvFixup 0.9.3**
