@@ -67,8 +67,14 @@ inline DataReject classifyDataFrame(const uint8_t *f,size_t captured,bool includ
     if(header==26 && (f[24]&0x80)) return DataReject::Amsdu;
     const uint8_t *p=f+header; size_t n=length-header;
     if(n<16) return DataReject::Short;
-    if (hasOuterDataHeader(p,n) && (p[6]==0x86 && p[7]==0xdd))
+    if (hasOuterDataHeader(p,n) && (p[6]==0x86 && p[7]==0xdd)) {
+#if defined(ITL_AWDL_LLW)
         return validIPv6Payload(p+8,n-8) ? DataReject::None : DataReject::BadIPv6;
+#else
+        // Plain RFC 1042 is Continuity/llw0-only; without llw0 keep it off awdl0.
+        return DataReject::NotLlcSnap;
+#endif
+    }
     if (hasOuterDataHeader(p,n)) {
         if (((size_t(p[6])<<8)|p[7])!=n-8) return DataReject::OuterLength;
         p+=8;n-=8;

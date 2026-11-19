@@ -74,21 +74,27 @@ int main()
     assert(classify(w, 26 + 8 + n2 + 4, true) == DataReject::OuterLength);
     w[26 + 6] = 0x05;
 
-    // Plain RFC 1042 IPv6 (no AWDL header), as an iPhone sends the camera stream: accepted, sequence 0.
+    // Plain RFC 1042 IPv6: Continuity Camera / llw0 only (ITL_AWDL_LLW). Without llw0 it stays dropped.
     {
         static uint8_t r[26 + 8 + 100];
         memcpy(r, head, 26);
         const uint8_t snap[8] = {0xaa, 0xaa, 3, 0, 0, 0, 0x86, 0xdd};
         memcpy(r + 26, snap, 8);
         r[34] = 0x60; r[38] = 0; r[39] = 60;
+#if defined(ITL_AWDL_LLW)
         assert(parseDataFrame(r, 26 + 8 + 100, false, &view) == ParseResult::Valid);
-        assert(view.ip.length == 100 && view.ip.sequence == 0);
+        assert(view.ip.length == 100 && view.ip.sequence == 0 && view.ip.rfc1042);
         assert(classify(r, 26 + 8 + 100, false) == DataReject::None);
-        r[38] = 1;   // IPv6 length no longer matches
+        r[38] = 1;
         assert(parseDataFrame(r, 26 + 8 + 100, false, &view) == ParseResult::Malformed);
         assert(classify(r, 26 + 8 + 100, false) == DataReject::BadIPv6);
+#else
+        assert(parseDataFrame(r, 26 + 8 + 100, false, &view) == ParseResult::Unsupported);
+        assert(classify(r, 26 + 8 + 100, false) == DataReject::NotLlcSnap);
+#endif
     }
 
+#if defined(ITL_AWDL_LLW)
     // What llw0 sends is the same shape: built plain, it parses back as RFC 1042 with the packet intact.
     {
         uint8_t eth[14 + 40] = {2, 1, 1, 1, 1, 1, 2, 5, 5, 5, 5, 5, 0x86, 0xdd, 0x60};
@@ -102,6 +108,7 @@ int main()
         assert(buildDataFrameFromEthernet(eth, sizeof(eth), own, 7, out, sizeof(out), &n, false) == BuildResult::Ready);
         assert(parseDataFrame(out, n, false, &view) == ParseResult::Valid && !view.ip.rfc1042);
     }
+#endif
 
     // The two agree on everything: mutate a valid frame at random and compare, with and without FCS.
     uint32_t random = 1;

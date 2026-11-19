@@ -38,11 +38,14 @@ struct PendingAddbaRequests {
         pending |= uint8_t(1U << request.tid);
         return true;
     }
+    // Prefer the highest ready TID. Continuity Camera ADDBA is TID 7; lowest-first
+    // (__builtin_ctz) let TID 0 re-requests starve it (live: BaTids=1, TID7 miss ~11%).
+    // AppleBCMWLAN configures Block Ack per ampdu_tid ("cannot set Block Ack Policy on TID %d").
     bool take(uint8_t blocked, AddbaRequest &request) {
         const unsigned ready = pending & ~blocked;
         if (!ready)
             return false;
-        const unsigned tid = __builtin_ctz(ready);
+        const unsigned tid = 31U - unsigned(__builtin_clz(ready));
         request = requests[tid];
         discard(tid);
         return true;
