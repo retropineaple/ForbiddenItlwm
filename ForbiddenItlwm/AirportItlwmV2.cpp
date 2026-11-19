@@ -35,6 +35,7 @@ static bool awdlRawSamples;
 #include <AWDLPeerProbe.hpp>
 #include <AWDLDataPayload.hpp>
 #include <AWDLDataFrame.hpp>
+#include <AWDLMtu.hpp>
 #include <Airport/IOSkywalkPacketView.h>
 #include <libkern/OSDebug.h>
 #include <mach/vm_param.h>
@@ -77,12 +78,81 @@ IOReturn ItlAWDLInterface::setAWDL_ELECTION_PARAMS(apple80211_awdl_election_para
     return data ? kIOReturnSuccess : kIOReturnBadArgument;
 }
 
+extern "C" void itlAWDLNoteRealtime(void);
+
+void ItlAWDLInterface::noteCall(const char *name, IOReturn result)
+{
+    if (!name || !ensureConfigurationLock())
+        return;
+    IOLockLock(configurationLock);
+    unsigned i = 0;
+    for (; i < callStatCount; ++i)
+        if (!strcmp(callStats[i].name, name))
+            break;
+    bool publish = false;
+    if (i == callStatCount && callStatCount < callStatCapacity) {
+        callStats[callStatCount++] = {name, 0, 0};
+        publish = true;
+    }
+    if (i < callStatCount) {
+        const uint32_t n = ++callStats[i].count;
+        publish = publish || !(n & (n - 1)) || callStats[i].last != uint32_t(result);   // new, a power of two, or a changed answer
+        callStats[i].last = uint32_t(result);
+    }
+    ++callTotal;
+    char text[1536];
+    size_t used = 0;
+    if (publish) {
+        for (unsigned k = 0; k < callStatCount && used + 80 < sizeof(text); ++k)
+            used += snprintf(text + used, sizeof(text) - used, "%s=%u/%x;", callStats[k].name, callStats[k].count, callStats[k].last);
+    }
+    IOLockUnlock(configurationLock);
+    if (publish)
+        setProperty("ItlwmAWDLCalls", text);
+}
+
+void ItlAWDLInterface::noteTrafficRegistration(const apple80211_awdl_peer_traffic_registration *data)
+{
+    if (!data || !ensureConfigurationLock())
+        return;
+    // The record is 184 bytes on the wire; the struct covers 172. The buffer macOS hands over holds the whole request.
+    uint8_t copy[trafficRegBytes];
+    memcpy(copy, data, sizeof(copy));
+    IOLockLock(configurationLock);
+    ++trafficRegSeen;
+    bool known = false;
+    for (unsigned i = 0; i < trafficRegCount && !known; ++i)
+        known = !memcmp(trafficRegs[i], copy, sizeof(copy));
+    const bool added = !known && trafficRegCount < trafficRegCapacity;
+    if (added)
+        memcpy(trafficRegs[trafficRegCount++], copy, sizeof(copy));
+    const unsigned slot = trafficRegCount - 1, seen = trafficRegSeen;
+    IOLockUnlock(configurationLock);
+    setProperty("ItlwmAWDLTrafficRegSeen", seen, 32);
+    if (added) {
+        char key[40];
+        snprintf(key, sizeof(key), "ItlwmAWDLTrafficReg%u", slot);
+        if (auto *d = OSData::withBytes(copy, sizeof(copy))) {
+            setProperty(key, d);
+            d->release();
+        }
+    }
+}
+
 IOReturn ItlAWDLInterface::setAWDL_PEER_TRAFFIC_REGISTRATION(apple80211_awdl_peer_traffic_registration *data)
 {
     if (!nativeState.accept)
         return unsupported("setAWDL_PEER_TRAFFIC_REGISTRATION");
-    // Acknowledged only. Its embedded pointer is neither read nor kept.
-    return data ? kIOReturnSuccess : kIOReturnBadArgument;
+    // Acknowledged. The whole 184-byte record is kept (see noteTrafficRegistration) so what the service asks for can be
+    // read from the registry. When macOS marks the registration active, arm Apple-equivalent realtime
+    // (setRealTimeMode -> VO) for Continuity airtime.
+    if (!data)
+        return kIOReturnBadArgument;
+    noteTrafficRegistration(data);
+    noteCall("setAWDL_PEER_TRAFFIC_REGISTRATION", kIOReturnSuccess);
+    if (data->active)
+        itlAWDLNoteRealtime();
+    return kIOReturnSuccess;
 }
 
 #ifndef APPLE80211_M_PEER_CACHE_CONTROL
@@ -293,10 +363,11 @@ IOReturn ItlAWDLInterface::setLLW_PARAMS(apple80211_llw_params *data)
         return unsupported("setLLW_PARAMS");
     if (!data)
         return kIOReturnBadArgument;
-    // Low-latency (HPP) parameters, sent when a Continuity feature registers traffic. The firmware has no
-    // such mode, so they are acknowledged and counted; the link keeps its normal schedule.
+    // AppleBCMWLAN setLLW_PARAMS → WLC_SET_VAR llw, then setRealTimeMode → wme_ac_sta VO (ASM on
+    // Sequoia AppleBCMWLANCoreMac). Intel has no llw iovar; arm realtime so AWDL/llw TX uses EDCA VO.
     llwParamRequests++;
     setProperty("ItlwmAWDLLlwParamRequests", llwParamRequests, 32);
+    itlAWDLNoteRealtime();
     // Each traffic registration begins with these requests, ahead of its UMI and the wait for its status.
     if (umiAckWanted && umiLastPeerValid)
         queueUmiAck(umiLastPeer);
@@ -486,6 +557,8 @@ IOReturn ItlAWDLInterface::setAWDL_SYNC_ENABLED(apple80211_awdl_sync_enabled *da
     }
     if (result == kIOReturnSuccess && nativeState.accept) {
         setProperty("ItlwmAWDLSyncEnabledRequested", data->enabled, 32);
+        if (data->enabled && ndpKeepWanted && ndpKeepTimer)
+            ndpKeepTimer->setTimeoutMS(1500);   // once the family has built its peer manager; outside this call
         // The peer manager exists by now. Reject reasons are behind these flags.
         if (data->enabled && debugFlagsWanted && !debugFlagsSet) {
             debugFlagsSet = true;
@@ -551,6 +624,136 @@ IOReturn ItlAWDLInterface::copyFrameConfiguration(FrameConfiguration *output)
     return result;
 }
 
+#if defined(ITL_AWDL_NATIVE) && __IO80211_TARGET == __MAC_15_2
+// IO80211Family 24H232 exports (oc_sequoia_awdl_dump symbol table): getPeerManager 0xffffff8002263490, findAWDLPeer
+// 0xffffff800215fe92, IO80211Peer::setLastRxUnicastLinkActivity 0xffffff80021d892a, IO80211AWDLPeerManager::setAwdlCtl
+// 0xffffff800216c154, IO80211AWDLPeer::setLastSyncReceived 0xffffff800215e026. Declared by their mangled names so no private header is needed; `this` is the first argument.
+extern "C" {
+void *itlFamGetPeerManager(void *iface) __asm__("__ZN23IO80211SkywalkInterface14getPeerManagerEv");
+void *itlFamFindAWDLPeer(void *manager, uint8_t *address) __asm__("__ZN22IO80211AWDLPeerManager12findAWDLPeerEPh");
+void itlFamSetLastRxUnicast(void *peerObject, uint64_t when) __asm__("__ZN11IO80211Peer28setLastRxUnicastLinkActivityEy");
+void itlFamSetLastSync(void *peerObject, uint64_t when) __asm__("__ZN15IO80211AWDLPeer19setLastSyncReceivedEy");
+int itlFamSetAwdlCtl(void *manager, void *request) __asm__("__ZN22IO80211AWDLPeerManager10setAwdlCtlEP19apple80211_awdl_ctl");
+}
+
+// The AWDL peer manager of this interface, or null when the object is not what the symbols above expect.
+static void *itlAWDLPeerManager(void *iface)
+{
+    void *manager = itlFamGetPeerManager(iface);
+    if (!manager || uintptr_t(manager) < 0xffffff8000000000ULL)
+        return nullptr;
+    const OSMetaClass *meta = static_cast<OSObject *>(manager)->getMetaClass();
+    return meta && !strcmp(meta->getClassName(), "IO80211AWDLPeerManager") ? manager : nullptr;
+}
+
+void ItlAWDLInterface::keepPeerAlive(const uint8_t *peer)
+{
+    if (!peerAliveWanted || !peer || (peer[0] & 1))
+        return;
+    const uint64_t now = mach_absolute_time();
+    PeerAliveSlot *slot = nullptr, *oldest = &peerAlive[0];
+    for (auto &candidate : peerAlive) {
+        if (candidate.last && !memcmp(candidate.mac, peer, 6)) {
+            slot = &candidate;
+            break;
+        }
+        if (candidate.last < oldest->last)
+            oldest = &candidate;
+    }
+    if (slot && now - slot->last < peerAliveInterval)
+        return;
+    if (!slot) {
+        slot = oldest;
+        memcpy(slot->mac, peer, 6);
+    }
+    void *manager = itlAWDLPeerManager(this);
+    uint8_t address[6];
+    memcpy(address, peer, 6);
+    void *known = manager ? itlFamFindAWDLPeer(manager, address) : nullptr;
+    if (!known) {
+        // Retry soon (the peer may not be admitted yet) without a lookup per frame.
+        slot->last = now - peerAliveInterval + peerAliveInterval / 5;
+        if (!manager && !peerAliveNoManager++)
+            setProperty("ItlwmAWDLPeerAliveNoManager", true);
+        else if (manager && !peerAliveNoPeer++)
+            setProperty("ItlwmAWDLPeerAliveNoPeer", true);
+        return;
+    }
+    itlFamSetLastRxUnicast(known, now);
+    // The family's other limit: shouldRemovePeerFromNDP also measures the age of the peer's last action frame / sync frame
+    // (peer ivars +0x2e8, written by IO80211AWDLPeer::setLastSyncReceived, a plain store). The 2026-11-20 run logged
+    // "No Action frames for(3770mSec) from B6:33:BD:88:71:8C PeerType:Airplay" just before each drop, with unicast activity
+    // already refreshed. Frames heard from the peer are proof it is there, so refresh that time too.
+    itlFamSetLastSync(known, now);
+    if (rtgKeepWanted) {
+        // Only a stamp that is already set and recent (it is 0 until the family starts the RTG peer's clock) is touched.
+        auto *ivars = *reinterpret_cast<uint8_t *const *>(static_cast<const uint8_t *>(known) + 0x20);
+        if (ivars && uintptr_t(ivars) >= 0xffffff8000000000ULL) {
+            auto *stamp = reinterpret_cast<volatile uint64_t *>(ivars + 0x6a0);
+            const uint64_t was = *stamp;
+            if (was && now >= was && now - was < rtgKeepSanity) {
+                *stamp = now;
+                if (++rtgKeepRefreshed == 1 || !(rtgKeepRefreshed % 16))
+                    setProperty("ItlwmAWDLRtgKeepRefreshed", rtgKeepRefreshed, 32);
+            } else if (++rtgKeepSkipped == 1 || !(rtgKeepSkipped % 256)) {
+                setProperty("ItlwmAWDLRtgKeepSkipped", rtgKeepSkipped, 32);
+            }
+        }
+    }
+    slot->last = now;
+    if (++peerAliveCalls == 1 || !(peerAliveCalls % 16))
+        setProperty("ItlwmAWDLPeerAliveCalls", peerAliveCalls, 32);
+}
+
+void ItlAWDLInterface::ndpKeepTick(OSObject *owner, IOTimerEventSource *)
+{
+    if (auto *self = OSDynamicCast(ItlAWDLInterface, owner))
+        self->applyNdpKeep();
+}
+
+// IO80211AWDLPeerManager::setAwdlCtl wants the apple80211_awdl_ctl the family's own ioctl wrapper builds:
+// name at +4, value at +0x88, extra-data length at +0x90, and the three fields it fills in itself (+0x3B8A0 pointer to the
+// data at +0x94, +0x3B8A8 = 1, +0x3B8AC length), without which setAwdlCtl returns before looking at the name.
+void ItlAWDLInterface::applyNdpKeep()
+{
+    if (!ndpKeepWanted)
+        return;
+    void *manager = itlAWDLPeerManager(this);
+    if (!manager) {
+        setProperty("ItlwmAWDLNdpKeep", "no-peer-manager");
+        return;
+    }
+    // The family's wrapper copies 0x3B8A0 bytes from the caller into a larger kernel struct (tail fields to +0x3B8B0).
+    const size_t size = 0x3B8C0;
+    auto *request = static_cast<uint8_t *>(IOMalloc(size));
+    if (!request) {
+        setProperty("ItlwmAWDLNdpKeep", "no-memory");
+        return;
+    }
+    bzero(request, size);
+    strlcpy(reinterpret_cast<char *>(request) + 4, "ndpRemovalTimeoutmSec", 0x80);
+    const uint64_t value = 100000;
+    memcpy(request + 0x88, &value, sizeof(value));
+    const uint32_t dataLength = 4;
+    memcpy(request + 0x90, &dataLength, sizeof(dataLength));
+    const uint64_t dataPointer = uint64_t(uintptr_t(request + 0x94));
+    memcpy(request + 0x3B8A0, &dataPointer, sizeof(dataPointer));
+    const uint32_t one = 1;
+    memcpy(request + 0x3B8A8, &one, sizeof(one));
+    memcpy(request + 0x3B8AC, &dataLength, sizeof(dataLength));
+    const int result = itlFamSetAwdlCtl(manager, request);
+    IOFree(request, size);
+    ++ndpKeepApplied;
+    setProperty("ItlwmAWDLNdpKeepResult", uint32_t(result), 32);
+    setProperty("ItlwmAWDLNdpKeepApplied", ndpKeepApplied, 32);
+    setProperty("ItlwmAWDLNdpKeep", "applied");
+}
+#else
+void ItlAWDLInterface::keepPeerAlive(const uint8_t *) {}
+void ItlAWDLInterface::ndpKeepTick(OSObject *, IOTimerEventSource *) {}
+void ItlAWDLInterface::applyNdpKeep() {}
+#endif
+
 void ItlAWDLInterface::observeDataFrame(const uint8_t *frame, size_t length)
 {
     if ((!dataDeliverEnabled && (!dataCopyProbeEnabled || dataCopyAttempts >= 8)) || !nativeStarted || !rxPool ||
@@ -560,6 +763,9 @@ void ItlAWDLInterface::observeDataFrame(const uint8_t *frame, size_t length)
     // Copy only multicast or our local AWDL destination; drop self echoes.
     if ((!(*view.destination & 1) && memcmp(view.destination, localFrameAddress, 6)) ||
         !memcmp(view.source, localFrameAddress, 6)) return;
+    // -itlawdlpeeralive: unicast to us from a peer (awdl0 or llw0 alike) keeps the family's per-peer unicast time current.
+    if (peerAliveWanted && !memcmp(view.destination, localFrameAddress, 6))
+        keepPeerAlive(view.source);
 #if defined(ITL_AWDL_LLW)
     // Plain RFC 1042 frames (an empty-OUI SNAP header) are low latency traffic: Broadcom's host code sends every one
     // to llw0 and none to awdl0, whatever its destination. Without llw0 they are dropped.
@@ -889,6 +1095,11 @@ void ItlAWDLInterface::releaseNetworkResources()
         packetQueues[i-1]->disable();
         queueWorkLoop->removeEventSource(packetQueues[i-1]);
     }
+    if (ndpKeepTimer) {
+        ndpKeepTimer->cancelTimeout();
+        queueWorkLoop->removeEventSource(ndpKeepTimer);
+        OSSafeReleaseNULL(ndpKeepTimer);
+    }
     if (umiAckTimer) {
         umiAckTimer->cancelTimeout();
         queueWorkLoop->removeEventSource(umiAckTimer);
@@ -971,6 +1182,17 @@ void ItlAWDLInterface::handleClose(IOService *client, IOOptionBits options)
 IOReturn ItlAWDLInterface::prepareBSDInterface(struct __ifnet *interface, unsigned int flags)
 {
     const IOReturn result = IO80211AWDLProtocol::prepareBSDInterface(interface, flags);
+    // The family has just set 1484, which is what it gives every controller that isn't AppleBCMWLANCore (asm,
+    // peerToPeerConfigureIfnet); Apple's own hardware gets 1500, the wired MTU, so AirDrop's QUIC is never refused on awdl0.
+    if (result == kIOReturnSuccess && interface) {
+        int requested = 0;
+        if (!PE_parse_boot_argn("itlawdlmtu", &requested, sizeof(requested)))
+            requested = 0;
+        const uint32_t mtu = ItlAWDL::awdlMtu(requested);
+        const errno_t error = ifnet_set_mtu(reinterpret_cast<ifnet_t>(interface), mtu);
+        setProperty("ItlwmAWDLMtu", mtu, 32);
+        setProperty("ItlwmAWDLMtuResult", error, 32);
+    }
     noteClientEvent("prepare-bsd", nullptr, long(result), false);
     return result;
 }
@@ -1059,6 +1281,22 @@ IOReturn ItlAWDLInterface::initializeNetwork(IO80211Controller *controller,
         umiAckWanted = umiAckTimer != nullptr;
     }
     setProperty("ItlwmAWDLUmiAckEnabled", umiAckWanted);
+    int peerKeep = 0;
+    peerAliveWanted = PE_parse_boot_argn("-itlawdlpeeralive", &peerKeep, sizeof(peerKeep));
+    if (peerAliveWanted) {
+        nanoseconds_to_absolutetime(250000000ULL, &peerAliveInterval);
+        setProperty("ItlwmAWDLPeerAliveEnabled", true);
+        rtgKeepWanted = PE_parse_boot_argn("-itlawdlrtgkeep", &peerKeep, sizeof(peerKeep));
+        nanoseconds_to_absolutetime(120000000000ULL, &rtgKeepSanity);
+        setProperty("ItlwmAWDLRtgKeepEnabled", rtgKeepWanted);
+    }
+    if (PE_parse_boot_argn("-itlawdlndpkeep", &peerKeep, sizeof(peerKeep))) {
+        ndpKeepTimer = IOTimerEventSource::timerEventSource(this, reinterpret_cast<IOTimerEventSource::Action>(&ItlAWDLInterface::ndpKeepTick));
+        if (ndpKeepTimer && queueWorkLoop->addEventSource(ndpKeepTimer) != kIOReturnSuccess)
+            OSSafeReleaseNULL(ndpKeepTimer);
+        ndpKeepWanted = ndpKeepTimer != nullptr;
+        setProperty("ItlwmAWDLNdpKeepEnabled", ndpKeepWanted);
+    }
 #if defined(ITL_AWDL_LLW)
     owner = controller;
     int companionArgument = 0;
@@ -1199,8 +1437,14 @@ IOReturn ItlAWDLInterface::initializeNetwork(IO80211Controller *controller,
     const UInt16 headroom = 0x40;
     memcpy(info.bytes + 0x3c, &headroom, sizeof(headroom));
     put32(0x40, 4);
+    // The registered MTU: 1500 on Sequoia, as Apple's own awdl0 registers; 1428 elsewhere until those targets are checked.
+#if __IO80211_TARGET == __MAC_15_2
+    put32(0x48, ItlAWDL::kAwdlMtuApple);
+    put32(0x4c, ItlAWDL::kAwdlMtuApple);
+#else
     put32(0x48, 1428);
     put32(0x4c, 1428);
+#endif
     memcpy(info.bytes + 0x108, &address, sizeof(address));
     IOSkywalkPacketQueue *queues[4];
     for (UInt32 i = 0; i < 4; ++i)

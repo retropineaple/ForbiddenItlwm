@@ -27,6 +27,7 @@ enum { IWX_FLAG_SHUTDOWN = 1, IWX_FLAG_SCANNING = 2, IWX_FW_CTXT_ACTION_ADD = 1,
     IWX_UCODE_TLV_CAPA_DYNAMIC_QUOTA = 0, IWX_UCODE_TLV_CAPA_CDB_SUPPORT = 1,
     IWX_BINDING_CONTEXT_CMD = 10, IWX_REMOVE_STA = 11, IWX_MONITOR_STA_ID = 12,
     IWX_MAC_CONF_GROUP = 1, IWX_FW_CMD_VER_UNKNOWN = 255, kIwxLowLatencyCmd = 3,
+    IWX_CMD_ASYNC = 1, IWX_DEVICE_FAMILY_AX210 = 2,
     kAwdlCoexPhyId = 1, kAwdlCoexMacId = 2, kCoexBaTxOff = 0,
     THREAD_UNINT = 0, THREAD_AWAKENED = 0, kSecondScale = 1, kIOReturnSuccess = 0,
     IWX_STA_GENERAL_PURPOSE = 1, IWX_STA_FLG_FAT_EN_20MHZ = 0, IWX_STA_FLG_MIMO_EN_SISO = 0,
@@ -53,6 +54,7 @@ struct Ring {};
 struct iwx_softc { ieee80211com sc_ic; int sc_generation = 7, sc_flags = 0;
     ieee80211_state ns_nstate = IEEE80211_S_AUTH; int ns_arg = 0, init_task = 0;
     int sc_enabled_capa[2] = {}; iwx_phy_ctxt sc_phyctxt[2]; Ring txq[4];
+    int sc_device_family = 0;
     std::function<void(ieee80211com *, ieee80211_state, int)> sc_newstate; };
 struct iwx_binding_cmd { uint32_t id_and_color, action, phy, macs[4], lmac_id; };
 struct iwx_mac_low_latency_cmd { uint32_t mac_id, low_latency_rx, low_latency_tx; };
@@ -73,6 +75,7 @@ static bool awdlCoexAdded, awdlCoexTxStaAdded, awdlCoexInFlight, awdlCoexAddrApp
     awdlCoexMulti, awdlCoexMultiActive, awdlCoexMovePending, awdlCoexPromiscLive,
     awdlCoexPromiscUncertain, awdlCoexBaPeerAdded, awdlCoexBaPeerAccepted,
     awdlCoexBaFilterOff, awdlCoexRemoveRequested, awdlStopping, awdlCoexLowLatency,
+    awdlCoexFollowsInfra, awdlCoexFollowsInfraForce,
     awdlCoexAddrKnown, awdlCoexTx, awdlCoexTxHalted;
 // PR #47's same-channel window, which the listener teardown resets (merged after this harness was written).
 static struct {
@@ -234,6 +237,17 @@ int Gate::restartWhileWaiting() {
     }
     return THREAD_AWAKENED;
 }
+
+
+static void awdlCoexSendLowLatency(ItlIwx *that, struct iwx_softc *sc) {
+    (void)that; (void)sc;
+}
+static bool awdlCoexContinuityActive() { return false; }
+static bool awdlCoexRealtime() { return false; }
+static int awdlCoexDataAc(unsigned = 0xff) { return 0; /* EDCA_AC_BE */ }
+extern "C" void itlAWDLNoteRealtime(void) {}
+static uint64_t awdlCoexRealtimeUntilUS, awdlCoexBaAddPeerNextUS;
+static uint32_t awdlCoexRealtimeNotes, awdlCoexTxAcVo, awdlCoexBaSetupHolds;
 
 // DRIVER_IMPLEMENTATIONS
 

@@ -21,13 +21,32 @@ mkdir -p "$OUT"
 START="$(date '+%Y-%m-%d %H:%M:%S')"
 
 snapshot() { # <label>
+    # skywalkctl flow can hang indefinitely on this Mac; bound each call.
     for c in flow channel flow-owner flow-switch interface; do
-        skywalkctl "$c" >"$OUT/skywalk_${c}_$1.txt" 2>&1
+        ( skywalkctl "$c" >"$OUT/skywalk_${c}_$1.txt" 2>&1 ) &
+        local spid=$!
+        local i=0
+        while kill -0 "$spid" 2>/dev/null; do
+            if [ "$i" -ge 8 ]; then
+                kill -TERM "$spid" 2>/dev/null
+                sleep 1
+                kill -KILL "$spid" 2>/dev/null
+                echo "skywalkctl $c timed out" >>"$OUT/skywalk_${c}_$1.txt"
+                break
+            fi
+            sleep 1
+            i=$((i + 1))
+        done
+        wait "$spid" 2>/dev/null || true
     done
 }
 registry() { # <label>
-    { ioreg -l -w0 | grep -E 'ItlwmLLW|ItlwmAWDLUmiAckPosted|ITLAWDLCoexDataTx"|ITLAWDLCoexDataRxUcast"' | sed 's/^[ |]*//' | sort -u
-      netstat -I llw0 -b; netstat -I awdl0 -b; } >"$OUT/registry_$1.txt" 2>&1
+    { ioreg -l -w0 | grep -E 'ItlwmLLW|ItlwmAWDLUmiAckPosted|ITLAWDLCoex(DataTx"|DataRxUcast"|Channel|OwnWidth|Peer5GHz|PeerPresent|PeerSequence|Schedule|Cam|LowLatency|ContinuityPower|FollowsInfra|Seq|Gate|Ba|RxReject)|ITLAWDLRx(Mpdu|Dup|Reorder|BadCrc)' | sed 's/^[ |]*//' | sort -u
+      echo "---"
+      netstat -I llw0 -b; netstat -I awdl0 -b
+      echo "---"
+      system_profiler SPAirPortDataType 2>/dev/null | awk '/Current Network Information:/{p=1} p&&/Channel:/{print; exit}'
+    } >"$OUT/registry_$1.txt" 2>&1
 }
 
 registry before

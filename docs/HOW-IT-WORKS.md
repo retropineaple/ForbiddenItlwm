@@ -145,7 +145,7 @@ These each took one or more test boots to learn.
 - **Cross-band retunes on a live binding crash the firmware.** Band changes are refused.
 - **Firmware TX status depends on the frame:** for broadcasts it only means the frame left the queue.
 - **ACKs must match the MAC context's address.** The listener carries the AWDL address so the firmware credits the peer's ACKs.
-- **`LOW_LATENCY_CMD` fails on the AX211's firmware** and takes Wi-Fi down with it, so it is disabled.
+- **`LOW_LATENCY_CMD` fails on the AX211's firmware** and takes Wi-Fi down with it, so it is skipped there. It is allowed on pre-AX210 cards with `-itlawdlcoexlowlat`.
 
 ## Source layout
 

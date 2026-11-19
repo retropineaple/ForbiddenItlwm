@@ -7,7 +7,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="forbiddenitlwm-tests-") as directory:
-    for name in ("awdl_requested_configuration", "awdl_protocol", "awdl_frame_builder", "awdl_sync_prefix", "awdl_local_schedule", "awdl_probe_policy", "awdl_peer_cache", "awdl_data_reject", "awdl_data_payload", "awdl_data_frame", "awdl_observation", "awdl_regulatory", "awdl_tx_burst", "awdl_peer_schedule", "awdl_build_guard", "btleadv_hci", "eapol_key_length", "wcl_transition", "counted_copy", "scan_cursor"):
+    for name in ("awdl_requested_configuration", "awdl_protocol", "awdl_frame_builder", "awdl_sync_prefix", "awdl_local_schedule", "awdl_probe_policy", "awdl_peer_cache", "awdl_data_reject", "awdl_channel_class", "awdl_mtu", "awdl_data_payload", "awdl_data_frame", "awdl_observation", "awdl_regulatory", "awdl_tx_burst", "awdl_peer_schedule", "awdl_build_guard", "btleadv_hci", "eapol_key_length", "wcl_transition", "counted_copy", "scan_cursor"):
         output = Path(directory) / name
         subprocess.run([
             "xcrun", "clang++", "-std=c++14",
@@ -55,6 +55,11 @@ if os.environ.get("FORBIDDEN_SEQUOIA_BLUETOOTHD"):
     subprocess.run(["python3", str(root / "tests/btleadv_patterns.py"), "--target", "sequoia",
                     "--binary", os.environ["FORBIDDEN_SEQUOIA_BLUETOOTHD"]], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_snapshot.py")], check=True)
+# The Continuity Camera run analyzer, against a recorded run and synthetic ones.
+subprocess.run(["python3", "-I", str(root / "tests/cc_analyze_test.py")], check=True)
+# The AirDrop checker: parsers, failure signatures and the verdict, on the 2026-11-18 failure.
+subprocess.run(["python3", "-I", str(root / "tests/airdrop_check_test.py")], check=True)
+subprocess.run(["python3", "-I", str(root / "tests/awdl_ctl_test.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_bridge.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_pool_lease.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_rx_copy.py")], check=True)

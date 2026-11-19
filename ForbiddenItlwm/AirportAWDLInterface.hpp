@@ -205,6 +205,29 @@ private:
     IOTimerEventSource *umiAckTimer = nullptr;
     static void umiAckTick(OSObject *, IOTimerEventSource *);
     void postUmiAcks();
+    // -itlawdlpeeralive: the family drops the iPhone from its peer table when it has heard no action frame for 2 s and has no
+    // unicast activity from it for 6 s (IO80211AWDLPeer::shouldRemovePeerFromNDP, 24H232 0xffffff8002149bf5). That clears the
+    // camera's traffic registration and ends the real-time group every 6-11 s. The camera's video arrives on llw0, which does
+    // not update the family's per-peer unicast time, so this sets it (IO80211Peer::setLastRxUnicastLinkActivity, a plain store
+    // of mach_absolute_time) at most every 250 ms per peer, from the RX path (inside the work loop gate).
+    // -itlawdlndpkeep: raises the family's own limit (ndpRemovalTimeoutmSec) to 100 s through IO80211AWDLPeerManager::setAwdlCtl.
+    // Both call IO80211Family symbols that exist in 24H232 (Sequoia 15.x) only; other targets build them as no-ops.
+    bool peerAliveWanted = false, ndpKeepWanted = false;
+    struct PeerAliveSlot { uint8_t mac[6]; uint64_t last; };
+    PeerAliveSlot peerAlive[4] = {};
+    uint64_t peerAliveInterval = 0;
+    uint32_t peerAliveCalls = 0, peerAliveNoManager = 0, peerAliveNoPeer = 0, ndpKeepApplied = 0;
+    // -itlawdlrtgkeep: the iPhone never sends the real-time group TLV (type 31) in the action frames we hear (ITLAWDLRtgPeerSeen 0 of
+    // 752), and the family removes an active RTG peer after 5 s without one (IO80211AWDLPeer::actionFrameReport, 24H232
+    // 0xffffff8002151549: "Active RTG Peer has no RTG TLV for 5 Seconds", then removePeerFromRealTimeGroup). The time it compares
+    // is a mach_absolute_time stamp at peer ivars +0x6a0 that parseAWDLRealTimeGroupTLV writes. This refreshes it while we hear the peer.
+    bool rtgKeepWanted = false;
+    uint64_t rtgKeepSanity = 0;
+    uint32_t rtgKeepRefreshed = 0, rtgKeepSkipped = 0;
+    void keepPeerAlive(const uint8_t *peer);
+    IOTimerEventSource *ndpKeepTimer = nullptr;
+    static void ndpKeepTick(OSObject *, IOTimerEventSource *);
+    void applyNdpKeep();
     bool oobSampled = false, debugFlagsSet = false, debugFlagsWanted = false;
     IOReturn noteOobRequest(const apple80211_awdl_oob_request *, const char *);
     // Native 25G241 layout read from both the sender and Apple's Broadcom handler:
@@ -235,6 +258,7 @@ private:
         IOLockUnlock(configurationLock);
         if (result == kIOReturnSuccess)
             setProperty("ItlwmAWDLLastStoredRequest", name);
+        noteCall(name, result);
         return result;
     }
     template <typename T> IOReturn readRequested(const ItlAWDLRequestedValue<T> &slot,
@@ -259,6 +283,23 @@ private:
     uint32_t managementSubmissions = 0;
     IOReturn unsupported(const char *operation) {
         setProperty("ItlwmAWDLLastUnsupported", operation);
+        noteCall(operation, kIOReturnUnsupported);
         return kIOReturnUnsupported;
     }
+    // Every apple80211 request the daemons make of this interface that goes through unsupported() or storeRequested():
+    // name, how many, and the last answer, published as ItlwmAWDLCalls ("name=count/result;..."). It shows what a
+    // Continuity Camera session asks for, not only the last refused call.
+    struct CallStat { const char *name; uint32_t count; uint32_t last; };
+    static constexpr unsigned callStatCapacity = 64;
+    CallStat callStats[callStatCapacity] = {};
+    unsigned callStatCount = 0;
+    uint32_t callTotal = 0;
+    void noteCall(const char *name, IOReturn result);
+    // The raw traffic registration records (ioctl 164, 184 bytes: version, peer, name length and name, active, and 12 bytes
+    // the struct above stops short of), the distinct ones, for decoding the preferred channels and the bandwidth and latency
+    // a service asks for.
+    static constexpr unsigned trafficRegBytes = 184, trafficRegCapacity = 6;
+    uint8_t trafficRegs[trafficRegCapacity][trafficRegBytes] = {};
+    unsigned trafficRegCount = 0, trafficRegSeen = 0;
+    void noteTrafficRegistration(const apple80211_awdl_peer_traffic_registration *data);
 };

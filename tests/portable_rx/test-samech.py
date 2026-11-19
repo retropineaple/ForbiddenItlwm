@@ -95,5 +95,5 @@ import hashlib
 # iwx_rx_pkt: the security fixes add only length checks to fixed-size notifications (audit HL05).
 a=s.index('iwx_rx_pkt(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='b8f0830905eb3f86c3dcb30103a1126ad97a718073cd3154dc19f0776e7f08a7'
 a=s.index('iwx_rx_mpdu_mq(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='abcfa3705d1ec08491a833710eea48084d764a262a48889414b4920d6ec9cc80'
-# iwx_rx_frame: 0.6.0 phone 5 GHz channel tracking (PR #21) plus Continuity Camera receive diagnostics.
-a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='a890a3cf240ba2449a008549411885b30062f5fadf455796e627fb24b1b6569a'
+# iwx_rx_frame: 0.6.0 phone 5 GHz channel tracking (PR #21) plus Continuity Camera receive diagnostics (sequence gaps per transmitter, the gap phase against the access point's beacons by beacon class, the TID 7 rate histogram, the RTG and capability TLV records). None of it touches the same-channel probe logic.
+a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='a57f057325f42ce55a1991fad5eb78264e740c9641e2b11051aff3c7c8ff3ab0'

@@ -1,8 +1,10 @@
 /*
  * How big is the IPv6 packet that ip6_output_list rejects with EMSGSIZE for sharingd?
  *
- * The previous trace named udp6_output -> ip6_output_list. Every MTU the stack uses for awdl0 is 1484
- * (ifconfig, ndp linkmtu, route mtu), so a rejected packet is longer than 1484 bytes. If those lengths are
+ * The previous trace named udp6_output -> ip6_output_list. Every MTU the stack uses for awdl0 was 1484
+ * (ifconfig, ndp linkmtu, route mtu), so a rejected packet was longer than 1484 bytes. With the driver's awdl0 at
+ * 1500 (2026-11-18: tools/diag/airdrop_check.py --sizes shows the stack accepts up to 1500 and refuses 1501) the sends
+ * still died with unexpected-40, so the rejected packets are now longer than 1500: this prints how much longer. If those lengths are
  * 1485-1500 (UDP payload 1437-1452), QUIC sized its datagrams from en0's 1500-byte MTU (the connection log
  * shows the QUIC path over en0) while the packets leave on awdl0.
  *
