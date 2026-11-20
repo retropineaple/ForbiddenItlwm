@@ -86,7 +86,7 @@ public:
     IOReturn setAWDL_ELECTION_ID(apple80211_awdl_election_id *data) override { return storeRequested(requested_AWDL_ELECTION_ID, data, "AWDL_ELECTION_ID"); }
     IOReturn setAWDL_BSSID(apple80211_awdl_bssid *data) override { return storeRequested(requestedBSSID, data, "AWDL_BSSID"); }
     IOReturn setAWDL_ELECTION_METRIC(apple80211_awdl_election_metric *data) override { return storeRequested(requested_AWDL_ELECTION_METRIC, data, "AWDL_ELECTION_METRIC"); }
-    IOReturn setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(apple80211_awdl_sync_channel_sequence *data) override { return storeRequested(requested_AWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE, data, "AWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE"); }
+    IOReturn setAWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE(apple80211_awdl_sync_channel_sequence *data) override { noteSequenceHistory(data); return storeRequested(requested_AWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE, data, "AWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE"); }
     IOReturn setAWDL_MASTER_CHANNEL(apple80211_awdl_master_channel *data) override { return storeRequested(requested_AWDL_MASTER_CHANNEL, data, "AWDL_MASTER_CHANNEL"); }
     IOReturn setAWDL_SYNC_STATE(apple80211_awdl_sync_state *data) override;
     IOReturn setAWDL_ELECTION_RSSI_THRESHOLDS(apple80211_awdl_election_rssi_thresholds *data) override { return storeRequested(requested_AWDL_ELECTION_RSSI_THRESHOLDS, data, "AWDL_ELECTION_RSSI_THRESHOLDS"); }
@@ -212,11 +212,11 @@ private:
     // of mach_absolute_time) at most every 250 ms per peer, from the RX path (inside the work loop gate).
     // -itlawdlndpkeep: raises the family's own limit (ndpRemovalTimeoutmSec) to 100 s through IO80211AWDLPeerManager::setAwdlCtl.
     // Both call IO80211Family symbols that exist in 24H232 (Sequoia 15.x) only; other targets build them as no-ops.
-    bool peerAliveWanted = false, ndpKeepWanted = false;
+    bool peerAliveWanted = false, ndpKeepWanted = false, ullInfraWanted = false;
     struct PeerAliveSlot { uint8_t mac[6]; uint64_t last; };
     PeerAliveSlot peerAlive[4] = {};
     uint64_t peerAliveInterval = 0;
-    uint32_t peerAliveCalls = 0, peerAliveNoManager = 0, peerAliveNoPeer = 0, ndpKeepApplied = 0;
+    uint32_t peerAliveCalls = 0, peerAliveNoManager = 0, peerAliveNoPeer = 0, ndpKeepApplied = 0, ullInfraApplied = 0;
     // -itlawdlrtgkeep: the iPhone never sends the real-time group TLV (type 31) in the action frames we hear (ITLAWDLRtgPeerSeen 0 of
     // 752), and the family removes an active RTG peer after 5 s without one (IO80211AWDLPeer::actionFrameReport, 24H232
     // 0xffffff8002151549: "Active RTG Peer has no RTG TLV for 5 Seconds", then removePeerFromRealTimeGroup). The time it compares
@@ -226,6 +226,50 @@ private:
     uint32_t rtgKeepRefreshed = 0, rtgKeepSkipped = 0;
     void keepPeerAlive(const uint8_t *peer);
     IOTimerEventSource *ndpKeepTimer = nullptr;
+    // -itlawdlawevents: availability-window events 41 (start, 36 B) and 43 (end, 40 B) for the family. The firmware's AWDL scheduler
+    // posts them on Broadcom; without them the family believes it is never inside a window, so handleUmiTimer / sendUnicastMI
+    // ("Asked to send an UMI, but we are not in an AW") never send the real-time UMI that makes the iPhone join the RTG and move to
+    // our channel plan (a real Mac: UMI 0xb000000, the iPhone's RTG TLV 40 ms later, its channel sequence converges on the Mac's).
+    // One start every 64 TU slot (AwNumber +4), the end 16 TU later, timed from the host clock. Layouts: AWDL_PEERMANAGER_DRIVER_ABI.md
+    // 2.2/2.5, handler of 24H232 read with REA. Also records the UMI requests the family then makes (ioctl 149 = AWDL_OOB_REQUEST).
+    bool awEventsWanted = false, awSyncEnabled = false, awInWindow = false;
+    IOTimerEventSource *awEventTimer = nullptr;
+    static void awEventTick(OSObject *, IOTimerEventSource *);
+    void postAwEvent();
+    void stopAwEvents();
+    uint16_t awNumber = 0;
+    uint32_t awStarts = 0, awEnds = 0, umiRequests = 0, awAlignedStarts = 0;
+    uint64_t awSlotStartUS = 0;
+    void noteUmiRequest(const apple80211_awdl_oob_request *data);
+    // -itlawdlumitx: the UMI is transmitted for real. noteUmiRequest keeps the family's template (copied inside the ioctl, the
+    // buffer is only valid during it), the HAL builds a unicast master indication from it and sends it in the iPhone's listening
+    // time, and the frame's own transmit result is reported as message 69 (status byte at +6: 0 acknowledged) instead of the
+    // fabricated acknowledgement of -itlawdlumiack, which is not posted while this is on.
+public:
+    struct UmiRequest { uint8_t peer[6]; uint16_t option; uint16_t length; uint8_t tlvs[512]; };
+private:
+    static constexpr unsigned umiQueueDepth = 2, umiResultDepth = 4;
+    bool umiTxWanted = false;
+    UmiRequest umiQueue[umiQueueDepth] = {};
+    unsigned umiQueueCount = 0, umiResultCount = 0;
+    uint8_t umiResultPeers[umiResultDepth][6] = {};
+    uint8_t umiResultOk[umiResultDepth] = {};
+    uint32_t umiTxQueued = 0, umiTxDropped = 0, umiResultsPosted = 0;
+    // What arrives in the 3 s after a UMI went out (ItlwmAWDLUmiRxRing, 20-byte entries: ms since the UMI u16, flags u8 (1 = to us,
+    // 2 = from the UMI's peer, 4 = unicast), subtype u8, length u16, rssi s8, channel u8, TLV count u8, then up to 11 TLV types).
+    struct UmiWatchEntry { uint16_t ms; uint8_t flags, subtype; uint16_t length; int8_t rssi; uint8_t channel, tlvCount; uint8_t types[11]; };
+    static constexpr unsigned umiWatchDepth = 40;
+    UmiWatchEntry umiWatch[umiWatchDepth] = {};
+    unsigned umiWatchCount = 0;
+    uint64_t umiWatchStartUS = 0, umiWatchEndUS = 0;
+    uint8_t umiWatchPeer[6] = {};
+    void noteUmiWatch(const uint8_t *frame, size_t length, uint32_t channel, int32_t rssi);
+public:
+    bool umiPending();
+    bool takeUmi(UmiRequest *out);
+    void noteUmiTxResult(const uint8_t *peer, bool acknowledged);
+private:
+    void postUmiResults();
     static void ndpKeepTick(OSObject *, IOTimerEventSource *);
     void applyNdpKeep();
     bool oobSampled = false, debugFlagsSet = false, debugFlagsWanted = false;
@@ -256,8 +300,16 @@ private:
         IOLockLock(configurationLock);
         const IOReturn result = slot.set(data);
         IOLockUnlock(configurationLock);
-        if (result == kIOReturnSuccess)
+        if (result == kIOReturnSuccess) {
             setProperty("ItlwmAWDLLastStoredRequest", name);
+            // The request exactly as macOS sent it (for example the channel sequence and its width flags), under ItlwmAWDLRaw_<name>.
+            char key[80];
+            snprintf(key, sizeof(key), "ItlwmAWDLRaw_%s", name);
+            if (auto *raw = OSData::withBytes(data, sizeof(T))) {
+                setProperty(key, raw);
+                raw->release();
+            }
+        }
         noteCall(name, result);
         return result;
     }
@@ -295,6 +347,27 @@ private:
     unsigned callStatCount = 0;
     uint32_t callTotal = 0;
     void noteCall(const char *name, IOReturn result);
+    // Each distinct channel sequence macOS has asked for (up to four), published as ItlwmAWDLRawSeq0..3: the plan changes between
+    // the idle one and the real-time group's, and ItlwmAWDLRaw_<name> only keeps the latest.
+    uint8_t seqHistory[4][sizeof(apple80211_awdl_sync_channel_sequence)] = {};
+    unsigned seqHistoryCount = 0;
+    void noteSequenceHistory(const apple80211_awdl_sync_channel_sequence *data) {
+        if (!data)
+            return;
+        for (unsigned i = 0; i < seqHistoryCount; ++i)
+            if (!memcmp(seqHistory[i], data, sizeof(*data)))
+                return;
+        if (seqHistoryCount >= 4)
+            return;
+        memcpy(seqHistory[seqHistoryCount], data, sizeof(*data));
+        char key[32];
+        snprintf(key, sizeof(key), "ItlwmAWDLRawSeq%u", seqHistoryCount);
+        ++seqHistoryCount;
+        if (auto *raw = OSData::withBytes(data, sizeof(*data))) {
+            setProperty(key, raw);
+            raw->release();
+        }
+    }
     // The raw traffic registration records (ioctl 164, 184 bytes: version, peer, name length and name, active, and 12 bytes
     // the struct above stops short of), the distinct ones, for decoding the preferred channels and the bandwidth and latency
     // a service asks for.

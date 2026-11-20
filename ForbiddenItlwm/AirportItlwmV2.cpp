@@ -219,7 +219,7 @@ IOReturn ItlAWDLInterface::setPEER_CACHE_CONTROL(apple80211_peer_cache_control *
 // later rather than being posted from inside the request.
 void ItlAWDLInterface::queueUmiAck(const uint8_t *peer)
 {
-    if (!umiAckWanted || !umiAckTimer || !configurationLock)
+    if (!umiAckWanted || !umiAckTimer || !configurationLock || umiTxWanted)
         return;
     IOLockLock(configurationLock);
     itlawdl::umiAckQueuePush(umiAckPeers, umiAckCount, umiAckQueueDepth, peer);
@@ -242,6 +242,273 @@ void ItlAWDLInterface::umiAckTick(OSObject *owner, IOTimerEventSource *)
 #ifndef APPLE80211_M_AWDL_UNICAST_AF_STATUS
 #define APPLE80211_M_AWDL_UNICAST_AF_STATUS 69
 #endif
+
+extern bool itlAWDLPeerClock(uint64_t nowUS, uint32_t *eaw, uint64_t *eawStartUS, uint64_t *eawUS);
+extern unsigned itlAWDLFixedChannel();
+
+// -itlawdlsyncalign: the sync TLV and the availability-window events follow the iPhone's AW clock and master (see itlBuildSync).
+static bool itlAWDLSyncAlign()
+{
+    static int cached = -1;
+    if (cached < 0) {
+        int dummy = 0;
+        cached = PE_parse_boot_argn("-itlawdlsyncalign", &dummy, sizeof(dummy)) ? 1 : 0;
+    }
+    return cached == 1;
+}
+
+static uint64_t itlAwUptimeUS()
+{
+    uint64_t uptime, ns;
+    clock_get_uptime(&uptime);
+    absolutetime_to_nanoseconds(uptime, &ns);
+    return ns / 1000;
+}
+
+bool ItlAWDLInterface::umiPending()
+{
+    return umiTxWanted && umiQueueCount;
+}
+
+bool ItlAWDLInterface::takeUmi(UmiRequest *out)
+{
+    if (!umiTxWanted || !configurationLock || !out)
+        return false;
+    IOLockLock(configurationLock);
+    const bool have = umiQueueCount != 0;
+    if (have) {
+        *out = umiQueue[0];
+        for (unsigned i = 1; i < umiQueueCount; ++i)
+            umiQueue[i - 1] = umiQueue[i];
+        --umiQueueCount;
+    }
+    IOLockUnlock(configurationLock);
+    return have;
+}
+
+// Called from the HAL when the UMI's frame completes (or could not be sent). Posted from the interface's own timer.
+void ItlAWDLInterface::noteUmiTxResult(const uint8_t *peer, bool acknowledged)
+{
+    if (!umiTxWanted || !configurationLock || !peer)
+        return;
+    IOLockLock(configurationLock);
+    if (acknowledged) {
+        // From here the receive path records what the peer sends back.
+        umiWatchStartUS = itlAwUptimeUS();
+        umiWatchEndUS = umiWatchStartUS + 3000000ULL;
+        umiWatchCount = 0;
+        memcpy(umiWatchPeer, peer, 6);
+    }
+    if (umiResultCount < umiResultDepth) {
+        memcpy(umiResultPeers[umiResultCount], peer, 6);
+        umiResultOk[umiResultCount] = acknowledged ? 1 : 0;
+        ++umiResultCount;
+    }
+    IOLockUnlock(configurationLock);
+}
+
+void ItlAWDLInterface::noteUmiWatch(const uint8_t *frame, size_t length, uint32_t channel, int32_t rssi)
+{
+    if (!umiWatchEndUS || length < 40)
+        return;
+    const uint64_t now = itlAwUptimeUS();
+    if (now > umiWatchEndUS) {
+        if (umiWatchCount && umiWatchStartUS) {
+            if (auto *data = OSData::withBytes(umiWatch, umiWatchCount * sizeof(UmiWatchEntry))) {
+                setProperty("ItlwmAWDLUmiRxRing", data);
+                data->release();
+            }
+            setProperty("ItlwmAWDLUmiRxCount", uint32_t(umiWatchCount), 32);
+        }
+        umiWatchEndUS = 0;
+        return;
+    }
+    // An AWDL action frame: management / action, vendor category 127, Apple's OUI, type 8.
+    if ((frame[0] & 0xfc) != 0xd0 || frame[24] != 0x7f || frame[26] != 0x17 || frame[27] != 0xf2 || frame[28] != 8 ||
+        umiWatchCount >= umiWatchDepth)
+        return;
+    UmiWatchEntry entry = {};
+    entry.ms = uint16_t(MIN((now - umiWatchStartUS) / 1000, 65535ULL));
+    entry.flags = uint8_t((!memcmp(frame + 4, localFrameAddress, 6) ? 1 : 0) | (!memcmp(frame + 10, umiWatchPeer, 6) ? 2 : 0) |
+                          ((frame[4] & 1) ? 0 : 4));
+    entry.subtype = frame[30];
+    entry.length = uint16_t(MIN(length, size_t(65535)));
+    entry.rssi = int8_t(rssi);
+    entry.channel = uint8_t(channel);
+    for (size_t offset = 40; offset + 3 <= length;) {
+        const size_t count = ItlAWDL::read16(frame + offset + 1);
+        if (count > length - offset - 3)
+            break;
+        if (entry.tlvCount < sizeof(entry.types))
+            entry.types[entry.tlvCount] = frame[offset];
+        ++entry.tlvCount;
+        offset += 3 + count;
+    }
+    umiWatch[umiWatchCount++] = entry;
+}
+
+void ItlAWDLInterface::postUmiResults()
+{
+    if (!umiTxWanted || !configurationLock || !umiResultCount)
+        return;
+    uint8_t peers[umiResultDepth][6], ok[umiResultDepth];
+    unsigned count;
+    IOLockLock(configurationLock);
+    count = umiResultCount;
+    memcpy(peers, umiResultPeers, sizeof(peers));
+    memcpy(ok, umiResultOk, sizeof(ok));
+    umiResultCount = 0;
+    IOLockUnlock(configurationLock);
+    for (unsigned i = 0; i < count; ++i) {
+        uint8_t status[itlawdl::umiStatusRecordBytes];
+        itlawdl::buildUmiAckStatus(peers[i], status);   // status[6] = 0
+        if (!ok[i])
+            status[itlawdl::umiStatusByteOffset] = 1;
+        postMessage(APPLE80211_M_AWDL_UNICAST_AF_STATUS, status, sizeof(status), false);
+        ++umiResultsPosted;
+    }
+    setProperty("ItlwmAWDLUmiTxResultsPosted", umiResultsPosted, 32);
+}
+
+// The synchronization parameters TLV. The frame builder's fixed schedule counted AW numbers from host uptime and named this node
+// as master, while the family's election TLV in the same frame names the iPhone as master and root. With -itlawdlsyncalign the master
+// is the one the election TLV names, and the AW counter, the transmit-down counter and the remaining AW are those of the iPhone's own
+// window clock, so the frame is consistent with its master. Without it, or without a tracked iPhone schedule, the old fixed schedule.
+static ItlAWDL::BuildResult itlBuildSync(const uint8_t *address, const uint8_t *tlvs, size_t tlvLength, uint64_t nowUS,
+                                         uint8_t *sync, size_t capacity, size_t *length)
+{
+    const uint8_t fixedChannel = uint8_t(itlAWDLFixedChannel());
+    ItlAWDL::SyncPrefix settings = {fixedChannel,fixedChannel,0,0,16,110,0x1000,16,16,0,3,3,3,3,{}};
+    memcpy(settings.master, address, 6);
+    uint64_t epoch = 0;
+    uint16_t initialAW = 0;
+    if (itlAWDLSyncAlign()) {
+        for (size_t offset = 0; tlvs && offset + 3 <= tlvLength;) {
+            const size_t count = ItlAWDL::read16(tlvs + offset + 1);
+            if (count > tlvLength - offset - 3)
+                break;
+            if (tlvs[offset] == 24 && count >= 12) {
+                const uint8_t *master = tlvs + offset + 3 + 6;
+                bool set = false;
+                for (unsigned i = 0; i < 6; ++i)
+                    set |= master[i] != 0;
+                if (set && !(master[0] & 1))
+                    memcpy(settings.master, master, 6);
+            }
+            offset += 3 + count;
+        }
+        uint32_t eaw;
+        uint64_t start, eawUS;
+        if (itlAWDLPeerClock(nowUS, &eaw, &start, &eawUS) && eawUS == 65536) {
+            epoch = start;
+            initialAW = uint16_t(eaw * 4);
+        }
+    }
+    return ItlAWDL::buildLocalFixedSchedule(settings, epoch, nowUS, initialAW, sync, capacity, length);
+}
+
+void ItlAWDLInterface::awEventTick(OSObject *owner, IOTimerEventSource *)
+{
+    if (auto *self = OSDynamicCast(ItlAWDLInterface, owner))
+        self->postAwEvent();
+}
+
+void ItlAWDLInterface::stopAwEvents()
+{
+    if (awEventTimer)
+        awEventTimer->cancelTimeout();
+    awInWindow = false;
+}
+
+// One availability window per 64 TU slot (the firmware's AwNumber counts 16 TU windows, so it moves by 4 per slot): event 41 at the
+// start, event 43 one 16 TU window later. Timed from the host clock against the slot start, so the next start does not drift by the
+// time the callbacks take.
+void ItlAWDLInterface::postAwEvent()
+{
+    constexpr uint64_t kSlotUS = 65536, kWindowUS = 16384;
+    if (!awEventsWanted || !awEventTimer || !awSyncEnabled)
+        return;
+    postUmiResults();
+    const uint64_t now = itlAwUptimeUS();
+    // With -itlawdlsyncalign a window starts on the iPhone's own extended-window boundary and carries its AW counter (4 per window),
+    // the way the firmware following the master does; otherwise the free-running slot clock below.
+    uint32_t clockEaw = 0;
+    uint64_t clockStart = 0, clockPeriod = 0;
+    const bool aligned = itlAWDLSyncAlign() && itlAWDLPeerClock(now, &clockEaw, &clockStart, &clockPeriod) && clockPeriod == kSlotUS;
+    if (!awInWindow) {
+        if (aligned) {
+            if (now - clockStart > 8000) {   // this window's start has passed: wait for the next boundary
+                awEventTimer->setTimeoutUS(clockStart + clockPeriod - now);
+                return;
+            }
+            awNumber = uint16_t(clockEaw * 4);
+            awSlotStartUS = clockStart;
+            if (!awAlignedStarts++)
+                setProperty("ItlwmAWDLAwAligned", true);
+            setProperty("ItlwmAWDLAwAlignedStarts", awAlignedStarts, 32);
+        } else if (!awSlotStartUS) {
+            awSlotStartUS = now;
+        }
+        uint8_t event[36] = {};
+        // +0 AwNumber (a dword is read, so +2/+3 stay 0); +4 sync state; +8 master and +0xe top master MACs; +0x14 the firmware
+        // start time, big endian (the family compares it with the previous one plus 65536 per slot); +0x18 channel version,
+        // +0x1c channel, +0x20 channel flags (sanityCheckAWStart compares them with its own sequence, masked by 0x2018).
+        memcpy(event, &awNumber, sizeof(awNumber));
+        uint32_t state = 1;
+        apple80211_awdl_sync_state sync = {};
+        if (nativeState.getState(&sync) == kIOReturnSuccess && sync.state)
+            state = sync.state;
+        memcpy(event + 4, &state, sizeof(state));
+        memcpy(event + 8, localFrameAddress, 6);
+        memcpy(event + 14, localFrameAddress, 6);
+        const uint32_t startBE = __builtin_bswap32(uint32_t(awSlotStartUS));
+        memcpy(event + 0x14, &startBE, sizeof(startBE));
+        uint32_t channelVersion = 1, channel = 0, flags = 0;
+        apple80211_awdl_sync_channel_sequence sequence = {};
+        if (readRequested(requested_AWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE, &sequence) == kIOReturnSuccess) {
+            const uint8_t *raw = reinterpret_cast<const uint8_t *>(&sequence);
+            const unsigned slot = (awNumber >> 2) & 0xf;
+            if (16 + 12 * (slot + 1) <= sizeof(sequence)) {
+                memcpy(&channel, raw + 16 + 12 * slot, sizeof(channel));
+                memcpy(&flags, raw + 16 + 12 * slot + 4, sizeof(flags));
+            }
+        }
+        memcpy(event + 0x18, &channelVersion, sizeof(channelVersion));
+        memcpy(event + 0x1c, &channel, sizeof(channel));
+        memcpy(event + 0x20, &flags, sizeof(flags));
+        postMessage(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_START, event, sizeof(event), false);
+        awInWindow = true;
+        ++awStarts;
+        if (awStarts == 1 || !(awStarts % 64)) {
+            setProperty("ItlwmAWDLAwStarts", awStarts, 32);
+            setProperty("ItlwmAWDLAwNumber", uint32_t(awNumber), 32);
+            setProperty("ItlwmAWDLAwChannel", channel, 32);
+        }
+        awEventTimer->setTimeoutUS(kWindowUS);
+    } else {
+        uint8_t event[40] = {};   // the CCA block stays zero: its flag at +0x10 must be 1 to be read
+        postMessage(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_END, event, sizeof(event), false);
+        awInWindow = false;
+        ++awEnds;
+        if (awEnds == 1 || !(awEnds % 64))
+            setProperty("ItlwmAWDLAwEnds", awEnds, 32);
+        if (aligned) {   // the next start is the next boundary of the iPhone's window clock
+            const uint64_t after = itlAwUptimeUS();
+            const uint64_t next = awSlotStartUS + kSlotUS;
+            awEventTimer->setTimeoutUS(next > after ? next - after : 1);
+            return;
+        }
+        awNumber = uint16_t(awNumber + 4);
+        awSlotStartUS += kSlotUS;
+        const uint64_t after = itlAwUptimeUS();
+        uint64_t wait = awSlotStartUS > after ? awSlotStartUS - after : 0;
+        if (wait > 2 * kSlotUS) {   // the host stalled: restart the slot clock rather than burst
+            awSlotStartUS = after;
+            wait = 0;
+        }
+        awEventTimer->setTimeoutUS(wait ? wait : 1);
+    }
+}
 
 void ItlAWDLInterface::postUmiAcks()
 {
@@ -416,6 +683,69 @@ IOReturn ItlAWDLInterface::setAWDL_AF_TX_MODE(apple80211_awdl_af_tx_mode *data)
 // Reports success, but nothing is sent yet: the request's format is unknown, so
 // this build only records it. The sample is the fixed header before offset 0x28 only: on Tahoe and
 // Sequoia the length sits at 0x28 and a raw kernel pointer at 0x30, and neither may be published.
+// The UMI the family sends from handleUmiTimer -> sendUnicastMI (ioctl 149, a 56 byte request: destination at +4, option at +0x14
+// (6, or 14 for a UMI on dwell), our address at +0x16, template length at +0x28, a pointer to the master indication template at +0x30).
+// Only the request itself is read here, never the pointer: the first request's 56 bytes are published so the next step can be
+// built from what actually arrives.
+void ItlAWDLInterface::noteUmiRequest(const apple80211_awdl_oob_request *data)
+{
+    const uint8_t *raw = reinterpret_cast<const uint8_t *>(data);
+    uint16_t option, length;
+    memcpy(&option, raw + 0x14, sizeof(option));
+    memcpy(&length, raw + 0x28, sizeof(length));
+    if ((option != 6 && option != 14) || !length || length > 512 || (raw[4] & 1))
+        return;
+    ++umiRequests;
+    char peer[18];
+    snprintf(peer, sizeof(peer), "%02x:%02x:%02x:%02x:%02x:%02x", raw[4], raw[5], raw[6], raw[7], raw[8], raw[9]);
+    if (umiRequests == 1) {
+        if (auto *sample = OSData::withBytes(raw, 0x38)) {
+            setProperty("ItlwmAWDLUmiFirstRequest", sample);
+            sample->release();
+        }
+    }
+    if (umiTxWanted && configurationLock) {
+        // The template pointer is the family's own buffer (a kernel address, ivars+9048 in the family's manager) and valid only
+        // inside this call, so it is copied now.
+        uint64_t pointer;
+        memcpy(&pointer, raw + 0x30, sizeof(pointer));
+        if (pointer >= 0xffffff8000000000ULL) {
+            UmiRequest request = {};
+            memcpy(request.peer, raw + 4, 6);
+            request.option = option;
+            request.length = length;
+            memcpy(request.tlvs, reinterpret_cast<const void *>(uintptr_t(pointer)), length);
+            IOLockLock(configurationLock);
+            unsigned slot = umiQueueCount;
+            for (unsigned i = 0; i < umiQueueCount; ++i)
+                if (!memcmp(umiQueue[i].peer, request.peer, 6))
+                    slot = i;          // a newer request for the same peer replaces the older one
+            if (slot == umiQueueDepth) {
+                slot = 0;              // full: the oldest goes
+                ++umiTxDropped;
+            }
+            umiQueue[slot] = request;
+            if (slot == umiQueueCount)
+                ++umiQueueCount;
+            ++umiTxQueued;
+            IOLockUnlock(configurationLock);
+            setProperty("ItlwmAWDLUmiTxQueued", umiTxQueued, 32);
+            if (umiRequests == 1) {
+                if (auto *sample = OSData::withBytes(request.tlvs, length)) {
+                    setProperty("ItlwmAWDLUmiFirstTemplate", sample);
+                    sample->release();
+                }
+            }
+        } else {
+            setProperty("ItlwmAWDLUmiTxRefused", "template-pointer");
+        }
+    }
+    setProperty("ItlwmAWDLUmiLastPeer", peer);
+    setProperty("ItlwmAWDLUmiLastOption", uint32_t(option), 32);
+    setProperty("ItlwmAWDLUmiLastLength", uint32_t(length), 32);
+    setProperty("ItlwmAWDLUmiRequests", umiRequests, 32);
+}
+
 IOReturn ItlAWDLInterface::noteOobRequest(const apple80211_awdl_oob_request *data, const char *name)
 {
     if (!nativeState.accept)
@@ -425,6 +755,7 @@ IOReturn ItlAWDLInterface::noteOobRequest(const apple80211_awdl_oob_request *dat
     ++oobRequests;
     if (oobRequests == 1 || !(oobRequests % 16))
         setProperty("ItlwmAWDLOobRequests", oobRequests, 32);
+    noteUmiRequest(data);
     if (!oobSampled && awdlRawSamples) {
         oobSampled = true;
         uint16_t length;
@@ -557,8 +888,18 @@ IOReturn ItlAWDLInterface::setAWDL_SYNC_ENABLED(apple80211_awdl_sync_enabled *da
     }
     if (result == kIOReturnSuccess && nativeState.accept) {
         setProperty("ItlwmAWDLSyncEnabledRequested", data->enabled, 32);
-        if (data->enabled && ndpKeepWanted && ndpKeepTimer)
+        if (data->enabled && (ndpKeepWanted || ullInfraWanted) && ndpKeepTimer)
             ndpKeepTimer->setTimeoutMS(1500);   // once the family has built its peer manager; outside this call
+        awSyncEnabled = data->enabled != 0;
+        if (awEventsWanted && awEventTimer) {
+            if (awSyncEnabled) {
+                awSlotStartUS = 0;
+                awInWindow = false;
+                awEventTimer->setTimeoutMS(1500);   // after the family's own enable has finished
+            } else {
+                stopAwEvents();
+            }
+        }
         // The peer manager exists by now. Reject reasons are behind these flags.
         if (data->enabled && debugFlagsWanted && !debugFlagsSet) {
             debugFlagsSet = true;
@@ -634,6 +975,20 @@ void *itlFamFindAWDLPeer(void *manager, uint8_t *address) __asm__("__ZN22IO80211
 void itlFamSetLastRxUnicast(void *peerObject, uint64_t when) __asm__("__ZN11IO80211Peer28setLastRxUnicastLinkActivityEy");
 void itlFamSetLastSync(void *peerObject, uint64_t when) __asm__("__ZN15IO80211AWDLPeer19setLastSyncReceivedEy");
 int itlFamSetAwdlCtl(void *manager, void *request) __asm__("__ZN22IO80211AWDLPeerManager10setAwdlCtlEP19apple80211_awdl_ctl");
+// The family's ultra-low-latency infrastructure mode (24H232): isAdaptCommonSocialChannelForUltraLowLatencyInfra() is true only
+// when the peer manager's P2PForULLRTInfra flag (+0xb24, set by setP2PForULLRTInfraFeatureFlag, which the infra interface copies
+// from the controller's setP2PForULLRTInfraFeatureFlagEnabled when message 0xC2 arrives) AND the AWDL control
+// "adaptCommonSocialChannelForUltraLowLatencyInfra" (+0xca54, set through setAwdlCtl) are on. In that mode the common social channel
+// follows the infrastructure channel and the RTG TLV carries the ultra-low-latency bit, so a phone that supports it stops
+// hopping to channel 149 (our registry showed ITLAWDLRtgOwnUll 0 and the iPhone away for 262 ms of every 524 ms).
+void itlFamSetUllController(void *controller, bool on) __asm__("__ZN17IO80211Controller37setP2PForULLRTInfraFeatureFlagEnabledEb");
+void itlFamSetUllManager(void *manager, bool on) __asm__("__ZN18IO80211PeerManager30setP2PForULLRTInfraFeatureFlagEb");
+bool itlFamIsUllAdapt(void *manager) __asm__("__ZN22IO80211AWDLPeerManager49isAdaptCommonSocialChannelForUltraLowLatencyInfraEv");
+bool itlFamIsUllActive(void *manager) __asm__("__ZN22IO80211AWDLPeerManager31isRTGUltraLowLatencyInfraActiveEv");
+// The state buildRealTimeGroupTlv puts in the TLV's ultra-low-latency bit is isRTGUltraLowLatencyInfraActive() = this flag OR the
+// CoPresence state. CoPresence only arrives as a CATs notification (type 5) from userspace, which the 2026-11-20 log never showed
+// (only type 4, "desired_latency:4"), so the flag is set directly.
+void itlFamSetUllActive(void *manager, bool on) __asm__("__ZN22IO80211AWDLPeerManager34setIsRTGUltraLowLatencyInfraActiveEb");
 }
 
 // The AWDL peer manager of this interface, or null when the object is not what the symbols above expect.
@@ -714,25 +1069,16 @@ void ItlAWDLInterface::ndpKeepTick(OSObject *owner, IOTimerEventSource *)
 // IO80211AWDLPeerManager::setAwdlCtl wants the apple80211_awdl_ctl the family's own ioctl wrapper builds:
 // name at +4, value at +0x88, extra-data length at +0x90, and the three fields it fills in itself (+0x3B8A0 pointer to the
 // data at +0x94, +0x3B8A8 = 1, +0x3B8AC length), without which setAwdlCtl returns before looking at the name.
-void ItlAWDLInterface::applyNdpKeep()
+// One AWDL control through IO80211AWDLPeerManager::setAwdlCtl; returns its result, or -1 when no buffer could be made.
+static int itlSetAwdlCtl(void *manager, const char *name, uint64_t value)
 {
-    if (!ndpKeepWanted)
-        return;
-    void *manager = itlAWDLPeerManager(this);
-    if (!manager) {
-        setProperty("ItlwmAWDLNdpKeep", "no-peer-manager");
-        return;
-    }
     // The family's wrapper copies 0x3B8A0 bytes from the caller into a larger kernel struct (tail fields to +0x3B8B0).
     const size_t size = 0x3B8C0;
     auto *request = static_cast<uint8_t *>(IOMalloc(size));
-    if (!request) {
-        setProperty("ItlwmAWDLNdpKeep", "no-memory");
-        return;
-    }
+    if (!request)
+        return -1;
     bzero(request, size);
-    strlcpy(reinterpret_cast<char *>(request) + 4, "ndpRemovalTimeoutmSec", 0x80);
-    const uint64_t value = 100000;
+    strlcpy(reinterpret_cast<char *>(request) + 4, name, 0x80);
     memcpy(request + 0x88, &value, sizeof(value));
     const uint32_t dataLength = 4;
     memcpy(request + 0x90, &dataLength, sizeof(dataLength));
@@ -743,10 +1089,48 @@ void ItlAWDLInterface::applyNdpKeep()
     memcpy(request + 0x3B8AC, &dataLength, sizeof(dataLength));
     const int result = itlFamSetAwdlCtl(manager, request);
     IOFree(request, size);
-    ++ndpKeepApplied;
-    setProperty("ItlwmAWDLNdpKeepResult", uint32_t(result), 32);
-    setProperty("ItlwmAWDLNdpKeepApplied", ndpKeepApplied, 32);
-    setProperty("ItlwmAWDLNdpKeep", "applied");
+    return result;
+}
+
+void ItlAWDLInterface::applyNdpKeep()
+{
+    if (!ndpKeepWanted && !ullInfraWanted)
+        return;
+    void *manager = itlAWDLPeerManager(this);
+    if (!manager) {
+        if (ndpKeepWanted)
+            setProperty("ItlwmAWDLNdpKeep", "no-peer-manager");
+        if (ullInfraWanted) {
+            setProperty("ItlwmAWDLUll", "no-peer-manager");
+            if (ndpKeepTimer)
+                ndpKeepTimer->setTimeoutMS(3000);
+        }
+        return;
+    }
+    if (ndpKeepWanted) {
+        const int result = itlSetAwdlCtl(manager, "ndpRemovalTimeoutmSec", 100000);
+        ++ndpKeepApplied;
+        setProperty("ItlwmAWDLNdpKeepResult", uint32_t(result), 32);
+        setProperty("ItlwmAWDLNdpKeepApplied", ndpKeepApplied, 32);
+        setProperty("ItlwmAWDLNdpKeep", result == -1 ? "no-memory" : "applied");
+    }
+    if (ullInfraWanted) {
+        // Both halves of the family's condition, then read the verdict back from the family itself.
+        if (void *controller = getController())
+            itlFamSetUllController(controller, true);
+        itlFamSetUllManager(manager, true);
+        const int result = itlSetAwdlCtl(manager, "adaptCommonSocialChannelForUltraLowLatencyInfra", 1);
+        itlFamSetUllActive(manager, true);
+        ++ullInfraApplied;
+        setProperty("ItlwmAWDLUllResult", uint32_t(result), 32);
+        setProperty("ItlwmAWDLUllApplied", ullInfraApplied, 32);
+        setProperty("ItlwmAWDLUllAdapt", itlFamIsUllAdapt(manager));
+        setProperty("ItlwmAWDLUllActive", itlFamIsUllActive(manager));
+        setProperty("ItlwmAWDLUll", result == -1 ? "no-memory" : "applied");
+        // The family resets its controls when AWDL restarts, so assert it again every few seconds while it is wanted.
+        if (ndpKeepTimer)
+            ndpKeepTimer->setTimeoutMS(5000);
+    }
 }
 #else
 void ItlAWDLInterface::keepPeerAlive(const uint8_t *) {}
@@ -862,6 +1246,7 @@ IOReturn ItlAWDLInterface::receiveManagementFrame(IO80211Controller *controller,
         }
     } sink = {pool, this};
     const uint32_t band = channel <= 14 ? APPLE80211_C_FLAG_2GHZ : APPLE80211_C_FLAG_5GHZ;
+    noteUmiWatch(frame, length, channel, rssi);
     const IOReturn result = ItlAWDL::copyManagementFrame(sink, frame, length, channel, band, rssi);
     if (result == kIOReturnSuccess) {
         ++managementSubmissions;
@@ -1100,6 +1485,11 @@ void ItlAWDLInterface::releaseNetworkResources()
         queueWorkLoop->removeEventSource(ndpKeepTimer);
         OSSafeReleaseNULL(ndpKeepTimer);
     }
+    if (awEventTimer) {
+        awEventTimer->cancelTimeout();
+        queueWorkLoop->removeEventSource(awEventTimer);
+        OSSafeReleaseNULL(awEventTimer);
+    }
     if (umiAckTimer) {
         umiAckTimer->cancelTimeout();
         queueWorkLoop->removeEventSource(umiAckTimer);
@@ -1281,6 +1671,17 @@ IOReturn ItlAWDLInterface::initializeNetwork(IO80211Controller *controller,
         umiAckWanted = umiAckTimer != nullptr;
     }
     setProperty("ItlwmAWDLUmiAckEnabled", umiAckWanted);
+    int awEvents = 0;
+    if (PE_parse_boot_argn("-itlawdlawevents", &awEvents, sizeof(awEvents))) {
+        awEventTimer = IOTimerEventSource::timerEventSource(this, reinterpret_cast<IOTimerEventSource::Action>(&ItlAWDLInterface::awEventTick));
+        if (awEventTimer && queueWorkLoop->addEventSource(awEventTimer) != kIOReturnSuccess)
+            OSSafeReleaseNULL(awEventTimer);
+        awEventsWanted = awEventTimer != nullptr;
+    }
+    setProperty("ItlwmAWDLAwEventsEnabled", awEventsWanted);
+    int umiTx = 0;
+    umiTxWanted = awEventsWanted && PE_parse_boot_argn("-itlawdlumitx", &umiTx, sizeof(umiTx));
+    setProperty("ItlwmAWDLUmiTxEnabled", umiTxWanted);
     int peerKeep = 0;
     peerAliveWanted = PE_parse_boot_argn("-itlawdlpeeralive", &peerKeep, sizeof(peerKeep));
     if (peerAliveWanted) {
@@ -1290,12 +1691,18 @@ IOReturn ItlAWDLInterface::initializeNetwork(IO80211Controller *controller,
         nanoseconds_to_absolutetime(120000000000ULL, &rtgKeepSanity);
         setProperty("ItlwmAWDLRtgKeepEnabled", rtgKeepWanted);
     }
-    if (PE_parse_boot_argn("-itlawdlndpkeep", &peerKeep, sizeof(peerKeep))) {
+    // -itlawdlull: the family's ultra-low-latency infrastructure mode (see itlFamSetUllController), asserted by the same timer.
+    int ullArgument = 0;
+    const bool wantNdpKeep = PE_parse_boot_argn("-itlawdlndpkeep", &peerKeep, sizeof(peerKeep));
+    const bool wantUll = PE_parse_boot_argn("-itlawdlull", &ullArgument, sizeof(ullArgument));
+    if (wantNdpKeep || wantUll) {
         ndpKeepTimer = IOTimerEventSource::timerEventSource(this, reinterpret_cast<IOTimerEventSource::Action>(&ItlAWDLInterface::ndpKeepTick));
         if (ndpKeepTimer && queueWorkLoop->addEventSource(ndpKeepTimer) != kIOReturnSuccess)
             OSSafeReleaseNULL(ndpKeepTimer);
-        ndpKeepWanted = ndpKeepTimer != nullptr;
+        ndpKeepWanted = wantNdpKeep && ndpKeepTimer != nullptr;
+        ullInfraWanted = wantUll && ndpKeepTimer != nullptr;
         setProperty("ItlwmAWDLNdpKeepEnabled", ndpKeepWanted);
+        setProperty("ItlwmAWDLUllEnabled", ullInfraWanted);
     }
 #if defined(ITL_AWDL_LLW)
     owner = controller;
@@ -1644,10 +2051,7 @@ IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
         ++awdlSyncPeerTLVsRefused;
     }
     uint8_t sync[73]; size_t syncLength = 0;
-    const uint8_t fixedChannel = uint8_t(itlAWDLFixedChannel());
-    ItlAWDL::SyncPrefix settings = {fixedChannel,fixedChannel,0,0,16,110,0x1000,16,16,0,3,3,3,3,{}};
-    memcpy(settings.master, snapshot->address, 6);
-    const auto schedule = ItlAWDL::buildLocalFixedSchedule(settings, 0, nowUS, 0,
+    const auto schedule = itlBuildSync(snapshot->address, snapshot->staticTLVs, snapshot->templateLength, nowUS,
         sync, sizeof(sync), &syncLength);
     mbuf_t result = nullptr;
     // Each way a frame can fail has its own stage and return code, so one snapshot shows which.
@@ -1799,6 +2203,117 @@ IOReturn itlAWDLBuildSyncProbe(IOEthernetController *owner, mbuf_t *packet, uint
     auto *controller = OSDynamicCast(AirportItlwm, owner);
     return controller ? controller->buildAWDLSyncProbe(packet, nowUS) : kIOReturnNotReady;
 }
+
+#if defined(ITL_AWDL_NATIVE)
+// The unicast master indication (UMI) the family asked for with ioctl 149. Same frame as the broadcast MIF, but addressed to the
+// peer and carrying the family's UMI template (no service TLVs, option 1 in the data path TLV). Under the shared gate.
+IOReturn AirportItlwm::buildAWDLUnicastMI(mbuf_t *packet, uint8_t *peerOut, uint64_t nowUS)
+{
+    if (!packet || *packet || !peerOut || !awdlInterfaceTest || !_fWorkloop || !_fWorkloop->inGate() ||
+        !awdlManagementInputEnabled || !fAWDLInterface)
+        return kIOReturnNotReady;
+    auto *interface = static_cast<ItlAWDLInterface *>(fAWDLInterface);
+    interface->retain();
+    ItlAWDLInterface::UmiRequest request;
+    if (!interface->takeUmi(&request)) {
+        interface->release();
+        return kIOReturnNotFound;
+    }
+    memcpy(peerOut, request.peer, 6);
+    IOReturn error = kIOReturnError;
+    const char *stage = "snapshot";
+    auto *snapshot = IONew(ItlAWDLInterface::FrameConfiguration, 1);
+    if (!snapshot) {
+        interface->noteUmiTxResult(request.peer, false);
+        interface->release();
+        return kIOReturnNoMemory;
+    }
+    if (interface->copyFrameConfiguration(snapshot) == kIOReturnSuccess) {
+        // The same TLVs the broadcast master indication gets (buildMasterIndicationTLVs): the family's template without its 4, 5, 7
+        // and 18, then the peer TLVs the firmware would add (5, 18 = our channel sequence, 7 = data rates). The first UMI went out
+        // with only the family's three TLVs, which the iPhone acknowledged at the MAC level and then ignored: with no channel
+        // sequence there is nothing for it to schedule a reply against. TLV 4 comes from the frame builder.
+        uint8_t tlvs[1024];
+        size_t used = 0;
+        const bool valid = ItlAWDL::buildMasterIndicationTLVs(request.tlvs, request.length, snapshot->address, tlvs, sizeof(tlvs),
+                                                              &used, uint8_t(itlAWDLFixedChannel()), uint8_t(itlAWDLChannelClass()),
+                                                              itlAWDLTwoStreams());
+        if (valid) {
+            char types[64];
+            size_t n = 0;
+            for (size_t offset = 0; offset + 3 <= used && n + 5 < sizeof(types);) {
+                n += size_t(snprintf(types + n, sizeof(types) - n, "%s%u", n ? "," : "", unsigned(tlvs[offset])));
+                offset += 3 + ItlAWDL::read16(tlvs + offset + 1);
+            }
+            setProperty("ItlwmAWDLUmiFrameTlvs", types);
+        }
+        uint8_t sync[73]; size_t syncLength = 0;
+        const auto schedule = itlBuildSync(snapshot->address, request.tlvs, request.length, nowUS, sync, sizeof(sync), &syncLength);
+        mbuf_t result = nullptr;
+        if (!valid) {
+            stage = "template-invalid";
+        } else if (schedule != ItlAWDL::BuildResult::Ready) {
+            stage = "schedule-rejected";
+        } else if (mbuf_getpacket(MBUF_DONTWAIT, &result) || !result) {
+            stage = "no-memory";
+            error = kIOReturnNoMemory;
+        } else {
+            ItlAWDL::LocalFrame frame = {{},{},3,uint16_t(awdlProbeSequence & 4095),uint32_t(nowUS),uint32_t(nowUS),sync,syncLength,
+                tlvs,used};
+            memcpy(frame.source, snapshot->address, 6);
+            memcpy(frame.receiver, request.peer, 6);
+            size_t length = 0;
+            if (ItlAWDL::buildLocalFrame(frame, static_cast<uint8_t *>(mbuf_data(result)), mbuf_maxlen(result), &length) ==
+                ItlAWDL::BuildResult::Ready) {
+                mbuf_setlen(result, length); mbuf_pkthdr_setlen(result, length);
+                *packet = result;
+                awdlProbeSequence = uint16_t((awdlProbeSequence + 1) & 4095);
+                error = kIOReturnSuccess;
+                stage = "frame-built";
+                setProperty("ItlwmAWDLUmiFrameLength", length, 32);
+            } else {
+                mbuf_freem(result);
+                stage = "frame-rejected";
+            }
+        }
+    }
+    IODelete(snapshot, ItlAWDLInterface::FrameConfiguration, 1);
+    setProperty("ItlwmAWDLUmiBuildStage", stage);
+    if (error != kIOReturnSuccess)
+        interface->noteUmiTxResult(request.peer, false);   // the family retries in a later window
+    interface->release();
+    return error;
+}
+
+bool AirportItlwm::umiPendingAWDL()
+{
+    return awdlInterfaceTest && fAWDLInterface && static_cast<ItlAWDLInterface *>(fAWDLInterface)->umiPending();
+}
+
+void AirportItlwm::noteAWDLUmiTxResult(const uint8_t *peer, bool acknowledged)
+{
+    if (awdlInterfaceTest && fAWDLInterface)
+        static_cast<ItlAWDLInterface *>(fAWDLInterface)->noteUmiTxResult(peer, acknowledged);
+}
+
+IOReturn itlAWDLBuildUnicastMI(IOEthernetController *owner, mbuf_t *packet, uint8_t *peer, uint64_t nowUS)
+{
+    auto *controller = OSDynamicCast(AirportItlwm, owner);
+    return controller ? controller->buildAWDLUnicastMI(packet, peer, nowUS) : kIOReturnNotReady;
+}
+
+bool itlAWDLUmiPending(IOEthernetController *owner)
+{
+    auto *controller = OSDynamicCast(AirportItlwm, owner);
+    return controller && controller->umiPendingAWDL();
+}
+
+void itlAWDLUmiTxResult(IOEthernetController *owner, const uint8_t *peer, bool acknowledged)
+{
+    if (auto *controller = OSDynamicCast(AirportItlwm, owner))
+        controller->noteAWDLUmiTxResult(peer, acknowledged);
+}
+#endif
 #endif
 
 void AirportItlwm::teardownAWDLInterface()

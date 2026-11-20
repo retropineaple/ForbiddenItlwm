@@ -5641,6 +5641,10 @@ extern bool itlAWDLBuildAllowed();
 extern IOReturn itlAWDLReceiveAction(IOEthernetController*, mbuf_t, size_t, uint32_t, int32_t);
 extern void itlAWDLObserveData(IOEthernetController*, const uint8_t*, size_t);
 extern IOReturn itlAWDLBuildSyncProbe(IOEthernetController*, mbuf_t*, uint64_t);
+// -itlawdlumitx: the unicast master indication the family asks for (see AirportAWDLInterface.hpp).
+extern IOReturn itlAWDLBuildUnicastMI(IOEthernetController*, mbuf_t*, uint8_t *, uint64_t);
+extern bool itlAWDLUmiPending(IOEthernetController*);
+extern void itlAWDLUmiTxResult(IOEthernetController*, const uint8_t *, bool);
 extern IOReturn itlAWDLBuildTransmit(IOEthernetController*, mbuf_t*);
 extern IOReturn itlAWDLBuildTransmit(IOEthernetController*, mbuf_t*, const uint8_t*);
 extern IOReturn itlAWDLBuildTransmit(IOEthernetController*, mbuf_t*, const uint8_t*, bool);
@@ -5958,6 +5962,10 @@ constexpr uint32_t kAwdlCoexTxPeriodMS = 113;
 constexpr uint64_t kAwdlCoexTxStuckUS = 1000000;
 constexpr uint32_t kAwdlCoexTxSetupTries = 3;
 static bool awdlCoexTxStaAdded, awdlCoexInFlight, awdlCoexSending, awdlCoexAddrKnown;
+// The frame in flight is a UMI to this peer (-itlawdlumitx); its transmit result is reported to the interface.
+static bool awdlUmiTxEnabled, awdlCoexInFlightUmi;
+static uint8_t awdlCoexUmiPeer[6];
+static uint32_t awdlUmiBuilt, awdlUmiSubmitted, awdlUmiOK, awdlUmiFailed, awdlUmiDeferred, awdlUmiLastStatus;
 static uint8_t awdlCoexAddr[6];
 static uint64_t awdlCoexInFlightUS;
 // Stage 3 (-itlawdlcoexdata): AWDL data through the listener. Received data frames go to awdl0, and
@@ -6229,7 +6237,7 @@ static uint32_t awdlCoexRxReject[unsigned(ItlAWDL::DataReject::Count)];
 // Missing = delta-1 for a forward step of 2..2047; retries and reordering (step 0 or over 2047) are not counted.
 // Tracked per transmitter address (up to four): the iPhone's data frames don't always come from the address its
 // Block Ack agreement names, and a sequence gap only means something within one transmitter's counter.
-struct AwdlSeqPeer { uint8_t ta[6]; bool used; int16_t last[8]; uint32_t seen; };
+struct AwdlSeqPeer { uint8_t ta[6]; bool used; int16_t last[8]; uint32_t seen; uint8_t lateRun[8]; uint8_t lastRate[8]; uint32_t lastUS[8]; };
 static AwdlSeqPeer awdlCoexSeqPeers[4];
 static unsigned awdlCoexSeqPeerNext;
 static uint32_t awdlCoexSeqPeersEver;
@@ -6245,9 +6253,77 @@ static uint32_t awdlRxBadCrcRuns, awdlRxBadCrcRunLongest, awdlRxBadCrcRun;
 // The last gap events: firmware time (gp2, microseconds) of the frame after the gap, frames missing, its sequence
 // number, TID, retry bit and length. Oldest overwritten.
 struct AwdlSeqGapEvent { uint32_t gp2; uint16_t missing; uint16_t seq; uint16_t length; uint8_t tid; uint8_t retry; };
-static AwdlSeqGapEvent awdlCoexSeqGapRing[48];
+// 400 events (4.8 KB): at 5 to 10 gaps a second that is 40 to 80 s of them, enough for tools/diag/cc_analyze.py to look for a period.
+static AwdlSeqGapEvent awdlCoexSeqGapRing[400];
+// The host clock (awdlUptimeUS, low 32 bits, microseconds) at the moment each gap above was noticed, which is when the first frame after it
+// arrived: the gap's end. The gap ring's own time is the firmware's.
+static uint32_t awdlCoexSeqGapHostUS[400];
+// Where each gap fell in the iPhone's 16-slot schedule (the sync parameters it announced; IO80211's own plan for the real-time group
+// is 161 161 149 161 161 161 36 36, twice). A gap runs from the previous frame heard on the TID to the first one after it, so it can
+// cover several slots. The iPhone cannot send to us in a slot it announced on another channel, so the share of the gap spent in
+// such slots is what the iPhone's own hopping explains: awayPct 100 is fully explained, 0 means it should have been on our channel
+// throughout. (The older MissingPresent/MissingAway counters classify the slot of the frame AFTER the gap, which is always one it
+// was present in, so they cannot show this.) known: 1 schedule known, 0 not known, 2 gap longer than 64 slots.
+struct AwdlGapSlot { uint16_t durationMs; uint8_t startEntry, endEntry, spanEntries, awayPct, known, startOffset256; };
+static AwdlGapSlot awdlCoexSeqGapSlot[400];
+// What the driver and firmware did around the gaps, on that same host clock: kind 1 a scan was started (group = background),
+// 2 a scan finished (group 0 complete, 1 iteration complete), 3 a firmware notification other than receive and transmit traffic
+// (group and command id as the firmware sent them). tools/diag/cc_analyze.py lists what came before each gap and how much more often
+// than chance.
+struct AwdlTimelineEvent { uint32_t us; uint8_t kind; uint8_t group; uint16_t cmd; };
+static AwdlTimelineEvent awdlTimeline[512];
+static uint32_t awdlTimelineCount;
+static uint64_t awdlUptimeUS();
+static void awdlTimelineNote(uint8_t kind, uint8_t group, uint16_t cmd)
+{
+    AwdlTimelineEvent &e = awdlTimeline[awdlTimelineCount++ % nitems(awdlTimeline)];
+    e.us = uint32_t(awdlUptimeUS());
+    e.kind = kind;
+    e.group = group;
+    e.cmd = cmd;
+}
 static uint32_t awdlCoexSeqGapRingCount;
 static uint32_t awdlCoexSeqLate, awdlCoexSeqTidSeen[8], awdlCoexSeqTidMissing[8], awdlCoexSeqRunBins[7];
+// A sequence step of 2048 or more is "late": the frame is older than the last one heard, or the gap before it was longer than
+// half the 12-bit space. The old tracker then left `last` alone, so after a stall of more than 2,048 frames every later frame
+// also looked late until the sequence wrapped round (SeqLate 1,265 to 2,621 in the 2026-11-20 runs), and the frames in between
+// were never counted as missing. After kAwdlSeqResyncRun late frames in a row on one TID the tracker takes the new sequence number.
+constexpr uint8_t kAwdlSeqResyncRun = 8;
+static uint32_t awdlCoexSeqResyncs;
+// Is the loss packet error at the iPhone's high rates? TID 7 only. Loss by the rate of the frame heard just before the gap (the
+// last frame that got through) and of the first one after it, indexed second stream << 4 | MCS, as the gap ring's rate byte is
+// (width << 5 | second stream << 4 | MCS); each a pair of arrays, gaps[32] then missing[32]. The frames at each rate are
+// ITLAWDLRxRatesTid7, so loss per frame at a rate = gaps / frames. And the signal of the iPhone's TID 7 frames, in dBm:
+// 16 bins of 4 dB from -30 (bin 0 is -30 and above, bin 15 is -90 and below), and the sum of the magnitudes for the mean.
+static uint32_t awdlLossPrev[64], awdlLossNext[64];
+static uint32_t awdlRxRssiTid7[16], awdlRxRssiSumTid7;
+// Per receive chain, for the iPhone's TID 7 frames split by one and two streams (the rate's stream bit): the difference between the
+// two chains' energy in 2 dB bins (-20..+20 dB, chain A minus chain B; the reported signal is the larger of the two, so one weak or
+// unconnected antenna is invisible there), the sum of each chain's dBm, how many frames, and how often a chain reported no energy at all.
+// A channel the iPhone can use two streams on needs both chains alive and similar.
+static int awdlRxEnergyA, awdlRxEnergyB;
+static uint32_t awdlChainDiff[2][21], awdlChainCount[2], awdlChainNone[2][2];
+static int32_t awdlChainSum[2][2];
+static void awdlCoexNoteChains(bool twoStreams)
+{
+    const unsigned s = twoStreams ? 1 : 0;
+    ++awdlChainCount[s];
+    if (!awdlRxEnergyA) ++awdlChainNone[s][0];
+    if (!awdlRxEnergyB) ++awdlChainNone[s][1];
+    if (!awdlRxEnergyA || !awdlRxEnergyB)
+        return;
+    awdlChainSum[s][0] -= awdlRxEnergyA;
+    awdlChainSum[s][1] -= awdlRxEnergyB;
+    int diff = awdlRxEnergyB - awdlRxEnergyA;   // A minus B in dBm: (-A) - (-B)
+    diff = diff < -20 ? -20 : diff > 20 ? 20 : diff;
+    ++awdlChainDiff[s][(diff + 20) / 2];
+}
+static void awdlCoexNoteRssi(int rssiDbm)
+{
+    int bin = rssiDbm >= -30 ? 0 : rssiDbm <= -90 ? 15 : (-30 - rssiDbm) / 4;
+    ++awdlRxRssiTid7[bin];
+    awdlRxRssiSumTid7 += uint32_t(rssiDbm < 0 ? -rssiDbm : 0);
+}
 static uint8_t awdlCoexRxSamples[4][130];
 static unsigned awdlCoexRxSampleCount;
 // Unicast data rate for our frames: 0 legacy 24 Mbit/s, then HT MCS 4, 5, 7 (20 MHz, one stream). Steps
@@ -6592,7 +6668,83 @@ static bool awdlCoexScheduleCurrent()
         awdlCoexPeerSchedule.ourChannel == awdlCoexChannel &&
         (!awdlCoexBaPeerAdded || ItlAWDL::sameAddress(awdlCoexSchedPeer, awdlCoexBaPeer));
 }
+// The denominator for the gap slots: TID 7 frames heard, and frames missing (attributed to the cell where the gap began), in each
+// of the iPhone's 16 slots and each 8th of the slot (8.2 ms). Without it a cluster of gap starts could just be where the iPhone sends.
+static uint32_t awdlCellHeard[16 * 8], awdlCellMissing[16 * 8];
+// Per cell, to tell on-air errors from frames the iPhone never sent here: retry-flagged TID 7 frames heard, heard and missing frames by
+// rate class (0: MCS 0-7, 1: MCS 8-9, 2: MCS 10-11; a missing run counts under the rate of the frame heard before it), the sum of the
+// signal of the frames heard (dBm, signed), and the missing frames that no cell could be given (schedule not current at the time).
+static uint32_t awdlCellRetry[16 * 8], awdlCellRate[16 * 8 * 3], awdlCellMissingRate[16 * 8 * 3];
+static int32_t awdlCellRssi[16 * 8];
+static uint32_t awdlCellMissingNone, awdlCellHeardNone;
+static bool awdlCellOf(uint64_t t, unsigned &cell)
+{
+    const ItlAWDL::PeerSchedule &ps = awdlCoexPeerSchedule;
+    if (!awdlCoexScheduleCurrent() || !ps.known() || !ps.fresh(t) || !ps.eawUS)
+        return false;
+    uint64_t into = 0;
+    const uint32_t eaw = ps.eawAt(t, &into);
+    const unsigned slot = (eaw + ps.entryOffset()) % ItlAWDL::kPeerSeqEntries;
+    cell = slot * 8 + unsigned(into * 8 / ps.eawUS);
+    return cell < 16 * 8;
+}
+static uint32_t awdlPmRxSent;
+static uint32_t awdlPmRxTimeoutMs;   // itlawdlpmrx=<ms>: rx/tx data timeout in the recipe power table (0 = leave at 0)
+// The iPhone's availability-window clock as this driver has tracked it from its sync frames: the extended window (64 TU) that
+// contains `nowUS`, its index (the iPhone's AW counter / 4) and its start in the host clock. A real Mac's firmware follows the master's
+// counter, and its UMIs and events carry it (AW 37020 slot 7, the iPhone's own count); frames built from host uptime did not.
+bool itlAWDLPeerClock(uint64_t nowUS, uint32_t *eaw, uint64_t *eawStartUS, uint64_t *eawUS)
+{
+    const ItlAWDL::PeerSchedule &ps = awdlCoexPeerSchedule;
+    if (!eaw || !eawStartUS || !eawUS || !awdlCoexScheduleCurrent() || !ps.known() || !ps.fresh(nowUS) || !ps.eawUS)
+        return false;
+    uint64_t into = 0;
+    *eaw = ps.eawAt(nowUS, &into);
+    *eawStartUS = nowUS - into;
+    *eawUS = ps.eawUS;
+    return true;
+}
+
+static void awdlNoteGapSlots(uint64_t prevUS, uint64_t nowUS, AwdlGapSlot &out)
+{
+    memset(&out, 0, sizeof(out));
+    const uint64_t total = nowUS > prevUS ? nowUS - prevUS : 0;
+    out.durationMs = uint16_t(total / 1000 > 65535 ? 65535 : total / 1000);
+    const ItlAWDL::PeerSchedule &ps = awdlCoexPeerSchedule;
+    if (!total || !awdlCoexScheduleCurrent() || !ps.known() || !ps.fresh(nowUS) || !ps.eawUS)
+        return;
+    uint64_t intoStart = 0, intoEnd = 0;
+    const uint32_t first = ps.eawAt(prevUS, &intoStart), last = ps.eawAt(nowUS, &intoEnd);
+    const uint32_t span = last - first + 1;
+    if (span == 0 || span > 64) {
+        out.known = 2;
+        return;
+    }
+    uint64_t away = 0;
+    for (uint32_t j = first; j != last + 1; ++j) {
+        if (ps.presentInEntry(j))
+            continue;
+        const int64_t start = int64_t(ps.anchorEndUS) + (int64_t(j) - int64_t(ps.anchorEaw) - 1) * int64_t(ps.eawUS);
+        const int64_t lo = start > int64_t(prevUS) ? start : int64_t(prevUS);
+        const int64_t endOfSlot = start + int64_t(ps.eawUS);
+        const int64_t hi = endOfSlot < int64_t(nowUS) ? endOfSlot : int64_t(nowUS);
+        if (hi > lo)
+            away += uint64_t(hi - lo);
+    }
+    out.startEntry = uint8_t((first + ps.entryOffset()) % ItlAWDL::kPeerSeqEntries);
+    out.endEntry = uint8_t((last + ps.entryOffset()) % ItlAWDL::kPeerSeqEntries);
+    out.spanEntries = uint8_t(span);
+    out.awayPct = uint8_t(away * 100 / total);
+    out.startOffset256 = uint8_t(intoStart * 256 / ps.eawUS);   // where in its slot the gap began, in 1/256 of a slot
+    out.known = 1;
+}
 static uint32_t awdlCoexPeerSyncFrames, awdlCoexAwSyncFrames, awdlCoexIdleSyncFrames;
+// How often action frames from any other station are heard on the listener's channel: gap between consecutive
+// ones in bins of <150 ms, <300 ms, <600 ms, <1 s, <2 s, <4 s, <10 s, >=10 s, and the longest gap in ms. The
+// real Mac keeps the phone for as long as its frames arrive within about 3 s, so this shows how much of the
+// phone's AWDL activity a single-channel listener actually gets to hear (ITLAWDLAfGapBins/ITLAWDLAfGapMaxMs).
+static uint64_t awdlCoexAfLastUS;
+static uint32_t awdlCoexAfCount, awdlCoexAfGapBins[8], awdlCoexAfGapMaxMs;
 static uint32_t awdlCoexPeerSequenceRejected;
 static bool awdlCoexScheduleCalibrated;
 // Per ring slot: 1 for a group data frame, 2 for unicast, so completions say whether the peer acknowledged us.
@@ -6810,6 +6962,27 @@ static void awdlCoexPublish()
             root->setProperty("ITLAWDLCoexSeqGapRuns", awdlCoexSeqGapRuns, 32);
             root->setProperty("ITLAWDLCoexSeqLongestGap", awdlCoexSeqLongestGap, 32);
             root->setProperty("ITLAWDLCoexSeqLate", awdlCoexSeqLate, 32);
+            root->setProperty("ITLAWDLCoexSeqResyncs", awdlCoexSeqResyncs, 32);
+            if (auto *d = OSData::withBytes(awdlCoexSeqGapHostUS, sizeof(awdlCoexSeqGapHostUS))) { root->setProperty("ITLAWDLCoexSeqGapHostUS", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlCoexSeqGapSlot, sizeof(awdlCoexSeqGapSlot))) { root->setProperty("ITLAWDLCoexSeqGapSlot", d); d->release(); }
+            {
+                uint8_t sched[16 + 12] = {};
+                memcpy(sched, awdlCoexPeerSchedule.channels, 16);
+                const uint32_t eawUS = uint32_t(awdlCoexPeerSchedule.eawUS), flags = (awdlCoexPeerSchedule.calibrated ? 1U : 0U) |
+                    (awdlCoexPeerSchedule.valid ? 2U : 0U) | (awdlCoexScheduleCurrent() ? 4U : 0U);
+                memcpy(sched + 16, &eawUS, 4);
+                memcpy(sched + 20, &flags, 4);
+                const uint32_t offset = awdlCoexPeerSchedule.entryOffset(), ours = awdlCoexPeerSchedule.ourChannel;
+                memcpy(sched + 24, &offset, 4);
+                if (auto *d = OSData::withBytes(sched, sizeof(sched))) { root->setProperty("ITLAWDLPeerSchedule", d); d->release(); }
+                root->setProperty("ITLAWDLPeerScheduleOurChannel", ours, 32);
+            }
+            root->setProperty("ITLAWDLTimelineCount", awdlTimelineCount, 32);
+            if (auto *d = OSData::withBytes(awdlTimeline, sizeof(awdlTimeline))) { root->setProperty("ITLAWDLTimeline", d); d->release(); }
+            root->setProperty("ITLAWDLRxRssiSumTid7", awdlRxRssiSumTid7, 32);
+            if (auto *d = OSData::withBytes(awdlRxRssiTid7, sizeof(awdlRxRssiTid7))) { root->setProperty("ITLAWDLRxRssiTid7", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlLossPrev, sizeof(awdlLossPrev))) { root->setProperty("ITLAWDLLossByPrevRate", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlLossNext, sizeof(awdlLossNext))) { root->setProperty("ITLAWDLLossByNextRate", d); d->release(); }
             root->setProperty("ITLAWDLCoexSeqTransmitters", awdlCoexSeqPeersEver, 32);
             {
                 uint8_t table[4 * 10] = {};
@@ -6977,6 +7150,27 @@ static void awdlCoexPublish()
             root->setProperty("ITLAWDLPmSent", awdlPmSent, 32);
             root->setProperty("ITLAWDLPmFlags", awdlPmFlags, 32);
             root->setProperty("ITLAWDLPmSkip", awdlPmSkip, 32);
+            root->setProperty("ITLAWDLPmRxTimeoutMs", awdlPmRxTimeoutMs, 32);
+            root->setProperty("ITLAWDLPmRxSent", awdlPmRxSent, 32);
+            root->setProperty("ITLAWDLUmiTxEnabled", awdlUmiTxEnabled);
+            root->setProperty("ITLAWDLUmiBuilt", awdlUmiBuilt, 32);
+            root->setProperty("ITLAWDLUmiSubmitted", awdlUmiSubmitted, 32);
+            root->setProperty("ITLAWDLUmiAcked", awdlUmiOK, 32);
+            root->setProperty("ITLAWDLUmiFailed", awdlUmiFailed, 32);
+            root->setProperty("ITLAWDLUmiDeferred", awdlUmiDeferred, 32);
+            root->setProperty("ITLAWDLUmiLastTxStatus", awdlUmiLastStatus, 32);
+            if (auto *d = OSData::withBytes(awdlChainDiff, sizeof(awdlChainDiff))) { root->setProperty("ITLAWDLChainDiff", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlChainCount, sizeof(awdlChainCount))) { root->setProperty("ITLAWDLChainCount", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlChainNone, sizeof(awdlChainNone))) { root->setProperty("ITLAWDLChainNone", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlChainSum, sizeof(awdlChainSum))) { root->setProperty("ITLAWDLChainSum", d); d->release(); }
+            root->setProperty("ITLAWDLCellMissingNone", awdlCellMissingNone, 32);
+            root->setProperty("ITLAWDLCellHeardNone", awdlCellHeardNone, 32);
+            if (auto *d = OSData::withBytes(awdlCellRetry, sizeof(awdlCellRetry))) { root->setProperty("ITLAWDLCellRetry", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlCellRate, sizeof(awdlCellRate))) { root->setProperty("ITLAWDLCellRate", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlCellMissingRate, sizeof(awdlCellMissingRate))) { root->setProperty("ITLAWDLCellMissingRate", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlCellRssi, sizeof(awdlCellRssi))) { root->setProperty("ITLAWDLCellRssi", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlCellHeard, sizeof(awdlCellHeard))) { root->setProperty("ITLAWDLCellHeard", d); d->release(); }
+            if (auto *d = OSData::withBytes(awdlCellMissing, sizeof(awdlCellMissing))) { root->setProperty("ITLAWDLCellMissing", d); d->release(); }
             root->setProperty("ITLAWDLPmErr", awdlPmErr, 32);
             root->setProperty("ITLAWDLCoexLowLatencyResult", awdlCoexLowLatencyResult, 32);
             root->setProperty("ITLAWDLCoexLowLatencyRefreshes", awdlCoexLowLatencyRefreshes, 32);
@@ -7008,6 +7202,11 @@ static void awdlCoexPublish()
                     awdlCoexBaTracePublished = awdlCoexBaTrace.count;
                     trace->release();
                 }
+            }
+            root->setProperty("ITLAWDLAfCount", awdlCoexAfCount, 32);
+            root->setProperty("ITLAWDLAfGapMaxMs", awdlCoexAfGapMaxMs, 32);
+            if (auto *d = OSData::withBytes(awdlCoexAfGapBins, sizeof(awdlCoexAfGapBins))) {
+                root->setProperty("ITLAWDLAfGapBins", d); d->release();
             }
             root->setProperty("ITLAWDLCoexBaTxSinglesWithBacklog", awdlCoexBaTxSinglesWithBacklog, 32);
             root->setProperty("ITLAWDLCoexVhtFrames", awdlCoexVhtFrames, 32);
@@ -7786,6 +7985,11 @@ awdlCoexTxTask(void *arg)
             (!awdlCoexLastCompletionUS || watchNowUS - awdlCoexLastCompletionUS > 1000000ULL ||
              watchNowUS - awdlCoexInFlightUS > 5000000ULL)) {
             // A late completion for this frame no longer matches the pending one.
+            if (awdlCoexInFlightUmi) {
+                awdlCoexInFlightUmi = false;
+                ++awdlUmiFailed;
+                itlAWDLUmiTxResult(that->getController(), awdlCoexUmiPeer, false);
+            }
             awdlCoexInFlight = false;
             awdlCoexPendingSlot = -1;
             ++awdlCoexTxStuck;
@@ -7838,7 +8042,8 @@ awdlCoexTxTask(void *arg)
         const bool awTimed = awdlCoexData && awdlAwSync && !coexDataActive && sinceSync >= kAwdlAwSyncMinGapUS &&
             awTimingUsable &&
             awdlCoexPeerSchedule.inPresentAwStart(taskNowUS, kAwdlAwSyncWindowUS, awdlCoexAwSyncAssume);
-        const bool syncDue = !awdlCoexData || awTimed ||
+        const bool umiDue = awdlUmiTxEnabled && itlAWDLUmiPending(that->getController());
+        const bool syncDue = !awdlCoexData || awTimed || umiDue ||
             sinceSync >= (coexDataActive ? 100000ULL : ItlAWDL::kSyncIdleIntervalUS);
         // Continuity BA setup: pending ADDBA but no peer station yet — give ADD_STA the cmd ring.
         // Live: ADD_STA ENOSPC forever while sync+data+pause also ran (BaBusyEvents 1696, PeerAdded=No).
@@ -9546,6 +9751,17 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                 }
                 if (!(cf[10] & 1) && ourChannel && !fromOwnAddr) {
                     awdlCoexPeerHeard(cf + 10, heardUS);
+                    ++awdlCoexAfCount;
+                    if (awdlCoexAfLastUS && heardUS > awdlCoexAfLastUS) {
+                        const uint64_t gapUS = heardUS - awdlCoexAfLastUS;
+                        ++awdlCoexAfGapBins[gapUS < 150000 ? 0 : gapUS < 300000 ? 1 : gapUS < 600000 ? 2 :
+                                            gapUS < 1000000 ? 3 : gapUS < 2000000 ? 4 : gapUS < 4000000 ? 5 :
+                                            gapUS < 10000000 ? 6 : 7];
+                        const uint64_t gapMS = gapUS / 1000;
+                        if (gapMS > awdlCoexAfGapMaxMs)
+                            awdlCoexAfGapMaxMs = uint32_t(gapMS > 0xffffffffULL ? 0xffffffffU : gapMS);
+                    }
+                    awdlCoexAfLastUS = heardUS;
                     // The phone's schedule, from its sync frames, as dedicated mode tracks it: its BA peer
                     // once there is one, otherwise the first peer heard.
                     if ((!awdlCoexBaPeerAdded || ItlAWDL::sameAddress(cf + 10, awdlCoexBaPeer)) &&
@@ -9719,15 +9935,24 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
             const size_t dataLen = mbuf_len(m);
             ++((cf[4] & 1) ? awdlCoexDataRxGroup : awdlCoexDataRxUcast);
             if (!(cf[4] & 1)) {
-                if (cf[1] & 0x08)
+                if (cf[1] & 0x08) {
                     ++awdlCoexDataRxRetry;
+                    if (dataLen >= 26 && (cf[0] & 0xf0) == 0x80 && (cf[24] & 7) == 7) {
+                        unsigned cell;
+                        if (awdlCellOf(awdlUptimeUS(), cell))
+                            ++awdlCellRetry[cell];
+                    }
+                }
                 ++awdlCoexRxModulation[(uint32_t(rate_n_flags) & IWX_RATE_MCS_MOD_TYPE_MSK) >> IWX_RATE_MCS_MOD_TYPE_POS];
                 if ((uint32_t(rate_n_flags) & IWX_RATE_MCS_CHAN_WIDTH_MSK) == IWX_RATE_MCS_CHAN_WIDTH_80)
                     ++awdlCoexRxWide80;
                 if (awdlVht80TwoStream(rate_n_flags))
                     ++awdlCoexRxVht80TwoStream;
-                if (dataLen >= 26 && (cf[0] & 0xf0) == 0x80 && (cf[24] & 7) == 7)
+                if (dataLen >= 26 && (cf[0] & 0xf0) == 0x80 && (cf[24] & 7) == 7) {
                     awdlCoexNoteRate(uint32_t(rate_n_flags));
+                    awdlCoexNoteRssi(rxi->rxi_rssi + IWX_MIN_DBM);
+                    awdlCoexNoteChains((uint32_t(rate_n_flags) & IWX_RATE_MCS_NSS_MSK) != 0);
+                }
             }
             // Continuity Camera (plain RFC 1042 on llw0) is often non-QoS Data (0x08), not only QoS
             // (0x88). Track every unicast non-retry data frame to our AWDL address so Seq* covers the camera.
@@ -9745,10 +9970,19 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                     memcpy(peer->ta, cf + 10, 6);
                     for (auto &last : peer->last)
                         last = -1;
+                    memset(peer->lateRun, 0, sizeof(peer->lateRun));
+                    memset(peer->lastRate, 0xff, sizeof(peer->lastRate));
+                    memset(peer->lastUS, 0, sizeof(peer->lastUS));
                     peer->seen = 0;
                     ++awdlCoexSeqPeersEver;
                 }
                 ++peer->seen;
+                // Width << 5 | second stream << 4 | MCS, the same byte the gap ring keeps for the frame after a gap.
+                const uint8_t rateByte = uint8_t((((uint32_t(rate_n_flags) & IWX_RATE_MCS_CHAN_WIDTH_MSK) >>
+                                                   IWX_RATE_MCS_CHAN_WIDTH_POS) & 7) << 5 |
+                                                 ((uint32_t(rate_n_flags) & IWX_RATE_MCS_NSS_MSK) ? 0x10 : 0) |
+                                                 (uint32_t(rate_n_flags) & 0xf));
+                const uint64_t frameUS = awdlUptimeUS();
                 if (peer->last[tid] >= 0) {
                     const int32_t step = (seq - peer->last[tid]) & 4095;
                     if (step >= 2 && step < 2048) {
@@ -9772,8 +10006,35 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                             awdlCoexSeqMissingUnknown += run;
                         }
                         ++awdlCoexSeqRunBins[run == 1 ? 0 : run == 2 ? 1 : run <= 4 ? 2 : run <= 8 ? 3 : run <= 16 ? 4 : run <= 32 ? 5 : 6];
+                        if (tid == 7) {
+                            const uint8_t before = peer->lastRate[tid];
+                            if (before != 0xff) {
+                                const unsigned i = before & 0x1f;
+                                ++awdlLossPrev[i];
+                                awdlLossPrev[32 + i] += run;
+                            }
+                            const unsigned j = rateByte & 0x1f;
+                            ++awdlLossNext[j];
+                            awdlLossNext[32 + j] += run;
+                        }
                         {
-                            AwdlSeqGapEvent &event = awdlCoexSeqGapRing[awdlCoexSeqGapRingCount++ % nitems(awdlCoexSeqGapRing)];
+                            const unsigned gapSlot = awdlCoexSeqGapRingCount++ % nitems(awdlCoexSeqGapRing);
+                            awdlCoexSeqGapHostUS[gapSlot] = uint32_t(frameUS);
+                            if (tid == 7 && peer->lastUS[tid]) {
+                                unsigned cell;
+                                if (awdlCellOf(frameUS - uint64_t((uint32_t(frameUS) - peer->lastUS[tid]) & 0xFFFFFFFFU), cell)) {
+                                    awdlCellMissing[cell] += run;
+                                    const unsigned before = peer->lastRate[tid] == 0xff ? 0 : (peer->lastRate[tid] & 0xf);
+                                    awdlCellMissingRate[cell * 3 + (before >= 10 ? 2 : before >= 8 ? 1 : 0)] += run;
+                                } else {
+                                    awdlCellMissingNone += run;
+                                }
+                            } else if (tid == 7) {
+                                awdlCellMissingNone += run;
+                            }
+                            awdlNoteGapSlots(peer->lastUS[tid] ? frameUS - uint64_t((uint32_t(frameUS) - peer->lastUS[tid]) & 0xFFFFFFFFU) : frameUS,
+                                             frameUS, awdlCoexSeqGapSlot[gapSlot]);
+                            AwdlSeqGapEvent &event = awdlCoexSeqGapRing[gapSlot];
                             event.gp2 = device_timestamp;
                             event.missing = uint16_t(run);
                             event.seq = uint16_t(seq);
@@ -9797,12 +10058,32 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                         if (uint32_t(step - 1) > awdlCoexSeqLongestGap)
                             awdlCoexSeqLongestGap = uint32_t(step - 1);
                     }
-                    if (step >= 2048)
+                    if (step >= 2048) {
                         ++awdlCoexSeqLate;
-                    if (step < 2048)
+                        if (++peer->lateRun[tid] >= kAwdlSeqResyncRun) {
+                            peer->last[tid] = int16_t(seq);
+                            peer->lateRun[tid] = 0;
+                            ++awdlCoexSeqResyncs;
+                        }
+                    } else {
+                        peer->lateRun[tid] = 0;
                         peer->last[tid] = int16_t(seq);
+                    }
                 } else {
                     peer->last[tid] = int16_t(seq);
+                }
+                peer->lastRate[tid] = rateByte;
+                peer->lastUS[tid] = uint32_t(frameUS);
+                if (tid == 7) {
+                    unsigned cell;
+                    if (awdlCellOf(frameUS, cell)) {
+                        ++awdlCellHeard[cell];
+                        const unsigned mcs = rateByte & 0xf;
+                        ++awdlCellRate[cell * 3 + (mcs >= 10 ? 2 : mcs >= 8 ? 1 : 0)];
+                        awdlCellRssi[cell] += rxi->rxi_rssi + IWX_MIN_DBM;
+                    } else {
+                        ++awdlCellHeardNone;
+                    }
                 }
                 ++awdlCoexSeqSeen;
                 ++awdlCoexSeqTidSeen[tid];
@@ -10525,6 +10806,13 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
     }
     
     rssi = iwx_rxmq_get_signal_strength(sc, desc);
+    if (sc->sc_device_family >= IWX_DEVICE_FAMILY_AX210) {
+        awdlRxEnergyA = desc->v3.energy_a;
+        awdlRxEnergyB = desc->v3.energy_b;
+    } else {
+        awdlRxEnergyA = desc->v1.energy_a;
+        awdlRxEnergyB = desc->v1.energy_b;
+    }
     rssi = (0 - IWX_MIN_DBM) + rssi;    /* normalize */
     rssi = MIN(rssi, ic->ic_max_rssi);    /* clip to max. 100% */
     
@@ -11115,6 +11403,14 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                     awdlCoexPendingGeneration == sc->sc_generation) {
                     awdlCoexInFlight = false;
                     awdlCoexPendingSlot = -1;
+                    if (awdlCoexInFlightUmi) {
+                        // The UMI's own status: acknowledged by the iPhone, or not. A response that does not carry the
+                        // frame's own status counts as not acknowledged, so the family retries rather than assumes.
+                        awdlCoexInFlightUmi = false;
+                        awdlUmiLastStatus = uint32_t(status);
+                        ++(own && ok ? awdlUmiOK : awdlUmiFailed);
+                        itlAWDLUmiTxResult(getController(), awdlCoexUmiPeer, own && ok);
+                    }
                     if (own) {
                         ++(ok ? awdlCoexTxOK : awdlCoexTxFailed);
                         attributed = true;
@@ -13149,6 +13445,13 @@ iwx_power_build_cmd(struct iwx_softc *sc, struct iwx_node *in,
                 cmd->flags |= htole16(IWX_POWER_FLAGS_SKIP_OVER_DTIM_MSK);
                 cmd->skip_dtim_periods = awdlCoexSkipDtim;
             }
+            // itlawdlpmrx: keep the radio awake this long after the last frame received or sent (legacy power management), so the
+            // silence while the iPhone is on another channel need not put it to sleep. 0 leaves both at 0, as before.
+            if (awdlPmRxTimeoutMs) {
+                cmd->rx_data_timeout = htole32(awdlPmRxTimeoutMs * 1000);
+                cmd->tx_data_timeout = htole32(awdlPmRxTimeoutMs * 1000);
+                ++awdlPmRxSent;
+            }
         }
     }
 }
@@ -13851,6 +14154,7 @@ int ItlIwx::
 iwx_umac_scan(struct iwx_softc *sc, int bgscan)
 {
     XYLog("%s\n", __FUNCTION__);
+    awdlTimelineNote(1, uint8_t(bgscan ? 1 : 0), 0);
     struct ieee80211com *ic = &sc->sc_ic;
     int scanSSIDLength = ic->ic_des_esslen;
     const uint8_t *scanSSID = ic->ic_des_essid;
@@ -16926,7 +17230,26 @@ awdlCoexTxSend(struct iwx_softc *sc)
             return;
     }
     mbuf_t packet = nullptr;
-    const IOReturn built = itlAWDLBuildSyncProbe(getController(), &packet, awdlUptimeUS());
+    IOReturn built = kIOReturnNotFound;
+    bool umiFrame = false;
+    uint8_t umiPeer[6] = {};
+    if (awdlUmiTxEnabled && itlAWDLUmiPending(getController())) {
+        // Only while the iPhone is on our channel and in the part of its window where an idle peer listens: a UMI sent while it
+        // is away is lost, and the family would retry a window later at no gain.
+        const uint64_t umiNowUS = awdlUptimeUS();
+        const bool open = !awdlCoexScheduleCurrent() || !awdlCoexPeerSchedule.known() ||
+            awdlCoexPeerSchedule.sendGate(umiNowUS, true, kAwdlAwSyncWindowUS * 4) == ItlAWDL::PeerSchedule::SendGate::Open;
+        if (open) {
+            built = itlAWDLBuildUnicastMI(getController(), &packet, umiPeer, umiNowUS);
+            umiFrame = built == kIOReturnSuccess && packet;
+            if (umiFrame)
+                ++awdlUmiBuilt;
+        } else {
+            ++awdlUmiDeferred;
+        }
+    }
+    if (!umiFrame)
+        built = itlAWDLBuildSyncProbe(getController(), &packet, awdlUptimeUS());
     if (built != kIOReturnSuccess || !packet || mbuf_len(packet) < 24) {
         awdlCoexLastBuildResult = uint32_t(built);
         if (built == kIOReturnNotReady)
@@ -17005,6 +17328,11 @@ awdlCoexTxSend(struct iwx_softc *sc)
     ++awdlCoexTxSubmitted;
     awdlCoexInFlight = true;
     awdlCoexInFlightUS = awdlUptimeUS();
+    awdlCoexInFlightUmi = umiFrame;
+    if (umiFrame) {
+        memcpy(awdlCoexUmiPeer, umiPeer, sizeof(awdlCoexUmiPeer));
+        ++awdlUmiSubmitted;
+    }
 #endif
 }
 
@@ -19031,6 +19359,11 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             KASSERT(data->m != m0, "data->m != m0");
         }
         
+        // Not receive or transmit traffic: the notifications and command responses that show what the firmware is doing.
+        // The statistics notification (0x9d) comes every beacon interval and filled the ring on 2026-11-20, so it is left out.
+        if (code != IWX_REPLY_RX_MPDU_CMD && code != IWX_REPLY_RX_PHY_CMD && code != IWX_TX_CMD && code != IWX_BA_NOTIF &&
+            code != IWX_RX_NO_DATA_NOTIF && code != IWX_STATISTICS_NOTIFICATION)
+            awdlTimelineNote(3, pkt->hdr.group_id, uint16_t(pkt->hdr.cmd));
         if (code == IWX_STATISTICS_NOTIFICATION || code == IWX_STATISTICS_CMD) {
             const size_t length = iwx_rx_packet_payload_len(pkt);
             const bool observe = awdlRadioProbe && (sc->sc_flags & IWX_FLAG_MAC_ACTIVE) &&
@@ -19270,6 +19603,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             case IWX_SCAN_COMPLETE_UMAC: {
                 struct iwx_umac_scan_complete *notif;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_umac_scan_complete *);
+                awdlTimelineNote(2, 0, 0);
                 awdlBackgroundScanActive = false;
                 if (awdlCountryDiscovery) {
                     awdlCountryScanDone = true;
@@ -19282,6 +19616,7 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
             case IWX_SCAN_ITERATION_COMPLETE_UMAC: {
                 struct iwx_umac_scan_iter_complete_notif *notif;
                 SYNC_RESP_STRUCT(notif, pkt, struct iwx_umac_scan_iter_complete_notif *);
+                awdlTimelineNote(2, 1, 0);
                 awdlBackgroundScanActive = false;
                 if (awdlCountryDiscovery) {
                     awdlCountryScanDone = true;
@@ -21329,10 +21664,16 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         // The boot-arg is ignored; see awdlCmdTimeouts / awdlCmdReclaimed.
         awdlCoexLowLatency = false;
         awdlCoexCam = PE_parse_boot_argn("-itlawdlcoexcam", &dummy, sizeof(dummy));
+        awdlUmiTxEnabled = PE_parse_boot_argn("-itlawdlumitx", &dummy, sizeof(dummy));
         {
             uint32_t skip = 0;
             if (PE_parse_boot_argn("itlawdlcoexskipdtim", &skip, sizeof(skip)))
                 awdlCoexSkipDtim = uint8_t(skip > 10 ? 10 : skip);
+        }
+        {
+            uint32_t ms = 0;
+            if (PE_parse_boot_argn("itlawdlpmrx", &ms, sizeof(ms)))
+                awdlPmRxTimeoutMs = ms > 2000 ? 2000 : ms;
         }
         awdlCoexClassMatch = PE_parse_boot_argn("-itlawdlcoexclass20", &dummy, sizeof(dummy));
         awdlCoexFollowsInfraForce = PE_parse_boot_argn("-itlawdlcoexfollowsinfra", &dummy, sizeof(dummy));

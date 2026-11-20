@@ -33,8 +33,16 @@ constexpr VerifiedBuild kVerifiedBuilds[] = {
 constexpr VerifiedBuild kVerifiedBuilds[] = {
     {"24H23",  "xnu-11417.140.69.712.69~1/RELEASE_X86_64"},   // macOS 15.8
     {"24H241", "xnu-11417.140.69.713.47~2/RELEASE_X86_64"},   // macOS 15.8.3
+    // macOS 15.8.2: the same kernel tag as 24H241. The master indication request was read from this build's own
+    // IO80211Family (the oc_sequoia_awdl_dump copy): IO80211AWDLPeerManager::updatePrimaryPayloadMI (0xffffff8002196df2)
+    // builds the apple80211_awdl_oob_request on the stack with the template length as a 16-bit value at +0x28 and the
+    // template pointer at +0x30 (movw %cx,-0x40(%rbp); movq %rcx,-0x38(%rbp) from a base of -0x68(%rbp)) and sends it
+    // with ioctl_internal(SIOCSA80211): the layout storeMasterIndication reads. Without this entry the copy stayed
+    // off here ("blocked: build not verified"), so no frame we sent carried macOS's services, host name or
+    // real-time group TLV (31).
+    {"24H232", "xnu-11417.140.69.713.47~2/RELEASE_X86_64"},   // macOS 15.8.2
 };
-// 15.8.1 (24H32), 15.8.2 (24H232) and later 15.8.x updates: same kernel train, not checked offline.
+// 15.8.1 (24H32) and later 15.8.x updates: same kernel train, not checked offline.
 constexpr const char *kExpectedKernelPrefix = "xnu-11417.140.69.71";
 constexpr const char *kExpectedKernelSuffix = "/RELEASE_X86_64";
 #else
