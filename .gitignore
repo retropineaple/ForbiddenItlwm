@@ -15,3 +15,9 @@ include/FwBinary.cpp
 build-*/
 graphify-out/
 .serena/
+.codegraph/
+build-sequoia/
+test_cc_debug.txt
+*.pcap
+*.pcapng
+.claude/
