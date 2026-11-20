@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Adds `ITLAWDLAfCount`, `ITLAWDLAfGapBins` and `ITLAWDLAfGapMaxMs`, the gaps between action frames heard on the listener's channel, and `tools/diag/airdrop_paths.py`, which shows whether an AirDrop transfer runs on `awdl0`, `en1` or the wired `en0`.
+- AWDL unicast data rate: new `-itlawdlht2ss` (test, off by default) extends the rate ladder from HT MCS 7 to two-stream HT MCS 12, 13 and 15. A sniffer capture showed every unicast data frame at HT MCS 7, one stream, 20 MHz. New diagnostic counters `ITLAWDLRawBaAction` and `ITLAWDLRawBaActionUnicast` count Block Ack action frames as the firmware hands them up, before any filter, to show whether the iPhone's ADDBA answers reach the host.
 - Continuity Camera: `-itlawdlpeeralive` and `-itlawdlndpkeep` (Sequoia 15.x, experimental) keep the iPhone in the family's peer table, which dropped it every 6 to 11 s and reset the real-time group. See BOOT-FLAGS.md. `tools/diag/awdl_ctl.py` is kept for reference (the ioctl is refused with errno 102).
 - Continuity Camera: `-itlawdlsyncalign` (experimental) aligns the sync TLV and the AW events with the iPhone's AW clock and master, as a real Mac's firmware does (measured on a real Mac: UMI at the iPhone's AW 37020, slot 7, answered by its RTG TLV in 14-106 ms). See BOOT-FLAGS.md.
 - Continuity Camera: `-itlawdlumitx` (experimental, with `-itlawdlawevents`) transmits the family's real-time UMI as a unicast master indication to the iPhone and reports its real transmit status, replacing the fabricated acknowledgement. See BOOT-FLAGS.md.

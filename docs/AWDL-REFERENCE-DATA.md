@@ -54,8 +54,8 @@ Mac also marks the iPhone absent (12 s after presence in one run) but keeps its 
 - **Block Ack:** the hackintosh sent 1452 ADDBA requests in 61 s for 74 distinct ones, so each is retried about 20 times by the firmware (about
   78 in the capture towards the other Mac). The iPhone answers each request with ADDBA status 0, immediate policy, window 64, the same dialog
   token, yet `ITLAWDLCoexBaActionSeen[1]` is 0 and `ITLAWDLCoexBaTxAgreements` stays 0: the answers are not seen by the host, so aggregation
-  never starts and every frame goes out alone. Why the hardware acknowledges the answers while the host never gets them is not known. A counter
-  for it exists in the WIP patch (raw Block Ack counters before any filter), not on `main`.
+  never starts and every frame goes out alone. Why the hardware acknowledges the answers while the host never gets them is not known. `ITLAWDLRawBaAction` and `ITLAWDLRawBaActionUnicast` (action frames counted as the firmware hands them up, before any filter)
+  show whether the answers reach the host at all; they were added after these captures and have not yet been read on hardware.
 
 ## AirDrop transfer paths
 
@@ -81,8 +81,8 @@ station's frames.
 
 ## Open items
 
-- Block Ack answers never reach the host (above); the firmware's per-request retry storm.
-- `-itlawdlht2ss` (two-stream HT up to MCS 15) exists only in the WIP patch; untested on hardware.
+- Block Ack answers never reach the host (above), pending a read of the new raw counters; the firmware's per-request retry storm.
+- `-itlawdlht2ss` (two-stream HT up to MCS 15, off by default) is on `main` but untested on hardware.
 - Whether a listener that visits 149 and 6 as the family's plans ask would find the iPhone faster. It is not implemented; the PHY retune latency
   is unmeasured and the multi-channel mode earlier collapsed throughput.
 - The TLV 4 flags, remaining-AW field and TLV 18 width differences listed in the Continuity Camera note.
