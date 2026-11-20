@@ -104,6 +104,8 @@ All under the I/O Registry root (`ioreg -l -w0 | grep ITLAWDLCoex`). Counters on
 
 **On the interface** (`ioreg -w0 -r -c ItlAWDLInterface -d 1 -l`): `ItlwmAWDLTxPacketsOffered`, `TxAccepted`, `TxCompleted` and `TxDropped` count packets from macOS into the driver. `TxDropped` should stay 0. `ItlwmAWDLClientEvents` records who opened and closed `awdl0`. `ItlwmAWDLLastUnsupported` names the last call the driver refused, usually `setMacAddress` or `setAWDL_AWDL_ADVERTISERS`, which is expected ([noise](#6-log-noise-that-is-harmless)).
 
+The action-frame gap counters (`ITLAWDLAf*`), the UMI and RTG counters and the analysis tools added for the camera and AirDrop work are described in [AWDL-DIAGNOSTICS](AWDL-DIAGNOSTICS.md).
+
 ## 4. Logs
 
 Use `/usr/bin/log`: in zsh a bare `log` is a built-in. `log show --start` wants whole seconds (`"2026-11-15 11:35:26"`); fractions return nothing.

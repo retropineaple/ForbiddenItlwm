@@ -108,6 +108,9 @@ What's planned: [ROADMAP](docs/ROADMAP.md).
 | [BOOT-FLAGS](docs/BOOT-FLAGS.md) | The flags the beta needs |
 | [TROUBLESHOOTING](docs/TROUBLESHOOTING.md) | When the iPhone can't see the Mac, it's slow, or Wi-Fi breaks |
 | [TESTED-HARDWARE](docs/TESTED-HARDWARE.md) | Every tested and reported machine, card and macOS build |
+| [AWDL-CONTINUITY-UMI-AND-AW-EVENTS](docs/AWDL-CONTINUITY-UMI-AND-AW-EVENTS.md) | How the camera's real-time group is joined: AW events, UMI transmit, sync alignment, ULL |
+| [AWDL-DIAGNOSTICS](docs/AWDL-DIAGNOSTICS.md) | Registry counters and the analysis tools |
+| [AWDL-REFERENCE-DATA](docs/AWDL-REFERENCE-DATA.md) | Real Mac, sniffer and hackintosh measurements, and what is still open |
 | [ROADMAP](docs/ROADMAP.md) | What's being worked on and what's planned |
 | [HOW-IT-WORKS](docs/HOW-IT-WORKS.md) | How the driver gives macOS an AWDL radio |
 | [DEBUGGING](docs/DEBUGGING.md) | What each counter means, how to capture and trace the link, and two worked cases (stalls after idle, big sends dying with `unexpected-40`) |
