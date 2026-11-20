@@ -1,6 +1,6 @@
 # Where it was tested
 
-Every result the project measured comes from this one setup. Reports from other users are listed separately under [User reports](#user-reports). Anything else is untested.
+Most results the project measured come from this one setup. Reports from other users are listed separately under [User reports](#user-reports). Anything else is untested.
 
 ## The hackintosh
 

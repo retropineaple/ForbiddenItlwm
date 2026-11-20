@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+**Wi-Fi**
+- **WPA3-Personal (SAE), opt-in with `-itlwmwpa3` ([#80](https://github.com/retropineaple/ForbiddenItlwm/issues/80)).** The driver can now advertise SAE and PMF, run the SAE commit/confirm exchange with hash-to-element P-256, derive the PMK and complete the 4-way handshake with management frame protection (software BIP). The port is based on the net80211 SAE implementation in `Ersiter/Eric-AirportItlwm` (`be200-tahoe`), with the BearSSL P-256 code it uses. Nothing changes unless the flag is set: without it WPA2/WPA3 transition networks still join as WPA2 and WPA3-only networks are still refused. With it, transition networks keep their real AKMs and macOS can choose SAE. Verified on macOS 26.7.3 with an AX201 against a WPA3-only and a WPA2/WPA3 mixed SSID (macOS Internet Sharing): SAE H2E, PMF/IGTK and traffic work, and the mixed network selects SAE. The hunt-and-peck (non-H2E) method is not built in, so an AP that only offers HnP cannot be joined.
+
 ## 0.6.0-beta.2
 
 **Bluetooth: BTLEAdvFixup 0.9.3**

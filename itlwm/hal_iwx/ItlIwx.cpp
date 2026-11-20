@@ -20699,6 +20699,13 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
     {
         int dummy;
         mccProbe = PE_parse_boot_argn("-itlmccprobe", &dummy, sizeof(dummy));
+        /*
+         * WPA3-Personal (SAE) is opt-in: it changes the RSN IE we advertise
+         * (MFP capability and the RSNXE element) and switches the handshake
+         * to the SAE commit/confirm exchange.  Without -itlwmwpa3 SAE is
+         * disabled and WPA2 joins behave exactly as before.
+         */
+        ic->ic_wpa3 = PE_parse_boot_argn("-itlwmwpa3", &dummy, sizeof(dummy));
         if (mccProbe)
             timeout_set(&mccProbeTimer, mccProbeTimeout, sc);
         awdlCoexIrConcurrentOff = PE_parse_boot_argn("-itlawdlnoirconcurrent", &dummy, sizeof(dummy));
@@ -20894,6 +20901,13 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
     IEEE80211_C_MONITOR |    /* monitor mode supported */
     IEEE80211_C_SHSLOT |    /* short slot time supported */
     IEEE80211_C_SHPREAMBLE;    /* short preamble supported */
+    /*
+     * Management frame protection is needed for SAE; the software BIP
+     * implementation is used because this driver only offloads CCMP.
+     */
+    if (ic->ic_wpa3) {
+        ic->ic_caps |= IEEE80211_C_MFP;
+    }
     
     ic->ic_htcaps = IEEE80211_HTCAP_SGI20;
     ic->ic_htcaps |=

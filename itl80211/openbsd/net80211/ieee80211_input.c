@@ -1487,6 +1487,8 @@ ieee80211_parse_rsn_akm(const u_int8_t selector[4])
                 return IEEE80211_AKM_SHA256_8021X;
             case 6:    /* PSK with SHA256 KDF */
                 return IEEE80211_AKM_SHA256_PSK;
+            case 8:    /* SAE (WPA3-Personal) */
+                return IEEE80211_AKM_SAE;
         }
     }
     return IEEE80211_AKM_NONE;    /* ignore unknown AKMs */
@@ -1722,7 +1724,7 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, mbuf_t m,
     const struct ieee80211_frame *wh;
     const u_int8_t *frm, *efrm;
     const u_int8_t *tstamp, *ssid, *rates, *xrates, *edcaie, *wmmie;
-    const u_int8_t *rsnie, *wpaie, *htcaps, *htop;
+    const u_int8_t *rsnie, *rsnxeie, *wpaie, *htcaps, *htop;
     const uint8_t *csa;
     const uint8_t *vhtcap;
     const uint8_t *vhtopmode;
@@ -1770,6 +1772,7 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, mbuf_t m,
     
     ssid = rates = xrates = edcaie = wmmie = rsnie = wpaie = csa = vhtcap = vhtopmode = hecap = heopmode = NULL;
     htcaps = htop = NULL;
+    rsnxeie = NULL;
     if (rxi->rxi_chan)
          bchan = rxi->rxi_chan;
      else
@@ -1817,6 +1820,9 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, mbuf_t m,
                 break;
             case IEEE80211_ELEMID_RSN:
                 rsnie = frm;
+                break;
+            case IEEE80211_ELEMID_RSNXE:
+                rsnxeie = frm;
                 break;
             case IEEE80211_ELEMID_EDCAPARMS:
                 edcaie = frm;
@@ -2123,6 +2129,7 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, mbuf_t m,
     if (ic->ic_state == IEEE80211_S_SCAN ||
         (ic->ic_flags & IEEE80211_F_BGSCAN)) {
         struct ieee80211_rsnparams rsn, wpa;
+        int preserve_rsnxe;
         
         // Elements start after the 8-byte timestamp, 2-byte interval and 2-byte capabilities. The non-WCL
         // form had a stray + 1 and saved one byte past the frame (audit NX01).
@@ -2136,6 +2143,18 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, mbuf_t m,
         ni->ni_rsngroupcipher = (enum ieee80211_cipher)0;
         ni->ni_rsngroupmgmtcipher = (enum ieee80211_cipher)0;
         ni->ni_rsncaps = 0;
+        /*
+         * A beacon refresh of the associated node must not lose the RSNXE
+         * snapshot the 4-way handshake checks against, e.g. if this beacon
+         * omitted the element.
+         */
+        preserve_rsnxe = (ni == ic->ic_bss &&
+            ic->ic_state != IEEE80211_S_SCAN);
+        if (!preserve_rsnxe) {
+            ni->ni_rsnxecaps = 0;
+            explicit_bzero(ni->ni_rsnxe, sizeof(ni->ni_rsnxe));
+            ni->ni_rsnxe_len = 0;
+        }
         
         if (rsnie != NULL &&
             ieee80211_parse_rsn(ic, rsnie, &rsn) == 0) {
@@ -2167,6 +2186,18 @@ ieee80211_recv_probe_resp(struct ieee80211com *ic, mbuf_t m,
                 ni->ni_rsngroupmgmtcipher =
                 rsn.rsn_groupmgmtcipher;
                 ni->ni_rsncaps = rsn.rsn_caps;
+                /*
+                 * Remember the AP's RSNXE verbatim.  The 4-way handshake
+                 * requires message 3 to carry the exact same element, and
+                 * SAE needs the H2E bit to pick the PWE derivation.
+                 */
+                if (!preserve_rsnxe && rsnxeie != NULL &&
+                    ieee80211_rsnxe_valid(rsnxeie,
+                        (size_t)rsnxeie[1] + 2)) {
+                    ni->ni_rsnxecaps = rsnxeie[2];
+                    ni->ni_rsnxe_len = rsnxeie[1] + 2;
+                    memcpy(ni->ni_rsnxe, rsnxeie, ni->ni_rsnxe_len);
+                }
             }
         } else if (wpaie != NULL &&
                    (ni->ni_supported_rsnprotos & IEEE80211_PROTO_WPA) &&
@@ -2373,6 +2404,11 @@ ieee80211_recv_auth(struct ieee80211com *ic, mbuf_t m,
     DPRINTF(("auth %d seq %d from %s\n", algo, seq,
              ether_sprintf((u_int8_t *)wh->i_addr2)));
     
+    if (algo == IEEE80211_AUTH_ALG_SAE) {
+        ieee80211_auth_sae(ic, wh, frm, mbuf_len(m) - sizeof(*wh) - 6,
+            ni, rxi, seq, status);
+        return;
+    }
     /* only "open" auth mode is supported */
     if (algo != IEEE80211_AUTH_ALG_OPEN) {
         DPRINTF(("unsupported auth algorithm %d from %s\n",

@@ -95,7 +95,7 @@ Please report what you find, working or not, in a [GitHub issue](https://github.
   - **Sidecar and Universal Control over Wi-Fi:** the driver doesn't support the traffic registration they need ([#42](https://github.com/retropineaple/ForbiddenItlwm/issues/42)). Sidecar over USB works.
   - **Internet Sharing over Wi-Fi:** the card can't act as an access point ([#28](https://github.com/retropineaple/ForbiddenItlwm/issues/28)). Sharing over Bluetooth or USB works.
 - **AirDrop needs the Mac to be connected to a Wi-Fi network.** The AirDrop listener runs beside your Wi-Fi connection: with Wi-Fi on but no network joined, transfers stay on "Waiting". A real Mac doesn't need a network for this.
-- **WPA3:** on a WPA2/WPA3 transition network the Mac joins with WPA2 and without protected management frames, as AirportItlwm does. WPA3-only networks can't be joined.
+- **WPA3:** opt-in with `-itlwmwpa3`. With the flag the driver joins WPA3-Personal (SAE) networks, including WPA2/WPA3 mixed networks where macOS selects SAE, with protected management frames. Without it a WPA3-only network can't be joined and a mixed network joins as WPA2.
 - **The Sonoma kext's Wi-Fi code** takes paths of its own (join, scan, keys, teardown) that the Tahoe and Sequoia kexts don't use. They had their first security review for 0.6.0; it hasn't been tested on hardware yet.
 
 What's planned: [ROADMAP](docs/ROADMAP.md).

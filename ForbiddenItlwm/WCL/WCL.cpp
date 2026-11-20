@@ -14,6 +14,7 @@
 #include <net80211/ieee80211_node.h>
 #include <net80211/ieee80211_ioctl.h>
 #include <net80211/ieee80211_priv.h>
+#include <crypto/sha1.h>
 
 extern IOCommandGate *_fCommandGate;
 
@@ -413,8 +414,14 @@ void AirportItlwmSkywalkInterface::publishWCLBeacon(const ieee80211_node *node, 
     metadata->capability = node->ni_capinfo;
     metadata->flags = AirportWCL::SSIDPresent | AirportWCL::RSSIValid;
     memcpy(metadata + 1, ies, length);
-    metadata->ieLength = uint32_t(AirportWCL::selectWPA2TransitionMode(
-        reinterpret_cast<uint8_t *>(metadata + 1), length));
+    /*
+     * With WPA3 enabled, keep the AP's real AKM list so macOS can choose SAE
+     * for a WPA2/WPA3 transition network.  Without the flag, keep the
+     * historical behaviour of presenting the PSK option as plain WPA2.
+     */
+    if (!ic->ic_wpa3)
+        metadata->ieLength = uint32_t(AirportWCL::selectWPA2TransitionMode(
+            reinterpret_cast<uint8_t *>(metadata + 1), length));
     size_t messageSize = sizeof(*metadata) + metadata->ieLength;
     if (assocNotified && IEEE80211_ADDR_EQ(node->ni_bssid, joinBSSID)) {
         wclBssValid = messageSize <= sizeof(wclBssInfo);
@@ -507,6 +514,7 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
 {
     auto auth = AirportWCL::classifyLegacyAuth(join);
     bool personal = auth == AirportWCL::LegacyAuth::Personal;
+    bool sae = auth == AirportWCL::LegacyAuth::PersonalSAE;
     bool enterprise = auth == AirportWCL::LegacyAuth::Enterprise;
     bool supported = auth != AirportWCL::LegacyAuth::Invalid;
     ieee80211com *ic = fHalService->get80211Controller();
@@ -535,13 +543,19 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     ic->ic_flags &= ~(IEEE80211_F_AUTO_JOIN | IEEE80211_F_PSK);
     ic->ic_wcl_enterprise = enterprise;
 
-    if (personal || enterprise) {
+    /*
+     * SAE uses the same WPA parameter path as WPA2-Personal: net80211 still
+     * negotiates RSN with CCMP, but selects AKM SAE and uses the SAE password
+     * token instead of a PSK.
+     */
+    if (personal || sae || enterprise) {
         ieee80211_wpaparams wpa = {};
         wpa.i_enabled = 1;
         if (join.upperAuth & (APPLE80211_AUTHTYPE_WPA | APPLE80211_AUTHTYPE_WPA_PSK))
             wpa.i_protos |= IEEE80211_WPA_PROTO_WPA1;
-        if (join.upperAuth & (APPLE80211_AUTHTYPE_WPA2 | APPLE80211_AUTHTYPE_WPA2_PSK |
-                              APPLE80211_AUTHTYPE_SHA256_PSK | APPLE80211_AUTHTYPE_SHA256_8021X))
+        if ((join.upperAuth & (APPLE80211_AUTHTYPE_WPA2 | APPLE80211_AUTHTYPE_WPA2_PSK |
+                              APPLE80211_AUTHTYPE_SHA256_PSK | APPLE80211_AUTHTYPE_SHA256_8021X)) ||
+            sae)
             wpa.i_protos |= IEEE80211_WPA_PROTO_WPA2;
         if (join.upperAuth & (APPLE80211_AUTHTYPE_WPA_PSK | APPLE80211_AUTHTYPE_WPA2_PSK))
             wpa.i_akms |= IEEE80211_WPA_AKM_PSK;
@@ -553,7 +567,12 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
         }
         if (join.upperAuth & APPLE80211_AUTHTYPE_SHA256_8021X)
             wpa.i_akms |= IEEE80211_WPA_AKM_SHA256_8021X;
-        wpa.i_ciphers = IEEE80211_WPA_CIPHER_CCMP | IEEE80211_WPA_CIPHER_TKIP;
+        if (sae) {
+            wpa.i_akms |= IEEE80211_WPA_AKM_SAE;
+        }
+        /* SAE only permits CCMP, never TKIP. */
+        wpa.i_ciphers = sae ? IEEE80211_WPA_CIPHER_CCMP :
+            IEEE80211_WPA_CIPHER_CCMP | IEEE80211_WPA_CIPHER_TKIP;
         if (join.rsnLength >= 8 && join.rsn[0] == IEEE80211_ELEMID_RSN &&
             join.rsn[4] == 0 && join.rsn[5] == 0x0f && join.rsn[6] == 0xac) {
             if (join.rsn[7] == 2) wpa.i_groupcipher = IEEE80211_WPA_CIPHER_TKIP;
@@ -564,8 +583,39 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
             explicit_bzero(&join, sizeof(join));
             return kIOReturnBadArgument;
         }
-        if (personal) {
-            memcpy(ic->ic_psk, join.key, sizeof(ic->ic_psk));
+        if (sae) {
+            /*
+             * WCL hands over the raw SAE password.  Derive the password
+             * token once; net80211 derives the PWE from it per peer.
+             */
+            /*
+             * Capability gating should prevent an SAE request while the
+             * flag is off, but a join racing the boot argument must not
+             * leave half-configured RSN state.  The token derivation also
+             * fails for an empty/oversized passphrase or SSID.
+             */
+            if (!ic->ic_wpa3 ||
+                ieee80211_sae_password_to_pt(ic->ic_sae_pt, join.key,
+                    join.keyLength, join.ssid, join.ssidLength) != 0) {
+                ieee80211_disable_rsn(ic);
+                explicit_bzero(&join, sizeof(join));
+                return kIOReturnUnsupported;
+            }
+            ic->ic_sae_pt_valid = 1;
+        } else if (personal) {
+            if (join.keyCipher == 10) {
+                /* A passphrase was supplied instead of a 32-byte PSK. */
+                join.key[join.keyLength] = 0;
+                if (pbkdf2_sha1(reinterpret_cast<const char *>(join.key),
+                        join.ssid, join.ssidLength, 4096, ic->ic_psk,
+                        sizeof(ic->ic_psk)) != 0) {
+                    explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
+                    explicit_bzero(&join, sizeof(join));
+                    return kIOReturnBadArgument;
+                }
+            } else {
+                memcpy(ic->ic_psk, join.key, sizeof(ic->ic_psk));
+            }
             ic->ic_flags |= IEEE80211_F_PSK;
         } else if (join.keyLength == IEEE80211_PMK_LEN) {
             bool cached = true;

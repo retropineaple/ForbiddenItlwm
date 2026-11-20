@@ -2493,6 +2493,20 @@ getCARD_CAPABILITIES(OSObject *object,
         (1 << APPLE80211_CAP_AES_CCM) | (1 << APPLE80211_CAP_TKIP) : 0;
     cd->capabilities[1] &= ~(1 << (APPLE80211_CAP_WPA1 - 8));
     cd->capabilities[5] = 0x40; // Scan completion events.
+    /*
+     * Apple80211Associate2 filters SAE candidates using both the MFP and SAE
+     * capability bits.  Advertise SAE only when the -itlwmwpa3 boot argument
+     * enabled it, so WCL never offers a WPA3 join otherwise.
+     */
+    if (fHalService->get80211Controller()->ic_wpa3) {
+        cd->capabilities[6] |= 0x01;
+        /*
+         * WCL also checks capability byte 9 bit 3 before it allows an SAE
+         * join; without it airportd rejects the request with -3900 before
+         * the driver ever sees it.
+         */
+        cd->capabilities[9] |= 0x08;
+    }
     // Tahoe wifip2pd checks raw capability byte 4, bit 0 before requesting
     // an AWDL interface (25G241, 0x1000483b5). Expose it only for bring-up.
     if (awdlInterfaceTest) {

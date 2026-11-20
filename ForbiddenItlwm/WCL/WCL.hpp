@@ -524,7 +524,11 @@ struct JoinRequest {
     uint32_t keyLength;
     uint32_t keyCipher;
     uint16_t keyIndex;
-    uint8_t key[32];
+    /*
+     * SAE hands over a raw passphrase (up to 63 bytes plus the terminator
+     * the PBKDF2 path appends); the legacy PSK is 32 bytes.
+     */
+    uint8_t key[64];
     uint8_t bssid[6];
     uint16_t channelSpec;
     uint16_t rsnLength;
@@ -548,7 +552,7 @@ inline bool validRSNOverride(const uint8_t *ie, size_t length) {
         ie[4] == 0xf2 && ie[5] == 1 && ie[6] == 1 && ie[7] == 0;
 }
 
-enum class LegacyAuth { Invalid, Open, Wep, Personal, Enterprise };
+enum class LegacyAuth { Invalid, Open, Wep, Personal, PersonalSAE, Enterprise };
 inline LegacyAuth classifyLegacyAuth(const JoinRequest &j) {
     // Values from apple80211_authtype/cipher_type, used by the WCL association request.
     if (!validRSNOverride(j.rsn, j.rsnLength)) return LegacyAuth::Invalid;
@@ -562,11 +566,34 @@ inline LegacyAuth classifyLegacyAuth(const JoinRequest &j) {
     }
     const uint32_t personal = (1u << 1) | (1u << 3) | (1u << 10);
     const uint32_t enterprise = (1u << 0) | (1u << 2) | (1u << 11);
-    if (j.upperAuth & ~(personal | enterprise)) return LegacyAuth::Invalid;
+    const uint32_t sae = 1u << 12;
+    if (j.upperAuth & ~(personal | enterprise | sae)) return LegacyAuth::Invalid;
+    // WPA3-Personal is its own authentication type; mixing it with WPA2 is invalid.
+    if ((j.upperAuth & sae) && j.upperAuth != sae) {
+        return LegacyAuth::Invalid;
+    }
     if ((j.upperAuth & personal) && (j.upperAuth & enterprise)) return LegacyAuth::Invalid;
-    if (j.upperAuth & personal)
-        return j.keyLength == 32 && (j.keyCipher == 6 || j.keyCipher == 7) ?
-            LegacyAuth::Personal : LegacyAuth::Invalid;
+    if (j.upperAuth & personal) {
+        if (j.keyLength == 32 && (j.keyCipher == 6 || j.keyCipher == 7))
+            return LegacyAuth::Personal;
+        // WPA3 transition networks can hand over the raw passphrase too.
+        if (j.keyCipher == 10 && j.keyLength >= 8 && j.keyLength <= 63 &&
+            !memchr(j.key, 0, j.keyLength)) {
+            return LegacyAuth::Personal;
+        }
+        return LegacyAuth::Invalid;
+    }
+    // Native WCL carries the raw SAE password (cipher 10), not a PMK.
+    if (j.upperAuth == sae) {
+        if (j.keyLength < 1 || j.keyLength > 63 || j.keyCipher != 10)
+            return LegacyAuth::Invalid;
+        if (j.rsnLength >= 8 &&
+            (j.rsn[4] != 0 || j.rsn[5] != 0x0f || j.rsn[6] != 0xac ||
+             j.rsn[7] != 4)) {
+            return LegacyAuth::Invalid;
+        }
+        return LegacyAuth::PersonalSAE;
+    }
     if (j.upperAuth & enterprise)
         return (!j.keyLength || (j.keyLength == 32 && (j.keyCipher == 6 || j.keyCipher == 7))) ?
             LegacyAuth::Enterprise : LegacyAuth::Invalid;
@@ -581,7 +608,7 @@ inline bool decodeJoin(const void *buffer, size_t length, JoinRequest &out) {
     uint32_t keyLength = read32(p + 0x44);
     uint16_t rsnLength = read16(p + 0xd4);
     if (!count || count > 10 || !ssidLength || ssidLength > 32 ||
-        keyLength > 32 || rsnLength > 257 || length < 0x218 + size_t(count) * 18)
+        keyLength > 64 || rsnLength > 257 || length < 0x218 + size_t(count) * 18)
         return false;
     if (p[0x21c] & 1)
         return false;
