@@ -6330,8 +6330,14 @@ static unsigned awdlCoexRxSampleCount;
 // down after a window with over 20% failures, up after one with under 5%.
 static unsigned awdlCoexRateStep;
 static uint32_t awdlCoexRateWindowOK, awdlCoexRateWindowFailed, awdlCoexRateUps, awdlCoexRateDowns;
-// Steps 4 and 5 are VHT 80 MHz, two streams, MCS 4 and 7, only while the listener is at 80 MHz.
-static const uint8_t kAwdlCoexRateMcs[6] = {0, 4, 5, 7, 4, 7};
+// Steps 1-3 are HT one stream (MCS 4, 5, 7). Steps 4-6 are HT two streams (MCS 12, 13, 15: 78, 104, 130 Mbit/s at
+// 20 MHz, long guard interval) when both antennas can transmit: the 2026-11-20 sniffer capture showed every one of
+// our unicast data frames at HT MCS 7, one stream, 20 MHz (65 Mbit/s) while the phone sends us HE two-stream
+// frames; it also lists MCS 0-15 in its HT capabilities (TLV 7). Steps 7 and 8 are VHT 80 MHz, two streams, MCS 4
+// and 7, only while the listener is at 80 MHz.
+static const uint8_t kAwdlCoexRateMcs[9] = {0, 4, 5, 7, 12, 13, 15, 4, 7};
+constexpr unsigned kAwdlCoexRateHtTop = 6, kAwdlCoexRateVhtFirst = 7;
+static bool awdlCoexHt2ss; // -itlawdlht2ss: the two-stream HT steps are used; without it the ladder stops at HT MCS 7.
 // Our management frames (ADDBA answers and requests) are tagged so they never count toward the data rate.
 enum { kCoexSlotBaAnswer = 3, kCoexSlotBaAsk, kCoexSlotDelba };
 static uint8_t awdlCoexSendingMgmt, awdlCoexSendingMgmtToken;
@@ -6376,6 +6382,11 @@ constexpr uint32_t kAwdlCoexBaTxQueuedMax = 128;
 // Block Ack action frames to our AWDL address, by action code (0 request, 1 answer, 2 teardown, 3 other)
 // and by whether they carry AWDL's BSSID (iface135: none of 165 asks got an answer we saw).
 static uint32_t awdlCoexBaActionSeen[4], awdlCoexBaActionAwdlBssid, awdlCoexBaActionOtherBssid;
+// Block Ack action frames (category 3) as the firmware hands them up, before any filter in iwx_rx_mpdu_mq, by action
+// code (0 request, 1 answer, 2 teardown) and, in [1][..], those whose receiver address is unicast. The 2026-11-20
+// sniffer showed the phone answering our ADDBA requests (status 0, immediate, window 64) while ITLAWDLCoexBaActionSeen[1]
+// stayed 0: these say whether the answers reach the host at all (ITLAWDLRawBaAction / ITLAWDLRawBaActionUnicast).
+static uint32_t awdlRawBaAction[3], awdlRawBaActionUnicast[3];
 static uint32_t awdlCoexRxWhileFilterOff;
 // The listener's queue carries data too now, so a sync frame can wait behind retried data while the radio
 // is on the station's channel (iface136: one wait over 1 s halted TX for good). A stall counts only if no
@@ -6949,6 +6960,12 @@ static void awdlCoexPublish()
             root->setProperty("ITLAWDLRxBadCrcRuns", awdlRxBadCrcRuns, 32);
             root->setProperty("ITLAWDLRxBadCrcRunLongest", awdlRxBadCrcRunLongest, 32);
             root->setProperty("ITLAWDLRxDupDropped", awdlRxDupDropped, 32);
+            if (auto *d = OSData::withBytes(awdlRawBaAction, sizeof(awdlRawBaAction))) {
+                root->setProperty("ITLAWDLRawBaAction", d); d->release();
+            }
+            if (auto *d = OSData::withBytes(awdlRawBaActionUnicast, sizeof(awdlRawBaActionUnicast))) {
+                root->setProperty("ITLAWDLRawBaActionUnicast", d); d->release();
+            }
             root->setProperty("ITLAWDLRxReorderHeld", awdlRxReorderHeld, 32);
             if (auto *d = OSData::withBytes(awdlCoexSeqGapRing, sizeof(awdlCoexSeqGapRing))) {
                 root->setProperty("ITLAWDLCoexSeqGapRing", d); d->release();
@@ -7026,6 +7043,7 @@ static void awdlCoexPublish()
             root->setProperty("ITLAWDLCoexBaBusyEvents", awdlCoexBaBusyEvents, 32);
             root->setProperty("ITLAWDLCoexBaFailedGen", awdlCoexBaFailedGen >= 0 ? uint32_t(awdlCoexBaFailedGen) : 0xffffffffU, 32);
             root->setProperty("ITLAWDLCoexRateStep", uint32_t(awdlCoexRateStep), 32);
+            root->setProperty("ITLAWDLCoexHt2ss", awdlCoexHt2ss);
             root->setProperty("ITLAWDLCoexRateUps", awdlCoexRateUps, 32);
             root->setProperty("ITLAWDLCoexRateDowns", awdlCoexRateDowns, 32);
             root->setProperty("ITLAWDLCoexMgmtOK", awdlCoexMgmtOK, 32);
@@ -10700,6 +10718,14 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
     mbuf_setdata(m, (uint8_t*)pktdata + desc_size, len);
     mbuf_pkthdr_setlen(m, len);
     mbuf_setlen(m, len);
+    if (len >= 26) {
+        const uint8_t *rawFrame = static_cast<const uint8_t *>(mbuf_data(m));
+        if (rawFrame[0] == 0xd0 && rawFrame[24] == 3 && rawFrame[25] < 3) {
+            ++awdlRawBaAction[rawFrame[25]];
+            if (!(rawFrame[4] & 1))
+                ++awdlRawBaActionUnicast[rawFrame[25]];
+        }
+    }
     
     /* Account for padding following the frame header. */
     if (desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) {
@@ -11449,8 +11475,11 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                             --awdlCoexRateStep;
                             ++awdlCoexRateDowns;
                         } else if (awdlCoexRateWindowFailed * 20 < window &&
-                                   awdlCoexRateStep + 1 < (awdlCoexOwnWidth == 80 ? nitems(kAwdlCoexRateMcs) : 4U)) {
+                                   awdlCoexRateStep + 1 < (awdlCoexOwnWidth == 80 ? nitems(kAwdlCoexRateMcs) :
+                                                                  awdlCoexHt2ss ? kAwdlCoexRateHtTop + 1 : 4U)) {
                             ++awdlCoexRateStep;
+                            if (!awdlCoexHt2ss && awdlCoexRateStep == 4)
+                                awdlCoexRateStep = kAwdlCoexRateVhtFirst; // Without two-stream HT: straight to VHT 80.
                             ++awdlCoexRateUps;
                         }
                         awdlCoexRateWindowOK = awdlCoexRateWindowFailed = 0;
@@ -12297,7 +12326,7 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
         *flags |= IWX_TX_FLAGS_CMD_RATE;
         const uint8_t vhtCmdVer = iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_TX_CMD);
         const uint8_t bothAntennas = IWX_RATE_MCS_ANT_AB_MSK >> IWX_RATE_MCS_ANT_POS;
-        if (ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep >= 4 && awdlCoexRateStep < nitems(kAwdlCoexRateMcs) &&
+        if (ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep >= kAwdlCoexRateVhtFirst && awdlCoexRateStep < nitems(kAwdlCoexRateMcs) &&
             awdlCoexOwnWidth == 80 && vhtCmdVer > 8 && vhtCmdVer != IWX_FW_CMD_VER_UNKNOWN &&
             (iwx_fw_valid_tx_ant(sc) & bothAntennas) == bothAntennas) {
             // VHT, 80 MHz, two streams, as dedicated mode's fixed rate for its 80 MHz sends.
@@ -12306,16 +12335,22 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
             ++awdlCoexVhtFrames;
             return &iwx_rates[IWX_RATE_MCS_7_INDEX];
         }
-        if (ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep >= 4)
-            awdlCoexRateStep = 3; // Not at 80 MHz any more, or no VHT command format: back to HT.
-        if (ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep > 0 && awdlCoexRateStep < 4) {
-            // A fixed HT rate, 20 MHz, one stream, long guard interval, as dedicated mode sends.
+        if (ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep >= kAwdlCoexRateVhtFirst)
+            awdlCoexRateStep = kAwdlCoexRateHtTop; // Not at 80 MHz any more, or no VHT command format: back to HT.
+        // Two-stream HT (steps 4-6) needs both transmit antennas; without them stay on the best one-stream step.
+        if (ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep > 3 && awdlCoexRateStep <= kAwdlCoexRateHtTop &&
+            (!awdlCoexHt2ss || (iwx_fw_valid_tx_ant(sc) & (IWX_RATE_MCS_ANT_AB_MSK >> IWX_RATE_MCS_ANT_POS)) !=
+            (IWX_RATE_MCS_ANT_AB_MSK >> IWX_RATE_MCS_ANT_POS)))
+            awdlCoexRateStep = 3;
+        if (ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep > 0 && awdlCoexRateStep <= kAwdlCoexRateHtTop) {
+            // A fixed HT rate, 20 MHz, long guard interval: one stream up to step 3, two streams above it.
             const unsigned mcs = kAwdlCoexRateMcs[awdlCoexRateStep];
             const iwx_rate *htInfo = &iwx_rates[iwx_mcs2ridx[mcs]];
-            uint32_t htFlags = iwx_get_tx_ant(sc, ni, htInfo, type, wh);
+            uint32_t htFlags = mcs > 7 ? uint32_t(IWX_RATE_MCS_ANT_AB_MSK) : iwx_get_tx_ant(sc, ni, htInfo, type, wh);
             const uint8_t htCmdVer = iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_TX_CMD);
             if (htCmdVer > 8 && htCmdVer != IWX_FW_CMD_VER_UNKNOWN)
-                htFlags |= IWX_RATE_MCS_HT_MSK | uint32_t(mcs & IWX_RATE_HT_MCS_CODE_MSK);
+                htFlags |= IWX_RATE_MCS_HT_MSK | (mcs > 7 ? uint32_t(IWX_RATE_MCS_NSS_MSK) : 0U) |
+                           uint32_t(mcs & IWX_RATE_HT_MCS_CODE_MSK);
             else
                 htFlags |= IWX_RATE_MCS_HT_MSK_V1 | uint32_t(mcs);
             *rate_n_flags = htole32(htFlags);
@@ -21761,6 +21796,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
                 awdlMoveTestSeconds = unsigned(requestedMoveTest);
             int requestedRepeats = 1;
             awdlMcastUnicast = PE_parse_boot_argn("-itlawdlmcastuc", &dummy, sizeof(dummy));
+            awdlCoexHt2ss = PE_parse_boot_argn("-itlawdlht2ss", &dummy, sizeof(dummy));
             awdlNoPeerPsf = PE_parse_boot_argn("-itlawdlnopsf", &dummy, sizeof(dummy));
             awdlServiceMerge = PE_parse_boot_argn("-itlawdlsvcmerge", &dummy, sizeof(dummy));
             awdlRadioProbe = PE_parse_boot_argn("-itlawdlradioprobe", &dummy, sizeof(dummy));
