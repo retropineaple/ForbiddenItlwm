@@ -122,6 +122,7 @@
 #include <AWDLDataFrame.hpp>
 #include <AWDLRegulatory.hpp>
 #include <AWDLBlockAck.hpp>
+#include <AWDLPeerHandoff.hpp>
 #include <AWDLServiceMerge.hpp>
 #include <AWDLSameChannelProbe.hpp>
 
@@ -6144,6 +6145,11 @@ static ItlAWDL::BaFilterState awdlCoexBaFilter;
 static uint32_t awdlCoexDataRxRetry, awdlCoexRxModulation[8], awdlCoexRxWide80;
 // Unicast data rate for our frames: 0 legacy 24 Mbit/s, then HT MCS 4, 5, 7 (20 MHz, one stream). Steps
 // down after a window with over 20% failures, up after one with under 5%.
+// Opt-in handoff; RX only records a validated challenger, the normal task does firmware work.
+static bool awdlCoexPeerHandoffEnabled;
+static bool awdlPeerHandoffEnabled() { return awdlCoexPeerHandoffEnabled; }
+static ItlAWDL::PeerHandoff awdlCoexPeerHandoff;
+static uint32_t awdlCoexPeerHandoffRetired, awdlCoexPeerHandoffErrors;
 static unsigned awdlCoexRateStep;
 static uint32_t awdlCoexRateWindowOK, awdlCoexRateWindowFailed, awdlCoexRateUps, awdlCoexRateDowns;
 // Steps 4 and 5 are VHT 80 MHz, two streams, MCS 4 and 7, only while the listener is at 80 MHz.
@@ -6542,6 +6548,10 @@ static void awdlCoexPublish()
             root->setProperty("ITLAWDLCoexBaFilterOff", awdlCoexBaFilterOff);
             root->setProperty("ITLAWDLCoexBaFilterChanges", awdlCoexBaFilterChanges, 32);
             root->setProperty("ITLAWDLCoexBaBroken", awdlCoexBaFailedGen >= 0 && awdlCoexBaFailedGen == awdlCoexGeneration);
+            root->setProperty("ITLAWDLCoexPeerHandoffEnabled", awdlPeerHandoffEnabled());
+            root->setProperty("ITLAWDLCoexPeerHandoffPending", awdlCoexPeerHandoff.valid);
+            root->setProperty("ITLAWDLCoexPeerHandoffRetired", awdlCoexPeerHandoffRetired, 32);
+            root->setProperty("ITLAWDLCoexPeerHandoffErrors", awdlCoexPeerHandoffErrors, 32);
             root->setProperty("ITLAWDLCoexRateStep", uint32_t(awdlCoexRateStep), 32);
             root->setProperty("ITLAWDLCoexRateUps", awdlCoexRateUps, 32);
             root->setProperty("ITLAWDLCoexRateDowns", awdlCoexRateDowns, 32);
@@ -8064,6 +8074,45 @@ awdlCoexBaHandle(struct iwx_softc *sc)
     auto stillOurs = [&]() { return gen == sc->sc_generation && tok == awdlCoexToken && awdlCoexAdded &&
                                     awdlCoexBaFailedGen != gen; };
     const uint64_t now = awdlUptimeUS();
+    // Peer handoff runs only in the task, after all existing listener guards.
+    // A current, parsed request cannot evict active or queued work.
+    if (awdlCoexPeerHandoff.valid) {
+        if (!awdlPeerHandoffEnabled() || !awdlCoexBaPeerAdded ||
+            !awdlCoexPeerHandoff.current(now, gen, tok, awdlCoexBaPeerEpoch) ||
+            !awdlCoexPeerKnown(awdlCoexPeerHandoff.request.peer, now)) {
+            awdlCoexPeerHandoff.clear();
+        } else {
+            const int queue = awdlCoexBaTxQueue;
+            const bool queued = itlAWDLTransmitQueued(getController()) ||
+                (awdlCoexQueue >= 0 && awdlCoexQueue < int(nitems(sc->txq)) && sc->txq[awdlCoexQueue].queued) ||
+                (queue >= 0 && queue < int(nitems(sc->txq)) && sc->txq[queue].queued);
+            const bool queueStateUnknown = awdlCoexQueue < 0 || awdlCoexQueue >= int(nitems(sc->txq)) ||
+                queue < -1 || queue >= int(nitems(sc->txq));
+            const bool controlBusy = queueStateUnknown || awdlCoexBaAnswerLength || !awdlCoexBaRequestsPending.empty() ||
+                awdlCoexResumePending || awdlCoexBaQueueAllocPending || awdlCoexDelbaWaitTid >= 0;
+            if (awdlCoexPeerHandoff.canRetire(now, awdlCoexBaPeerLastUS, queued, controlBusy)) {
+                const ItlAWDL::AddbaRequest challenger = awdlCoexPeerHandoff.request;
+                const uint64_t seen = awdlCoexPeerHandoff.seenUS;
+                const uint32_t ownerEpoch = awdlCoexBaPeerEpoch;
+                awdlCoexPeerHandoff.clear();
+                const int error = awdlCoexBaRemovePeer(sc);
+                const uint64_t after = awdlUptimeUS();
+                if (error || !stillOurs() || !awdlPeerHandoffEnabled() || awdlCoexBaPeerAdded || awdlCoexBaPeerEpoch != ownerEpoch ||
+                    after < seen || after - seen > ItlAWDL::PeerHandoff::requestLifetimeUS) {
+                    ++awdlCoexPeerHandoffErrors;
+                    return;
+                }
+                // REMOVE_STA may wait: never install state in a new listener/generation.
+                if (!awdlCoexPeerKnown(challenger.peer, awdlUptimeUS()) ||
+                    !awdlCoexBaRequestsPending.note(challenger)) {
+                    ++awdlCoexPeerHandoffErrors;
+                    return;
+                }
+                ++awdlCoexPeerHandoffRetired;
+                return; // Normal BA task creates the next station on its next pass.
+            }
+        }
+    }
     // Keep the station and TX agreement while the peer is still known and
     // has exchanged data in the last ten minutes.
     if (awdlCoexBaPeerAdded && awdlCoexBaRequestsPending.empty()) {
@@ -9206,8 +9255,12 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                         ++awdlCoexBaRequests;
                         awdlCoexBaEvent('Q', request.token, request.tid, 0);
                         if (request.immediate) {
-                            if ((awdlCoexBaPeerAdded && !ItlAWDL::sameAddress(request.peer, awdlCoexBaPeer)) ||
-                                !awdlCoexBaRequestsPending.note(request)) {
+                            if (awdlCoexBaPeerAdded && !ItlAWDL::sameAddress(request.peer, awdlCoexBaPeer)) {
+                                ++awdlCoexBaOtherPeer;
+                                if (awdlPeerHandoffEnabled())
+                                    (void)awdlCoexPeerHandoff.note(request, awdlUptimeUS(), sc->sc_generation,
+                                                                 awdlCoexToken, awdlCoexBaPeerEpoch);
+                            } else if (!awdlCoexBaRequestsPending.note(request)) {
                                 ++awdlCoexBaOtherPeer;
                             } else if (awdlCoexBaAnswerLength && awdlCoexBaAnswerTid == request.tid &&
                                        awdlCoexBaAnswer[26] != request.token) {
@@ -15866,6 +15919,7 @@ awdlCoexListener(struct iwx_softc *sc, bool add)
         awdlCoexMovePending = false;
         awdlCoexSameChannelProbe.noteApplied(false, awdlUptimeUS());
         awdlCoexSameChannelProbe.restorePending = false;
+        awdlCoexPeerHandoff.clear();
         awdlCoexPromiscLive = false;
         awdlCoexPromiscUncertain = false;
         awdlCoexBaPeerAdded = false;
@@ -20726,6 +20780,8 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         // flag -itlawdlcoexsamechprobe is still accepted and changes nothing; -itlawdlnosamechprobe turns it off.
         awdlCoexSameChannelProbe.enabled = awdlCoexBaTxEnabled &&
             !PE_parse_boot_argn("-itlawdlnosamechprobe", &dummy, sizeof(dummy));
+        awdlCoexPeerHandoffEnabled = awdlCoexData && PE_parse_boot_argn("-itlawdlpeerhandoff", &dummy, sizeof(dummy));
+        awdlCoexPeerHandoff.clear();
         awdlCoexBaPeerPauseEnabled = awdlCoexBaTxEnabled &&
             PE_parse_boot_argn("-itlawdlcoexpeerpause", &dummy, sizeof(dummy));
         awdlCoexBaTraceEnabled = awdlCoexBaTxEnabled &&

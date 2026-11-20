@@ -13,6 +13,7 @@
 #include <vector>
 #include <algorithm>
 #include <libkern/OSByteOrder.h>
+#include "AWDLPeerHandoff.hpp"
 #define htole32 OSSwapHostToLittleInt32
 #define htole16 OSSwapHostToLittleInt16
 #define IEEE80211_ADDR_COPY(dst, src) memcpy(dst, src, 6)
@@ -41,7 +42,6 @@ enum { IWX_FLAG_SHUTDOWN = 1, IWX_FLAG_SCANNING = 2, IWX_FW_CTXT_ACTION_ADD = 1,
 using IOReturn = int;
 using OSObject = void;
 using AbsoluteTime = uint64_t;
-namespace ItlAWDL { struct BaFilterState {}; }
 struct Pending { void clear() {} };
 struct ieee80211_channel {};
 struct iwx_phy_ctxt { int id = 0, color = 0; ieee80211_channel *channel = nullptr; };
@@ -96,6 +96,7 @@ static uint64_t awdlCoexLastMoveUS;
 static ieee80211_channel *awdlCoexOwnChan;
 static const char *awdlCoexMultiState;
 static Pending awdlCoexBaRequestsPending;
+static ItlAWDL::PeerHandoff awdlCoexPeerHandoff;
 static ItlAWDL::BaFilterState awdlCoexBaFilter;
 static uint8_t awdlCoexAddr[6], awdlCoexAddrInFirmware[6];
 static std::vector<std::string> events;
@@ -227,6 +228,12 @@ int Gate::restartWhileWaiting() {
     awdlCoexAddingGen = driver->com.sc_generation;
     awdlCoexAdded = awdlCoexTxStaAdded = true;
     ++awdlCoexAddingOwner;
+    // New-generation receive work may arrive while an old task sleeps.
+    ItlAWDL::AddbaRequest challenger{};
+    challenger.immediate = true;
+    challenger.peer[0] = 2;
+    assert(awdlCoexPeerHandoff.note(challenger, awdlUptimeUS(),
+                                   driver->com.sc_generation, awdlCoexToken, 9));
     if (setupCase()) {
         awdlCoexTxSettingUpGen = driver->com.sc_generation;
         awdlCoexTxSettingUpOwner = ++awdlCoexTxSettingUpNext;
@@ -256,6 +263,25 @@ int main(int argc, char **argv) {
     awdlCoexAdded = scenario != "tx-only" && scenario != "no-owner";
     awdlCoexTxStaAdded = scenario == "tx-only" || scenario == "tx-failure" || scenario == "normal" || scenario == "remove-restart";
     awdlCoexQueue = awdlCoexTxStaAdded ? 1 : -1;
+    if (scenario == "handoff-generation-reset" || scenario == "handoff-current-generation") {
+        ItlAWDL::AddbaRequest challenger{};
+        challenger.immediate = true;
+        challenger.peer[0] = 2;
+        const int oldGeneration = sc.sc_generation;
+        const uint32_t oldToken = awdlCoexToken;
+        assert(awdlCoexPeerHandoff.note(challenger, awdlUptimeUS(), oldGeneration, oldToken, 9));
+        if (scenario == "handoff-generation-reset") {
+            ++sc.sc_generation;
+            assert(driver->awdlCoexListener(&sc, false) == 0);
+            assert(!awdlCoexPeerHandoff.valid);
+            assert(awdlCoexGeneration == sc.sc_generation && awdlCoexToken != oldToken);
+        } else {
+            assert(driver->awdlCoexListener(&sc, true) == 0);
+            assert(awdlCoexPeerHandoff.current(awdlUptimeUS(), oldGeneration, oldToken, 9));
+        }
+        assert(events.empty());
+        return 0;
+    }
     if (scenario == "exit-listener-failure" || scenario == "transition-guard") {
         if (scenario == "exit-listener-failure")
             awdlCoexBrokenGeneration = sc.sc_generation;
@@ -374,6 +400,7 @@ int main(int argc, char **argv) {
             assert(awdlCoexAdded && awdlCoexTxStaAdded && restarts == 0);
             assert(awdlCoexTxSettingUpGen == sc.sc_generation && awdlCoexTxSettingUpOwner != 0);
             assert(awdlCoexQueue == 2 && !saw("ring-reset"));
+            assert(awdlCoexPeerHandoff.current(awdlUptimeUS(), sc.sc_generation, awdlCoexToken, 9));
         } else if (suffix("shutdown")) {
             assert(!saw("mac-remove") && !saw("run-stop") && !saw("commit") && restarts == 0);
         } else if (suffix("failure") || suffix("timeout")) {
@@ -409,6 +436,7 @@ int main(int argc, char **argv) {
         if (scenario == "restart" || scenario == "add-restart") {
             assert(awdlCoexAdded && !saw("mac-remove"));
             assert(awdlCoexAddingGen == sc.sc_generation && awdlCoexAddingOwner != 0);
+            assert(awdlCoexPeerHandoff.current(awdlUptimeUS(), sc.sc_generation, awdlCoexToken, 9));
         }
         else assert(!saw("sta-remove"));
     } else if (scenario == "normal" || scenario == "remove-wait") {

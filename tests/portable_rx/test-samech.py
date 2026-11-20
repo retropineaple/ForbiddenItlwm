@@ -96,4 +96,14 @@ import hashlib
 a=s.index('iwx_rx_pkt(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='b8f0830905eb3f86c3dcb30103a1126ad97a718073cd3154dc19f0776e7f08a7'
 a=s.index('iwx_rx_mpdu_mq(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='761fc4d25edb443d274e376efdd0a7011f20cd0b2f408de292f0ed16a5f38470'
 # iwx_rx_frame: 0.6.0 adds only the phone's 5 GHz channel tracking from its TLV 18 sequence (PR #21).
-a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='af39995bc5ce4c189ab8f28d870750f650072b3e12462aceefc3c1ec6e6efee5'
+a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);rx=s[a:b]
+# #50 intentionally changes only the immediate-ADDBA dispatch. Its flag-off/on
+# behavior is checked by test-handoff-rx.py. Restore that exact bounded fragment
+# to its checked-in oracle before verifying the rest of main's RX-frame guards.
+start=rx.index('                        if (request.immediate) {',rx.index('ItlAWDL::parseAddbaRequest(cf, coexLen'))
+end=rx.index('                    } else if (ItlAWDL::parseDelba',start)
+fixture=(T/'fixtures/handoff-before.cpp').read_text()
+oldstart=fixture.index('                        if (request.immediate) {')
+oldend=fixture.index('                    } else if (ItlAWDL::parseDelba',oldstart)
+rx=rx[:start]+fixture[oldstart:oldend]+rx[end:]
+assert hashlib.sha256(rx.encode()).hexdigest()=='af39995bc5ce4c189ab8f28d870750f650072b3e12462aceefc3c1ec6e6efee5'

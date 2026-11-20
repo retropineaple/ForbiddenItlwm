@@ -28,8 +28,10 @@ class AWDLReconnectRecoveryTests(unittest.TestCase):
             src.write_text(program)
             output = Path(directory) / "test"
             subprocess.run(["xcrun", "clang++", "-std=c++14", "-pthread",
+                            "-I" + str(root / "include"),
                             "-fsanitize=address,undefined", str(src), "-o", str(output)], check=True)
-            for case in ("exit-listener-failure", "transition-guard", "tx-only", "add-wait", "add-rollback-failure", "add-timeout", "add-restart",
+            for case in ("handoff-generation-reset", "handoff-current-generation",
+                         "exit-listener-failure", "transition-guard", "tx-only", "add-wait", "add-rollback-failure", "add-timeout", "add-restart",
                          "remove-wait", "timeout", "restart", "remove-restart",
                          "rollback-failure", "normal", "equal-run", "no-owner", "tx-failure",
                          "setup-sta", "setup-sta-failure", "setup-sta-restart", "setup-sta-timeout",
