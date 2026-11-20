@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+**Wi-Fi**
+- **Fix SHA-256 PTK derivation.** For SHA-256 AKMs the KDF label is hashed without its trailing NUL (22 bytes) and the output length is 48 bytes (KCK 16 + KEK 16 + CCMP TK 16), not 23 and `sizeof(struct ieee80211_ptk)` (64). The wrong length is hashed into every block, so SHA-256 PTKs were wrong; plain WPA2-PSK uses the SHA-1 PRF, which does not hash the length, and kept working. This is also a prerequisite for WPA3-SAE.
+
 ## 0.6.0-beta.2
 
 **Bluetooth: BTLEAdvFixup 0.9.3**
