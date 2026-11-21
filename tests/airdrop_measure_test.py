@@ -72,6 +72,28 @@ assert res["failed"] and res["interfaces"]["en0"]["share"] > 1
 res = am.analyze(run_samples([100] * 10, extra={"en1": 5_000_000}), {}, {}, "", OPTS)
 assert not res["failed"]
 
+# A stall is explained by what the counters did inside it.
+def with_reg(samples, regs):
+    for s, r in zip(samples, regs):
+        s["reg"] = r
+    return samples
+base = {"ITLAWDLCoexGateAwayTicks": 0, "ITLAWDLCoexGateHolds": 0, "ItlwmAWDLTxPacketsOffered": 0, "ItlwmAWDLTxParked": 0,
+        "ITLAWDLCoexDataTx": 0, "ITLAWDLCoexUcastOK": 0, "ITLAWDLCoexChannel": 161}
+S = run_samples([0, 90, 90, 0, 0, 0, 0, 90, 90, 0])
+regs = [dict(base) for _ in S]
+for i in range(len(S)):                       # in the stall (samples 3 to 7) the gate holds the peer and frames are parked
+    if i >= 3:
+        regs[i].update(ITLAWDLCoexGateAwayTicks=100 * (min(i, 7) - 2), ITLAWDLCoexGateHolds=5 * (min(i, 7) - 2),
+                       ItlwmAWDLTxParked=40 * (min(i, 7) - 2), ItlwmAWDLTxPacketsOffered=40 * (min(i, 7) - 2))
+with_reg(S, regs)
+hints = am.stall_hints(S, S[3]["t"], 4.0)
+assert any("parked for the peer" in h for h in hints) and any("peer away" in h or "not on the listener's channel" in h for h in hints), hints
+res = am.analyze(S, {}, {}, "", OPTS)
+assert any("stall at +" in x and "parked" in x for _, x in res["lines"]), res["lines"]
+regs2 = [dict(base) for _ in S]               # nothing offered at all: the sender stopped
+assert any("nothing was offered" in h for h in am.stall_hints(with_reg(run_samples([0, 90, 90, 0, 0, 0, 0, 90, 90, 0]), regs2), 103.0, 4.0))
+assert am.stall_hints([{"t": 1.0, "if": {}}], 1.0, 4.0) == []                         # no registry samples: no hints
+
 # MTUs: Apple's 1500 on awdl0 and llw0; the old 1484 or a wider wired interface fails.
 IFC = "awdl0: flags=8843<UP,BROADCAST,RUNNING,SIMPLEX,MULTICAST> mtu 1500\nllw0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500\nen0: flags=8863<UP> mtu 1492\n"
 assert am.parse_mtus(IFC) == {"awdl0": 1500, "llw0": 1500, "en0": 1492}

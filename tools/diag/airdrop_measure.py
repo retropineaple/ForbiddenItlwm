@@ -40,6 +40,14 @@ REG_KEYS = [
     "ITLAWDLCmdTimeouts", "ITLAWDLCmdEnospcRing", "ITLAWDLCmdEnospcSlot",
     "ITLAWDLCoexCountryPolls", "ITLAWDLCoexCountryLearned", "ITLAWDLCoexChannel",
 ]
+# Read once per sample (ioreg -l -d1 takes about 40 ms) so a stall can be explained by what the driver was doing in it.
+TIMELINE_KEYS = [
+    "ITLAWDLCoexGateAwayTicks", "ITLAWDLCoexGateHolds", "ITLAWDLCoexGateForced", "ITLAWDLCoexGateDozeTicks",
+    "ItlwmAWDLTxPacketsOffered", "ItlwmAWDLTxParked", "ItlwmAWDLTxPassedParked", "ITLAWDLCoexDataTx", "ITLAWDLCoexUcastOK",
+    "ITLAWDLCoexUcastFailed", "ITLAWDLCoexOrderHeld", "ITLAWDLCoexPeerPauses", "ITLAWDLCoexPeerSequenceChanges",
+    "ITLAWDLCoexPeer5GHzChanges", "ITLAWDLCoexPeerDecalibrations", "ITLAWDLCoexChannel", "ITLAWDLCoexPeer5GHz",
+]
+
 # Counters that only grow within a run; the others are levels and are reported as they are at the end.
 LEVEL_KEYS = {"ItlwmAWDLTxParkedPeak", "ItlwmAWDLTxParkFrames", "ITLAWDLCoexCountryLearned", "ITLAWDLCoexChannel"}
 
@@ -121,6 +129,40 @@ def check_mtu(mtus, apple=1500):
         if wider:
             out.append(("FAIL", "interface(s) with a bigger MTU than awdl0: " + ", ".join(wider)))
     return out
+
+
+def stall_hints(samples, start, length):
+    """What the driver's counters did between start and start + length, in words: the likely reason for the idle time."""
+    inside = [s for s in samples if start <= s["t"] <= start + length + 1e-6 and s.get("reg")]
+    if len(inside) < 2:
+        return []
+    a, b = inside[0]["reg"], inside[-1]["reg"]
+
+    def d(key):
+        return b.get(key, 0) - a.get(key, 0) if key in a and key in b else None
+
+    hints = []
+    away, holds, parked = d("ITLAWDLCoexGateAwayTicks"), d("ITLAWDLCoexGateHolds"), d("ItlwmAWDLTxParked")
+    offered, tx, ok = d("ItlwmAWDLTxPacketsOffered"), d("ITLAWDLCoexDataTx"), d("ITLAWDLCoexUcastOK")
+    if offered == 0 and (tx or 0) == 0:
+        hints.append("nothing was offered to the driver: the sender (QUIC in sharingd) was not sending, which is what a path "
+                     "switch, a retry or a wait for acknowledgements looks like")
+    if parked and not ok:
+        hints.append("%d frame(s) were parked for the peer and none was acknowledged: the gate held the peer's frames" % parked)
+    if away:
+        hints.append("the gate counted the peer away for %d ticks (%d holds): the iPhone was not on the listener's channel" % (away, holds or 0))
+    if offered and not tx and not parked:
+        hints.append("%d frame(s) were offered and none sent: they waited in the ring" % offered)
+    seq, ch5 = d("ITLAWDLCoexPeerSequenceChanges"), d("ITLAWDLCoexPeer5GHzChanges")
+    if seq:
+        hints.append("the iPhone's channel sequence changed %d time(s)%s" % (seq, ", its 5 GHz channel %d time(s)" % ch5 if ch5 else ""))
+    if d("ITLAWDLCoexPeerDecalibrations"):
+        hints.append("the peer was decalibrated %d time(s)" % d("ITLAWDLCoexPeerDecalibrations"))
+    if d("ITLAWDLCoexUcastFailed"):
+        hints.append("%d unicast frame(s) failed" % d("ITLAWDLCoexUcastFailed"))
+    if b.get("ITLAWDLCoexChannel") != a.get("ITLAWDLCoexChannel"):
+        hints.append("the listener moved from %s to %s" % (a.get("ITLAWDLCoexChannel"), b.get("ITLAWDLCoexChannel")))
+    return hints
 
 
 # ---- analysis (pure) -------------------------------------------------------------------------------------------------
@@ -206,6 +248,9 @@ def analyze(samples, reg0, reg1, log_text, opts):
             add("PASS" if sp["mean_mbit"] >= opts["min_mbit"] else "FAIL", "mean %.1f Mbit/s against the %.1f wanted" % (sp["mean_mbit"], opts["min_mbit"]))
         add("FAIL" if sp["stalls"] else "PASS", "%d stall(s) of %.0f s or more inside the transfer%s" % (
             len(sp["stalls"]), opts["max_stall"], ": " + ", ".join("at +%.0fs for %.0fs" % (t - first["t"], l) for t, l in sp["stalls"][:6]) if sp["stalls"] else ""))
+        for t, l in sp["stalls"][:8]:
+            for h in stall_hints(samples, t, l):
+                add("INFO", "  stall at +%.0fs: %s" % (t - first["t"], h))
 
     # Driver counters.
     d = {}
@@ -254,7 +299,8 @@ def analyze(samples, reg0, reg1, log_text, opts):
 # ---- live sampling ---------------------------------------------------------------------------------------------------
 
 def sample_once(ifaces, t):
-    return {"t": t, "if": {n: parse_netstat(run(["netstat", "-I", n, "-b"], 10), n) for n in ifaces}}
+    return {"t": t, "if": {n: parse_netstat(run(["netstat", "-I", n, "-b"], 10), n) for n in ifaces},
+            "reg": parse_registry(run(["ioreg", "-l", "-w0", "-d1"], 10), TIMELINE_KEYS)}
 
 
 def main(argv=None):
