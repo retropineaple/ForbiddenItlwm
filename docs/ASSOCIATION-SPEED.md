@@ -104,7 +104,26 @@ and drops the forced-passive flag, so access points answer at once and the adapt
 `-itlstrictpassive` turns it off. The expected effect is that the quick scan finds the saved network, so airportd joins without the broad scan and its pause
 (about 5.5 s link-up), and any broad scan takes about 2 s instead of 4.4 s.
 
+## Fourth timeline (`assoc4`): link up in 10.7 s, and why airportd waits
+
+```
+636  scan requested (type 2, 3 channels)   -> done 952 (316 ms), 15 beacons heard   (5 before probing)
+964  scan requested (1 channel)            -> done 1082 (118 ms), 2 beacons          (airportd's own auto-join scan)
+6435 scan requested (type 2, 38 channels)  -> done 10236 (3801 ms), 20 beacons       (4411 ms before probing)
+10289 join requested, join channel 161     -> scan done 10599 (118 ms) -> association 10633 -> link up 10663
+```
+
+- Probing helped the scans themselves: the 3-channel scan heard 15 beacons instead of 5, and the broad scan took 3.8 s instead of 4.4 s (the DFS channels
+  stay passive at 110 TU). The 118 ms join scan and the 70 ms association are unchanged.
+- Link up did not improve overall (10.7 s against 9.9 s) because of a gap that is not the driver's: airportd's second auto-join scan, a directed scan for the
+  hidden network on channels 6 and 161, fails inside airportd in 4 microseconds with error -3903 (`Apple80211Scan Failed`, no scan request reaches the
+  driver; the timeline has no entry for it), and airportd then logs "Scheduling auto-join retry attempt in 4500ms". The 38-channel scan is that retry.
+- The 4.5 s retry is therefore about 40% of the remaining time. If the saved hidden network were not in the known-networks list, or if airportd's
+  directed-SSID scan were accepted, the join would follow the quick scan: about 5.5 s.
+
 ## Open
 
-- Whether the quick scan now finds the saved network; the beacon count in the timeline shows what each scan heard.
+- What makes airportd fail the directed (hidden SSID) scan with -3903 before calling the driver. Apple80211.framework lives only in the dyld shared cache, which
+  REA cannot open from disk here, so this has not been read from the disassembly. A driver capability bit or an unsupported ioctl type queried at interface
+  start is the likely cause, and the `ItlwmAWDLCalls` / unsupported-call counters list what airportd asked for.
 - The remaining DFS channels (about 15 of 38) still cost 110 TU each in a broad scan.
