@@ -13,7 +13,8 @@ KINDS = {1: "scan requested", 2: "scan accepted", 3: "scan refused", 4: "scan do
          5: "scan finished (WCL)", 6: "join requested", 7: "join started", 8: "join refused",
          9: "join channel (0 = all channels)", 10: "association done (status in val)", 11: "first beacon",
          12: "link up", 13: "link down", 14: "deauth (reason in val)", 15: "join finished (status in arg)",
-         16: "driver ready", 17: "driver stopped"}
+         16: "driver ready", 17: "driver stopped", 18: "scan parameters (arg: type, 2 = passive; val: channels asked for, 0 = all)",
+         19: "beacons and probe responses heard during that scan (val)"}
 
 
 def entries(text):

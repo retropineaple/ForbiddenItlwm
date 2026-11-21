@@ -71,8 +71,19 @@ python3 -I tools/diag/assoc_timeline.py
   iteration stays idle.
 - A deferred join reads its BSS's channel from the cache before the firmware restart (`wclJoinChannelHint`) and uses it afterwards.
 
+## Second timeline (`assoc2`)
+
+- A scan restricted to a few channels now finishes in about 0.12 s (326 to 444 ms, 4203 to 4320 ms), against 2.4 to 3.8 s before the idle SCAN state.
+- A scan of every channel still takes 3.7 to 4.4 s (454 to 4139, 7940 to 12350): thirty-odd channels at the firmware's dwell times, with the passive dwell
+  (110 TU) on the DFS ones. macOS asks for these itself; the new `scan parameters` step records the type and channel count of each request.
+- The join still scanned every channel (`join channel 0`, 3.8 s) because the "driver stopped" at 12454 came a millisecond *before* the join request:
+  the firmware restart had already emptied net80211's node cache, so the hint taken at the join request found nothing. `assoc3` keeps its own record of
+  every BSS a scan reported (`wclSeen`, 64 entries, 30 s) and reads the join's channel from that.
+- Authentication, association and link up again took about 70 ms.
+- While associated, scans (net80211 state 4) take 0.4 to 1.6 s each; airportd issues them back to back.
+
 ## Open
 
-- Whether the link drop about 4 s after the first association (second boot, BSSID changed at 27 s) was a real deauth; check the deauth entry
-  (`val` is the reason) in the new timeline.
-- How long a one-channel scan really takes on the AX200 (expected 0.1 to 0.2 s); the timeline's scan requested and scan done event steps give it.
+- Why the first full scan (454 to 4139) and the join's scan take about 3.8 s. The scan parameters and beacon counts in the timeline show whether it is
+  the channel count or the dwell time.
+- Whether the link still drops a few seconds after the first association: it did not in this run (no deauth entry).
