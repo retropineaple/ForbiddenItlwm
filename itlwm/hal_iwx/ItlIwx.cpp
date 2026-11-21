@@ -6418,6 +6418,13 @@ static uint32_t awdlCoexBaActionSeen[4], awdlCoexBaActionAwdlBssid, awdlCoexBaAc
 // code (0 request, 1 answer, 2 teardown) and, in [1][..], those whose receiver address is unicast. The 2026-11-20
 // sniffer showed the phone answering our ADDBA requests (status 0, immediate, window 64) while ITLAWDLCoexBaActionSeen[1]
 // stayed 0: these say whether the answers reach the host at all (ITLAWDLRawBaAction / ITLAWDLRawBaActionUnicast).
+// The latest management action frames the firmware hands up that are not AWDL's own (category 127), as they arrive and before any
+// parsing: arrival time, length, flags (1 unicast receiver, 2 HT Control, 4 firmware padding) and the first 40 bytes. Read with
+// tools/diag/rawmgmt_ring.py. It exists to show what an ADDBA answer looks like when it does arrive, or that it never does.
+struct AwdlRawMgmt { uint32_t usLow; uint16_t length; uint8_t flags, rssi; uint8_t bytes[40]; };
+static constexpr unsigned kAwdlRawMgmtRing = 32;
+static AwdlRawMgmt awdlRawMgmtRing[kAwdlRawMgmtRing];
+static uint32_t awdlRawMgmtCount, awdlRawMgmtCats[16];   // frames recorded; by category (15 = 15 and above)
 static uint32_t awdlRawBaAction[3], awdlRawBaActionUnicast[3], awdlRawBaActionHtc[3];   // the last: carried +HTC (see iwx_rx_mpdu_mq)
 static uint32_t awdlCoexRxWhileFilterOff;
 // The listener's queue carries data too now, so a sync frame can wait behind retried data while the radio
@@ -7000,6 +7007,13 @@ static void awdlCoexPublish()
             }
             if (auto *d = OSData::withBytes(awdlRawBaActionHtc, sizeof(awdlRawBaActionHtc))) {
                 root->setProperty("ITLAWDLRawBaActionHtc", d); d->release();
+            }
+            root->setProperty("ITLAWDLRawMgmtCount", awdlRawMgmtCount, 32);
+            if (auto *d = OSData::withBytes(awdlRawMgmtCats, sizeof(awdlRawMgmtCats))) {
+                root->setProperty("ITLAWDLRawMgmtCats", d); d->release();
+            }
+            if (auto *d = OSData::withBytes(awdlRawMgmtRing, sizeof(awdlRawMgmtRing))) {
+                root->setProperty("ITLAWDLRawMgmtRing", d); d->release();
             }
             root->setProperty("ITLAWDLRxReorderHeld", awdlRxReorderHeld, 32);
             if (auto *d = OSData::withBytes(awdlCoexSeqGapRing, sizeof(awdlCoexSeqGapRing))) {
@@ -10804,6 +10818,21 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
         // ITLAWDLRawBaAction [92 requests, 0 answers] although the sniffer saw the answers). The field is cut out, and
         // the Order bit cleared, so what follows sees the plain frame. A management frame's header is a multiple of 4
         // bytes with or without it, so the firmware's padding flag is not set for it.
+        if ((rawFrame[0] & 0xfc) == 0xd0 || (rawFrame[0] & 0xfc) == 0xe0) {
+            const unsigned categoryAt = (rawFrame[1] & 0x80) ? 28U : 24U;
+            if (len >= categoryAt + 2 && rawFrame[categoryAt] != 127) {
+                AwdlRawMgmt &e = awdlRawMgmtRing[awdlRawMgmtCount % kAwdlRawMgmtRing];
+                e.usLow = uint32_t(awdlUptimeUS());
+                e.length = uint16_t(len);
+                e.flags = uint8_t((rawFrame[4] & 1 ? 0 : 1) | ((rawFrame[1] & 0x80) ? 2 : 0) | ((desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) ? 4 : 0));
+                e.rssi = 0;
+                memcpy(e.bytes, rawFrame, len < sizeof(e.bytes) ? len : sizeof(e.bytes));
+                if (len < sizeof(e.bytes))
+                    memset(e.bytes + len, 0, sizeof(e.bytes) - len);
+                ++awdlRawMgmtCount;
+                ++awdlRawMgmtCats[rawFrame[categoryAt] < 15 ? rawFrame[categoryAt] : 15];
+            }
+        }
         uint8_t htcAction = 0;
         if (!(desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) && ItlAWDL::stripBaActionHtc(rawFrame, &len, &htcAction)) {
             ++awdlRawBaActionHtc[htcAction];
