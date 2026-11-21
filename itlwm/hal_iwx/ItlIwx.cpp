@@ -13827,6 +13827,11 @@ iwx_umac_scan_fill_channels(struct iwx_softc *sc,
                 ic->ic_wcl_scan_requested && ic->ic_wcl_scan_restricted,
                 ieee80211_chan2ieee(ic, c)))
             continue;
+        // A join whose BSS macOS just scanned: look at that channel only (a directed probe on one channel instead of
+        // all of them, the difference between about 0.1 s and several seconds before the association starts).
+        if (!bgscan && ic->ic_wcl_join_requested && ic->ic_wcl_join_channel &&
+            ieee80211_chan2ieee(ic, c) != ic->ic_wcl_join_channel)
+            continue;
 #endif
         
         channel_num = ieee80211_mhz2ieee(c->ic_freq, 0);

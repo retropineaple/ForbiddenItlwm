@@ -1458,6 +1458,10 @@ ieee80211_end_scan(struct _ifnet *ifp)
     if (ni == NULL) {
         DPRINTF(("no scan candidate\n"));
     notfound:
+#ifdef AIRPORT_WCL
+        // The targeted join scan found nothing (the AP moved or the cache was stale): scan everything next time.
+        ic->ic_wcl_join_channel = 0;
+#endif
         
 #ifndef IEEE80211_STA_ONLY
         if (ic->ic_opmode == IEEE80211_M_IBSS &&
