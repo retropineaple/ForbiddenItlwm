@@ -432,7 +432,13 @@ IOReturn AirportItlwmSkywalkInterface::startWCLScan(apple80211ScanRequest *reque
         ((scan.type != 2 && scan.ssidLength != 0) ||
          ic->ic_wcl_scan_ssid_length != 0 || ic->ic_des_esslen != 0);
     ic->ic_wcl_scan_requested = true;
-    ic->ic_wcl_scan_active = scan.type != 2;
+    // macOS's broad and quick auto-join scans are type 2 (passive): a passive dwell is 110 TU on every channel (38 channels
+    // took 4.4 s) and a 3-channel scan can miss the access point's beacon, so airportd found no network and rescanned
+    // everything after a pause. Probing (a wildcard probe request) on the channels that allow it makes the AP answer at once
+    // and dwell 10 to 30 TU; DFS and passive-only channels stay passive (AirportWCL::probeChannel). -itlstrictpassive
+    // keeps macOS's passive scans passive.
+    char strictPassive[8];
+    ic->ic_wcl_scan_active = scan.type != 2 || !PE_parse_boot_argn("-itlstrictpassive", strictPassive, sizeof(strictPassive));
     ic->ic_wcl_scan_ssid_length = scan.type == 2 ? 0 : scan.ssidLength;
     memcpy(ic->ic_wcl_scan_ssid, scan.ssid, sizeof(scan.ssid));
     ic->ic_wcl_scan_restricted = scan.channelCount != 0;

@@ -82,8 +82,29 @@ python3 -I tools/diag/assoc_timeline.py
 - Authentication, association and link up again took about 70 ms.
 - While associated, scans (net80211 state 4) take 0.4 to 1.6 s each; airportd issues them back to back.
 
+## Third timeline (`assoc3`): link up in 9.9 s
+
+```
+410  scan requested (type 2 passive, 3 channels)  -> done 758 (348 ms), 5 beacons heard
+770  scan requested (1 channel)                   -> done 887 (117 ms)
+5089 scan requested (type 2 passive, 38 channels) -> done 9500 (4411 ms), 11 beacons heard
+9552 join requested, join channel 161             -> scan done 9863 (120 ms) -> association 9896 -> link up 9928
+```
+
+- Link up came 23.4 s after driver init at the baseline, 19.0 s with `assoc1`, 16.5 s with `assoc2`, and 9.9 s with `assoc3`. The join's one-channel scan now
+  takes 120 ms.
+- airportd's scans are type 2, passive. A passive dwell is 110 TU per channel: 38 channels took 4.4 s, 3 channels 0.35 s.
+- The 4.2 s gap before the broad scan (888 to 5089) is airportd's. The quick 3-channel scan heard 5 beacons but not the saved network, so airportd waited and
+  then scanned everything. A single passive dwell (about the beacon interval) can miss an access point's beacon.
+
+## Probing on passive scans (`assoc4`)
+
+For a type 2 scan the driver now sends a wildcard probe request on every channel that allows probing (`AirportWCL::probeChannel`: not DFS, not passive-only)
+and drops the forced-passive flag, so access points answer at once and the adaptive dwell is 10 to 30 TU instead of 110. DFS channels stay passive.
+`-itlstrictpassive` turns it off. The expected effect is that the quick scan finds the saved network, so airportd joins without the broad scan and its pause
+(about 5.5 s link-up), and any broad scan takes about 2 s instead of 4.4 s.
+
 ## Open
 
-- Why the first full scan (454 to 4139) and the join's scan take about 3.8 s. The scan parameters and beacon counts in the timeline show whether it is
-  the channel count or the dwell time.
-- Whether the link still drops a few seconds after the first association: it did not in this run (no deauth entry).
+- Whether the quick scan now finds the saved network; the beacon count in the timeline shows what each scan heard.
+- The remaining DFS channels (about 15 of 38) still cost 110 TU each in a broad scan.
