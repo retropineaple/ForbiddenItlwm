@@ -87,3 +87,4 @@ with tempfile.TemporaryDirectory(prefix="forbidden-lqm-") as directory:
     subprocess.run(["xcrun", "clang++", "-std=c++14", "-fsanitize=address,undefined",
                     str(root / "tests/wcl_lqm_merge.cpp"), "-o", output], check=True)
     subprocess.run([output], check=True)
+subprocess.run(["python3", str(root / "tests/awdl_tx_park.py")], check=True)

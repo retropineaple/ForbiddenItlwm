@@ -1437,19 +1437,56 @@ UInt32 ItlAWDLInterface::acceptTransmit(IOSkywalkPacket *const *packets, UInt32 
 bool ItlAWDLInterface::popTransmit(uint8_t *output, size_t available, size_t *written,
                                    const uint8_t *holdPayloadFor, bool holdEverySize)
 {
-    ++transmitDepthBins[ItlAWDL::depthBin(transmitQueued)];
+    ++transmitDepthBins[ItlAWDL::depthBin(transmitQueued + parkedQueued)];
+    // The parked frames first, in their order, once their peer is no longer held.
+    while (parkedQueued && !(holdPayloadFor && ItlAWDL::sameAddress(parkedPeer, holdPayloadFor))) {
+        const auto &frame = parkedFrames[parkedHead];
+        const auto result = ItlAWDL::buildDataFrameFromEthernet(frame.bytes, frame.length, localFrameAddress,
+                                                                transmitSequence, output, available, written, frame.llw, frame.llw && llwQosTid7);
+        parkedHead = (parkedHead + 1) % parkedFrameCount;
+        --parkedQueued;
+        ++transmitPopped;
+        if (result == ItlAWDL::BuildResult::Ready) {
+            ++transmitSequence;
+            return true;
+        }
+        ++transmitDropped;
+    }
     while (transmitQueued) {
         const auto &frame = transmitFrames[transmitHead];
         const auto result = ItlAWDL::buildDataFrameFromEthernet(frame.bytes, frame.length, localFrameAddress,
                                                                 transmitSequence, output, available, written, frame.llw, frame.llw && llwQosTid7);
-        // Hold what is for the capped peer. Leave the FIFO head and sequence intact. With holdEverySize
-        // (iface160) that is every unicast data frame for it: a short frame let past would overtake the
-        // held packets of the same QUIC connection on the listener's unpaused queue, and QUIC counts
-        // overtaken packets as lost. Without it, only payload-sized frames, as on iface157 to iface159.
-        if (result == ItlAWDL::BuildResult::Ready && holdPayloadFor && (holdEverySize || *written >= 1200) &&
-            (output[0] == 0x08 || output[0] == 0x88) && ItlAWDL::sameAddress(output + 4, holdPayloadFor)) {
+        // Hold what is for the capped peer. With holdEverySize (iface160) that is every unicast data frame for
+        // it: a short frame let past would overtake the held packets of the same QUIC connection on the
+        // listener's unpaused queue, and QUIC counts overtaken packets as lost. Without it, only payload-sized
+        // frames, as on iface157 to iface159. Held frames are parked, in order, so the frames behind them for
+        // other peers still go; once some of its frames are parked, all of that peer's later ones join them.
+        const bool unicastData = result == ItlAWDL::BuildResult::Ready && (output[0] == 0x08 || output[0] == 0x88) && !(output[4] & 1);
+        const bool held = unicastData && holdPayloadFor && (holdEverySize || *written >= 1200) &&
+            ItlAWDL::sameAddress(output + 4, holdPayloadFor);
+        const bool behindParked = unicastData && parkedQueued && ItlAWDL::sameAddress(output + 4, parkedPeer);
+        if (held || behindParked) {
+            const bool shortFrame = *written < 1200;
+            if (parkedFrames && parkedQueued < parkedFrameCount &&
+                (!parkedQueued || ItlAWDL::sameAddress(output + 4, parkedPeer))) {
+                if (!parkedQueued)
+                    memcpy(parkedPeer, output + 4, sizeof(parkedPeer));
+                auto &slot = parkedFrames[(parkedHead + parkedQueued) % parkedFrameCount];
+                slot.length = frame.length;
+                slot.llw = frame.llw;
+                memcpy(slot.bytes, frame.bytes, frame.length);
+                ++parkedQueued;
+                parkedPeak = max(parkedPeak, parkedQueued);
+                ++transmitParked;
+                if (shortFrame)
+                    ++transmitHeldShort;
+                transmitHead = (transmitHead + 1) % transmitFrameCount;
+                --transmitQueued;
+                continue;
+            }
+            // No room to park it: it waits at the head, and what is behind it waits too, as before.
             // Once per frame, not once per attempt: the pump asks again every millisecond.
-            if (*written < 1200 && transmitHeldMark != transmitPopped + 1) {
+            if (shortFrame && transmitHeldMark != transmitPopped + 1) {
                 transmitHeldMark = transmitPopped + 1;
                 ++transmitHeldShort;
             }
@@ -1459,6 +1496,8 @@ bool ItlAWDLInterface::popTransmit(uint8_t *output, size_t available, size_t *wr
         --transmitQueued;
         ++transmitPopped;
         if (result == ItlAWDL::BuildResult::Ready) {
+            if (parkedQueued)
+                ++transmitPassed;   // Went ahead of the held peer's frames.
             ++transmitSequence;
             return true;
         }
@@ -1485,12 +1524,15 @@ bool ItlAWDLInterface::serviceTransmit()
         setProperty("ItlwmAWDLTxAccepted", transmitAccepted, 32);
         setProperty("ItlwmAWDLTxCompleted", transmitCompleted, 32);
         setProperty("ItlwmAWDLTxDropped", transmitDropped, 32);
+        setProperty("ItlwmAWDLTxParked", transmitParked, 32);
+        setProperty("ItlwmAWDLTxParkedPeak", parkedPeak, 32);
+        setProperty("ItlwmAWDLTxPassedParked", transmitPassed, 32);
         if (auto *depths = OSData::withBytes(transmitDepthBins, sizeof(transmitDepthBins))) {
             setProperty("ItlwmAWDLTxDepthBins", depths);
             depths->release();
         }
     }
-    return transmitQueued || transmitDoneCount;
+    return transmitQueued || parkedQueued || transmitDoneCount;
 }
 
 UInt32 ItlAWDLInterface::rejectTransmit(OSObject *owner, IOSkywalkTxSubmissionQueue*,
@@ -1571,6 +1613,9 @@ void ItlAWDLInterface::releaseNetworkResources()
         dataTransmitEnabled = false;
     transmitQueued = 0;
     transmitHead = 0;
+    // The held peer's copies go with the queue they came from.
+    parkedQueued = 0;
+    parkedHead = 0;
     if (registrationAttempted) {
         registrationAttempted = false;
         deregisterEthernetInterface(0);
@@ -1712,6 +1757,11 @@ void ItlAWDLInterface::free()
         IOFree(transmitFrames, transmitFramesBytes);
         transmitFrames = nullptr;
         transmitFramesBytes = 0;
+    }
+    if (parkedFrames) {
+        IOFree(parkedFrames, sizeof(TransmitFrame) * parkedFrameCount);
+        parkedFrames = nullptr;
+        parkedQueued = 0;
     }
     if (configurationLock) {
         IOLockFree(configurationLock);
@@ -1987,6 +2037,16 @@ IOReturn ItlAWDLInterface::initializeNetwork(IO80211Controller *controller,
         transmitFrames = static_cast<TransmitFrame *>(IOMalloc(sizeof(TransmitFrame) * transmitFrameCount));
         if (transmitFrames)
             transmitFramesBytes = sizeof(TransmitFrame) * transmitFrameCount;
+        // Room to park as many frames as the FIFO holds, up to parkedFrameMax. Without it a held frame waits at
+        // the head as before.
+        if (parkedFrames) {
+            IOFree(parkedFrames, sizeof(TransmitFrame) * parkedFrameCount);
+            parkedFrames = nullptr;
+        }
+        parkedQueued = parkedHead = 0;
+        parkedFrameCount = min(transmitFrameCount, parkedFrameMax);
+        parkedFrames = static_cast<TransmitFrame *>(IOMalloc(sizeof(TransmitFrame) * parkedFrameCount));
+        setProperty("ItlwmAWDLTxParkFrames", parkedFrames ? parkedFrameCount : 0, 32);
         dataTransmitEnabled = transmitFrames != nullptr;
         setProperty("ItlwmAWDLTxQueueFrames", transmitFrameCount, 32);
     }

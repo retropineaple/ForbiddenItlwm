@@ -30,7 +30,7 @@ public:
     // Under the shared gate. Converts the oldest queued frame into a caller-owned buffer.
     bool popTransmit(uint8_t *, size_t, size_t *, const uint8_t *holdPayloadFor, bool holdEverySize = false);
     // Frames macOS has queued that the driver hasn't taken yet.
-    unsigned queuedTransmit() const { return transmitQueued; }
+    unsigned queuedTransmit() const { return transmitQueued + parkedQueued; }
     // Under the shared gate. Puts one Ethernet frame from the companion interface (llw0) into the same ring
     // awdl0's own frames wait in, so it goes to the same peers on the same schedule. False when it didn't fit.
     bool queueCompanionTransmit(const uint8_t *ethernet, size_t length);
@@ -164,6 +164,16 @@ private:
     void drainTransmitDone();
     uint32_t transmitDepthBins[9] = {};
     uint16_t transmitSequence = 0;
+    // Frames for the one peer the radio holds (holdPayloadFor), taken off the FIFO in their order so the frames
+    // behind them, for other peers, still go. They leave first, in order, once that peer is no longer held, and
+    // the peer's later frames join them meanwhile. Without this a held frame at the head stopped all of awdl0:
+    // with the iPhone idle on its Wi-Fi network (on our channel 1 slot in 16) and an iPad in Sidecar, the iPad's
+    // TCP over awdl0 resent 26 to 66 % of its packets and the iPad ended each session after 20 to 52 s.
+    static constexpr unsigned parkedFrameMax = 2048;
+    unsigned parkedFrameCount = 0;
+    TransmitFrame *parkedFrames = nullptr;
+    unsigned parkedHead = 0, parkedQueued = 0, parkedPeak = 0, transmitParked = 0, transmitPassed = 0;
+    uint8_t parkedPeer[6] = {};
     bool dataTransmitEnabled = false;
     ItlAWDLNativeState nativeState;
     unsigned oobRequests = 0;
