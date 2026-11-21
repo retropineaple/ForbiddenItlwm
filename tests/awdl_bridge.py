@@ -17,6 +17,16 @@ program=r'''
 static unsigned itlAWDLFixedChannel() { return 6; }
 static unsigned itlAWDLChannelClass() { return 0; }
 static bool itlAWDLTwoStreams() { return false; }
+// The driver's itlBuildSync (aligned to the iPhone's clock only with -itlawdlsyncalign) is a file-level helper like the three above;
+// the host model uses its default, the fixed local schedule with this node as master.
+static ItlAWDL::BuildResult itlBuildSync(const uint8_t *address, const uint8_t *, size_t, uint64_t nowUS,
+                                         uint8_t *sync, size_t capacity, size_t *length)
+{
+    const uint8_t fixedChannel = uint8_t(itlAWDLFixedChannel());
+    ItlAWDL::SyncPrefix settings = {fixedChannel,fixedChannel,0,0,16,110,0x1000,16,16,0,3,3,3,3,{}};
+    memcpy(settings.master, address, 6);
+    return ItlAWDL::buildLocalFixedSchedule(settings, 0, nowUS, 0, sync, capacity, length);
+}
 using IOReturn=unsigned;
 enum { kIOReturnSuccess=0,kIOReturnBadArgument=1,kIOReturnNotReady=2,
        kIOReturnNoMemory=3,kIOReturnUnsupported=4,kIOReturnError=5,MBUF_DONTWAIT=0 };

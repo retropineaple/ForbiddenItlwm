@@ -31,6 +31,8 @@ struct ItlAWDLInterface:Owner {
     void observeDataFrame(const uint8_t*,size_t);
     unsigned queueNotes=0;
     void noteQueueState(const char*) { ++queueNotes; }
+    bool peerAliveWanted=false;unsigned keepCalls=0;uint8_t keepLast[6]={};
+    void keepPeerAlive(const uint8_t*peer) { ++keepCalls; memcpy(keepLast,peer,6); }
 };
 '''
 source=(root/'ForbiddenItlwm/AirportItlwmV2.cpp').read_text()
@@ -77,6 +79,13 @@ int main() {
     // Frames to someone else are never delivered.
     ItlAWDLInterface other;other.dataDeliverEnabled=true;const unsigned before=enqueues;
     frame[4]=2;other.observeDataFrame(frame,84);assert(enqueues==before && !other.dataCopyAttempts);frame[4]=255;
+    // -itlawdlpeeralive: only unicast to us from a peer (not multicast, not our own echoes) reaches keepPeerAlive, with the source.
+    ItlAWDLInterface alive;alive.dataDeliverEnabled=true;alive.peerAliveWanted=true;
+    alive.observeDataFrame(frame,84);assert(!alive.keepCalls);                     // multicast destination
+    alive.rx.allocated=alive.rx.returned=0;alive.rx.packet={};                       // the queue disposed the packet
+    memcpy(frame+4,alive.localFrameAddress,6);alive.observeDataFrame(frame,84);
+    assert(alive.keepCalls==1 && !memcmp(alive.keepLast,frame+10,6));                // unicast to us
+    ItlAWDLInterface off;off.dataDeliverEnabled=true;off.observeDataFrame(frame,84);assert(!off.keepCalls);
     puts("bounded real-frame RX copy/delivery/cleanup: passed (host mocks only)");
 }
 '''

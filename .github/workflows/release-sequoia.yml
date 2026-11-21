@@ -1,0 +1,140 @@
+name: Release (Sequoia)
+
+# Builds the macOS Sequoia 15.8.x kexts (ForbiddenItlwm and BTLEAdvFixup), checks them, and packs them.
+# Push a tag such as v0.5.4-beta.3 to publish a GitHub release with the zip and its checksum.
+# "Run workflow" builds and checks the same things and keeps the zip as a run artifact without publishing,
+# unless "publish" is ticked and a tag is given.
+#
+# The kexts are not signed. Like every build of this project they are loaded from OpenCore (see docs/INSTALL.md).
+# One zip per macOS version: never load the Sequoia kexts on another version.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to name the zip and the release (for example v0.5.4-beta.3)'
+        required: false
+        default: 'dev'
+      publish:
+        description: 'Publish a GitHub release for the tag (the tag must already exist)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-sequoia-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Pinned so a build is repeatable. MacKernelSDK is the commit this tree has been built and tested with;
+  # Lilu is the version in docs/INSTALL.md ("Tested with"), whose DEBUG release carries the SDK headers.
+  MACKERNELSDK_REV: 3f750085caa17ec3a7880f11c11bf4f48cd6a164
+  LILU_VERSION: '1.7.2'
+
+jobs:
+  sequoia:
+    name: Build, check and pack (Sequoia 15.8.x)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Name the build
+        id: name
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then tag="${GITHUB_REF_NAME}"; else tag="${INPUT_TAG:-dev}"; fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "zip=ForbiddenItlwm-${tag}-Sequoia-15.8.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch MacKernelSDK (pinned)
+        run: |
+          git clone --quiet https://github.com/acidanthera/MacKernelSDK MacKernelSDK
+          git -C MacKernelSDK checkout --quiet "${MACKERNELSDK_REV}"
+          git -C MacKernelSDK log -1 --format='MacKernelSDK %H'
+
+      - name: Build ForbiddenItlwm.kext (Sequoia)
+        run: python3 tools/build.py --target sequoia -j 4
+
+      - name: Check Apple's AWDL function table against the build
+        run: python3 tools/abi/audit_vtable.py --target sequoia --build build --lifecycle-overrides
+
+      - name: Host tests (sanitizers)
+        env:
+          # The default BTLEAdvFixup pattern check reads this Mac's bluetoothd, which on a runner is another build.
+          FORBIDDEN_SKIP_HOST_BLUETOOTHD: '1'
+        run: python3 tools/test_awdl.py
+
+      - name: Fetch the Lilu DEBUG release (for the BTLEAdvFixup headers)
+        run: |
+          mkdir -p btle-tree
+          cp -R MacKernelSDK btle-tree/MacKernelSDK
+          curl -fsSL -o lilu.zip "https://github.com/acidanthera/Lilu/releases/download/${LILU_VERSION}/Lilu-${LILU_VERSION}-DEBUG.zip"
+          unzip -q lilu.zip -d btle-tree
+          test -d btle-tree/Lilu.kext/Contents/Resources
+
+      - name: Build BTLEAdvFixup.kext (Sequoia)
+        run: python3 tools/build_btleadv.py --target sequoia --tree btle-tree --out build-btleadv
+
+      - name: Pack
+        id: pack
+        env:
+          ZIP: ${{ steps.name.outputs.zip }}
+          TAG: ${{ steps.name.outputs.tag }}
+        run: |
+          dir="ForbiddenItlwm-${TAG}-Sequoia-15.8"
+          mkdir -p "dist/${dir}"
+          cp -R build/ForbiddenItlwm.kext "dist/${dir}/"
+          cp -R build-btleadv/BTLEAdvFixup.kext "dist/${dir}/"
+          {
+            echo "ForbiddenItlwm ${TAG} for macOS Sequoia 15.8.x only."
+            echo "Kexts are not signed; load them from OpenCore. See docs/INSTALL.md."
+            echo
+            (cd dist && find "${dir}" -type f \( -path '*/MacOS/*' -o -name Info.plist \) -print0 | xargs -0 shasum -a 256)
+          } > "dist/${dir}/BUILD-INFO.txt"
+          (cd dist && zip -qry "${ZIP}" "${dir}")
+          (cd dist && shasum -a 256 "${ZIP}" > "${ZIP}.sha256")
+          cat "dist/${dir}/BUILD-INFO.txt"
+          echo "zip=dist/${ZIP}" >> "$GITHUB_OUTPUT"
+
+      - name: Keep the zip as a run artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.name.outputs.zip }}
+          path: |
+            dist/${{ steps.name.outputs.zip }}
+            dist/${{ steps.name.outputs.zip }}.sha256
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: github.ref_type == 'tag' || (github.event.inputs.publish == 'true' && github.event.inputs.tag != '' && github.event.inputs.tag != 'dev')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.name.outputs.tag }}
+          ZIP: ${{ steps.pack.outputs.zip }}
+        run: |
+          version="${TAG#v}"
+          # The release notes are this version's section of CHANGELOG.md, or "Unreleased" if there is none yet.
+          section() { awk -v h="## $1" '$0 == h {on=1; next} /^## / {on=0} on' CHANGELOG.md; }
+          notes="$(section "${version}")"
+          [ -n "${notes}" ] || notes="$(section Unreleased)"
+          {
+            echo "${notes}"
+            echo
+            echo "---"
+            echo "Built by GitHub Actions for **macOS Sequoia 15.8.x only**. Each macOS version has its own kexts. SHA-256 is in the \`.sha256\` file."
+          } > release-notes.md
+          flags=""
+          case "${TAG}" in *-*) flags="--prerelease";; esac
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${ZIP}" "${ZIP}.sha256" --clobber
+          else
+            gh release create "${TAG}" "${ZIP}" "${ZIP}.sha256" --title "${TAG} (Sequoia)" --notes-file release-notes.md ${flags}
+          fi

@@ -80,6 +80,9 @@ public:
     IOReturn receiveAWDLActionFrame(mbuf_t, size_t, uint32_t, int32_t);
     void observeAWDLDataFrame(const uint8_t*, size_t);
     IOReturn buildAWDLSyncProbe(mbuf_t*, uint64_t);
+    IOReturn buildAWDLUnicastMI(mbuf_t*, uint8_t*, uint64_t);
+    bool umiPendingAWDL();
+    void noteAWDLUmiTxResult(const uint8_t*, bool);
     IOReturn buildAWDLTransmit(mbuf_t*, const uint8_t *holdPayloadFor = nullptr, bool holdEverySize = false);
     bool serviceAWDLTransmit();
     unsigned queuedAWDLTransmit();

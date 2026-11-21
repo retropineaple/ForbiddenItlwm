@@ -103,6 +103,7 @@ void AirportItlwmSkywalkInterface::stopWCL()
     if (fHalService) {
         ieee80211com *ic = fHalService->get80211Controller();
         ic->ic_wcl_join_requested = false;
+        ic->ic_wcl_join_channel = 0;
         ic->ic_wcl_scan_requested = false;
         explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
     }
@@ -271,6 +272,96 @@ static struct {
         bgscanFailed, stateError, doneEvents, doneSkipped, completedOk, completedTimeout, beaconsWhilePending;
 } wclScanStats;
 
+
+// Association timeline: when each step of a scan or join happened, in milliseconds since the first one, so a slow
+// association can be taken apart. Published as ItlwmWCLTimeline (8-byte entries: u32 ms, u8 kind, u8 arg, u16 val; the last
+// 96, oldest first once it wraps) with ItlwmWCLTimelineCount; tools/diag/assoc_timeline.py decodes it.
+namespace {
+enum WclMarkKind : uint8_t {
+    kMarkScanRequest = 1, kMarkScanAccepted, kMarkScanRefused, kMarkScanDoneEvent, kMarkScanFinished,
+    kMarkJoinRequest, kMarkJoinStarted, kMarkJoinRefused, kMarkJoinChannel, kMarkAssocDone, kMarkFirstBeacon,
+    kMarkLinkUp, kMarkLinkDown, kMarkDeauth, kMarkJoinFinished, kMarkDriverReady, kMarkDriverStopped,
+    kMarkScanParams   // arg: scan type (2 passive), val: channels asked for (0 = all)
+};
+struct WclMark { uint32_t ms; uint8_t kind; uint8_t arg; uint16_t val; };
+constexpr unsigned kWclMarks = 96;
+WclMark wclMarks[kWclMarks];
+uint32_t wclMarkCount;
+uint64_t wclMarkBase;
+// A cached BSS older than this is not trusted for a one-channel join scan.
+constexpr uint64_t kWclJoinCacheMaxAgeMs = 30000;
+
+// Every BSS a scan reported to macOS: its channel and when. net80211's node cache is emptied when the firmware restarts
+// (a join with a private MAC change restarts it just before the association), so the join's one-channel scan reads this instead.
+struct WclSeen { uint8_t bssid[6]; uint8_t channel; uint8_t ssidLength; uint8_t ssid[32]; uint64_t ms; };
+constexpr unsigned kWclSeen = 64;
+WclSeen wclSeen[kWclSeen];
+unsigned wclSeenNext;
+uint32_t wclScanBeaconsAtRequest;
+}
+
+static void wclMark(uint8_t kind, uint8_t arg = 0, uint16_t val = 0)
+{
+    const uint64_t now = airport_up_time();
+    if (!wclMarkBase)
+        wclMarkBase = now;
+    WclMark &m = wclMarks[wclMarkCount++ % kWclMarks];
+    m.ms = uint32_t(now - wclMarkBase);
+    m.kind = kind;
+    m.arg = arg;
+    m.val = val;
+}
+
+static void wclMarksPublish(IOService *service)
+{
+    if (!service)
+        return;
+    const uint32_t n = wclMarkCount < kWclMarks ? wclMarkCount : kWclMarks;
+    WclMark ordered[kWclMarks];
+    const uint32_t first = wclMarkCount < kWclMarks ? 0 : wclMarkCount % kWclMarks;
+    for (uint32_t i = 0; i < n; ++i)
+        ordered[i] = wclMarks[(first + i) % kWclMarks];
+    if (auto *data = OSData::withBytes(ordered, n * sizeof(WclMark))) {
+        service->setProperty("ItlwmWCLTimeline", data);
+        data->release();
+    }
+    service->setProperty("ItlwmWCLTimelineCount", wclMarkCount, 32);
+}
+
+static void wclNoteSeen(const ieee80211_node *node, unsigned channel)
+{
+    if (!node || node->ni_esslen > 32 || !channel || channel > 196)
+        return;
+    WclSeen *slot = nullptr;
+    for (auto &entry : wclSeen)
+        if (entry.ms && !memcmp(entry.bssid, node->ni_bssid, 6)) {
+            slot = &entry;
+            break;
+        }
+    if (!slot)
+        slot = &wclSeen[wclSeenNext++ % kWclSeen];
+    memcpy(slot->bssid, node->ni_bssid, 6);
+    slot->channel = uint8_t(channel);
+    slot->ssidLength = uint8_t(node->ni_esslen);
+    memcpy(slot->ssid, node->ni_essid, node->ni_esslen);
+    slot->ms = airport_up_time();
+}
+
+// The channel of the BSS `bssid`, 0 when it was not seen lately, is a different network, or was heard too long ago.
+static uint8_t wclCachedJoinChannel(ieee80211com *ic, const uint8_t *bssid, const uint8_t *ssid, size_t ssidLength)
+{
+    const uint64_t now = airport_up_time();
+    for (auto &entry : wclSeen)
+        if (entry.ms && !memcmp(entry.bssid, bssid, 6))
+            return (entry.ssidLength == ssidLength && !memcmp(entry.ssid, ssid, ssidLength) &&
+                    now - entry.ms <= kWclJoinCacheMaxAgeMs) ? entry.channel : 0;
+    ieee80211_node *cached = ieee80211_find_node(ic, bssid);
+    if (!cached || !cached->ni_chan || cached->ni_esslen != ssidLength || memcmp(cached->ni_essid, ssid, ssidLength) ||
+        airport_up_time() - cached->ni_age_ts > kWclJoinCacheMaxAgeMs)
+        return 0;
+    return uint8_t(ieee80211_chan2ieee(ic, cached->ni_chan));
+}
+
 static void wclScanPublish(IOService *service, const char *last)
 {
     char text[200];
@@ -290,7 +381,9 @@ static void wclScanPublish(IOService *service, const char *last)
 IOReturn AirportItlwmSkywalkInterface::beginWCLScan(apple80211ScanRequest *request)
 {
     ++wclScanStats.requests;
+    wclMark(kMarkScanRequest);
     IOReturn result = startWCLScan(request);
+    wclMark(result == kIOReturnSuccess ? kMarkScanAccepted : kMarkScanRefused, 0, uint16_t(result));
     char last[96];
     ieee80211com *ic = fHalService->get80211Controller();
     snprintf(last, sizeof(last), "request #%u -> 0x%x, state %d, pending %d, join %d, bgscan %d",
@@ -331,13 +424,21 @@ IOReturn AirportItlwmSkywalkInterface::startWCLScan(apple80211ScanRequest *reque
             return kIOReturnUnsupported;
         }
     }
+    wclMark(kMarkScanParams, uint8_t(scan.type), uint16_t(scan.channelCount));
+    wclScanBeaconsAtRequest = wclScanStats.beaconsWhilePending;
     scanPending = true;
     scanCompleted = false;
-    scanSkipCompletion = ic->ic_state == IEEE80211_S_SCAN &&
+    scanSkipCompletion = ic->ic_state == IEEE80211_S_SCAN && !ic->ic_wcl_scan_idle &&
         ((scan.type != 2 && scan.ssidLength != 0) ||
          ic->ic_wcl_scan_ssid_length != 0 || ic->ic_des_esslen != 0);
     ic->ic_wcl_scan_requested = true;
-    ic->ic_wcl_scan_active = scan.type != 2;
+    // macOS's broad and quick auto-join scans are type 2 (passive): a passive dwell is 110 TU on every channel (38 channels
+    // took 4.4 s) and a 3-channel scan can miss the access point's beacon, so airportd found no network and rescanned
+    // everything after a pause. Probing (a wildcard probe request) on the channels that allow it makes the AP answer at once
+    // and dwell 10 to 30 TU; DFS and passive-only channels stay passive (AirportWCL::probeChannel). -itlstrictpassive
+    // keeps macOS's passive scans passive.
+    char strictPassive[8];
+    ic->ic_wcl_scan_active = scan.type != 2 || !PE_parse_boot_argn("-itlstrictpassive", strictPassive, sizeof(strictPassive));
     ic->ic_wcl_scan_ssid_length = scan.type == 2 ? 0 : scan.ssidLength;
     memcpy(ic->ic_wcl_scan_ssid, scan.ssid, sizeof(scan.ssid));
     ic->ic_wcl_scan_restricted = scan.channelCount != 0;
@@ -352,7 +453,7 @@ IOReturn AirportItlwmSkywalkInterface::startWCLScan(apple80211ScanRequest *reque
             ++wclScanStats.bgscanFailed;
             return kIOReturnBusy;
         }
-    } else if (ic->ic_state != IEEE80211_S_SCAN) {
+    } else if (ic->ic_state != IEEE80211_S_SCAN || ic->ic_wcl_scan_idle) {
         int error = ic->ic_newstate(ic, IEEE80211_S_SCAN, -1);
         if (error) {
             scanPending = false;
@@ -375,6 +476,9 @@ void AirportItlwmSkywalkInterface::finishWCLScan(IOReturn status)
     scanSource->cancelTimeout();
     fHalService->get80211Controller()->ic_wcl_scan_requested = false;
     ++(status == kIOReturnSuccess ? wclScanStats.completedOk : wclScanStats.completedTimeout);
+    wclMark(kMarkScanFinished, 0, uint16_t(status));
+    wclMark(kMarkScanParams + 1, 0, uint16_t(wclScanStats.beaconsWhilePending - wclScanBeaconsAtRequest));   // beacons heard during it
+    wclMarksPublish(instance);
     char last[64];
     snprintf(last, sizeof(last), "scan done 0x%x after request #%u", status, wclScanStats.requests);
     wclScanPublish(instance, last);
@@ -397,6 +501,7 @@ void AirportItlwmSkywalkInterface::publishWCLBeacon(const ieee80211_node *node, 
     unsigned channel = ieee80211_chan2ieee(ic, node->ni_chan);
     if (!channel || channel > 196)
         return;
+    wclNoteSeen(node, channel);
     size_t size = sizeof(AirportWCL::BeaconMetadata) + length;
     auto metadata = static_cast<AirportWCL::BeaconMetadata *>(IOMalloc(size));
     if (!metadata)
@@ -500,7 +605,10 @@ IOReturn AirportItlwmSkywalkInterface::beginWCLJoin(apple80211AssocCandidates *r
     if (!AirportWCL::decodeJoin(request, 0x2cc, join)) {
         return kIOReturnBadArgument;
     }
-    return startWCLJoin(join);
+    wclMark(kMarkJoinRequest);
+    IOReturn result = startWCLJoin(join);
+    wclMark(result == kIOReturnSuccess ? kMarkJoinStarted : kMarkJoinRefused, 0, uint16_t(result));
+    return result;
 }
 
 IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &join)
@@ -516,6 +624,7 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     if (supported && !joinPending && ic->ic_wcl_mac_reconfig &&
         (ic->ic_if.if_flags & IFF_UP)) {
         deferredJoin = join;
+        wclJoinChannelHint = wclCachedJoinChannel(ic, join.bssid, join.ssid, join.ssidLength);
         memcpy(joinBSSID, join.bssid, sizeof(joinBSSID));
         explicit_bzero(&join, sizeof(join));
         joinDeferred = joinPending = true;
@@ -596,6 +705,19 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     memcpy(ic->ic_des_bssid, join.bssid, 6);
     memcpy(joinBSSID, join.bssid, 6);
     ic->ic_flags |= IEEE80211_F_DESBSSID;
+    // macOS scanned just before it asked to join, so the BSS is usually in the node cache: scan only its channel.
+    ic->ic_wcl_join_channel = 0;
+    char fastJoinOff[8];
+    if (PE_parse_boot_argn("-itlnofastjoin", fastJoinOff, sizeof(fastJoinOff)))
+        ;   // boot-arg: always scan every channel before a join, as before
+    else {
+        // A deferred join's cache was cleared by the firmware restart it waited for; its channel was read first.
+        ic->ic_wcl_join_channel = wclCachedJoinChannel(ic, joinBSSID, ic->ic_des_essid, ic->ic_des_esslen);
+        if (!ic->ic_wcl_join_channel)
+            ic->ic_wcl_join_channel = wclJoinChannelHint;
+    }
+    wclJoinChannelHint = 0;
+    wclMark(kMarkJoinChannel, ic->ic_wcl_join_channel);
     ic->ic_wcl_join_requested = true;
     ic->ic_wcl_scan_requested = false;
     current_authtype_lower = join.lowerAuth;
@@ -608,10 +730,11 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     bzero(wclBeaconInfo, sizeof(wclBeaconInfo));
     disassocIsVoluntary = false;
     joinTimer->setTimeoutMS(30000);
-    if (ic->ic_state != IEEE80211_S_SCAN && ic->ic_newstate(ic, IEEE80211_S_SCAN, -1)) {
+    if ((ic->ic_state != IEEE80211_S_SCAN || ic->ic_wcl_scan_idle) && ic->ic_newstate(ic, IEEE80211_S_SCAN, -1)) {
         joinPending = false;
         joinTimer->cancelTimeout();
         ic->ic_wcl_join_requested = false;
+        ic->ic_wcl_join_channel = 0;
         clearWCLPMKSA();
         ic->ic_wcl_enterprise = false;
         explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
@@ -650,11 +773,15 @@ void AirportItlwmSkywalkInterface::finishWCLJoin(uint16_t status, uint16_t reaso
     explicit_bzero(&deferredJoin, sizeof(deferredJoin));
     joinTimer->cancelTimeout();
     instance->postMessage(this, AirportWCL::ConnectComplete, &event, sizeof(event), true);
+    fHalService->get80211Controller()->ic_wcl_join_channel = 0;
+    wclMark(kMarkJoinFinished, uint8_t(status), reason);
+    wclMarksPublish(instance);
     if (status) {
         portAuthorized = false;
         updateWCLLinkQuality(true);
         ieee80211com *ic = fHalService->get80211Controller();
         ic->ic_wcl_join_requested = false;
+        ic->ic_wcl_join_channel = 0;
         clearWCLPMKSA();
         ic->ic_wcl_enterprise = false;
         explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
@@ -680,6 +807,7 @@ IOReturn AirportItlwmSkywalkInterface::leaveWCLNetwork()
     explicit_bzero(&deferredJoin, sizeof(deferredJoin));
     joinTimer->cancelTimeout();
     ic->ic_wcl_join_requested = false;
+    ic->ic_wcl_join_channel = 0;
     wclAssociatedBeacons = 0;
     wclBssValid = false;
     disassocIsVoluntary = true;
@@ -799,6 +927,7 @@ void AirportItlwmSkywalkInterface::handleWCLLink(bool up)
     portAuthorized = up;
     // itlwm_lqmint: a new link (or none) starts over, so the first update after a join is never held back.
     wclLqmLastPostNs = 0;
+    wclMark(up ? kMarkLinkUp : kMarkLinkDown);
     if (!up)
         AirportWCL::resetLinkQuality(wclLinkQualityReported, [this](int32_t quality) {
             itlReportLinkQuality(static_cast<IOSkywalkNetworkInterface *>(this), uint32_t(quality));
@@ -846,6 +975,7 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
         case IEEE80211_EVT_DRIVER_READY:
         case IEEE80211_EVT_DRIVER_STOPPED: {
             bool ready = code == IEEE80211_EVT_DRIVER_READY;
+            wclMark(ready ? kMarkDriverReady : kMarkDriverStopped);
             if (!ready) {
                 finishWCLScan(ic->ic_wcl_mac_reconfig ? kIOReturnAborted : kIOReturnOffline);
                 finishWCLJoin(1, 0, kIOReturnOffline);
@@ -855,6 +985,7 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                 });
                 updateWCLLinkQuality(true);
                 ic->ic_wcl_join_requested = false;
+                ic->ic_wcl_join_channel = 0;
                 clearWCLPMKSA();
                 ic->ic_wcl_enterprise = false;
                 explicit_bzero(ic->ic_psk, sizeof(ic->ic_psk));
@@ -952,6 +1083,7 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                 if (!wclBssValid)
                     break;
                 firstBeaconNotified = true;
+                wclMark(kMarkFirstBeacon);
                 AirportWCL::LinkStatusEvent link = {};
                 memcpy(link.bssid, joinBSSID, sizeof(link.bssid));
                 link.up = 1;
@@ -966,6 +1098,7 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
         }
         case IEEE80211_EVT_SCAN_DONE:
             ++wclScanStats.doneEvents;
+            wclMark(kMarkScanDoneEvent, ic->ic_state);
             if (scanPending) {
                 if (scanSkipCompletion) {
                     scanSkipCompletion = false;
@@ -974,6 +1107,9 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                 else {
                     scanCompleted = true;
                     scanSource->setTimeoutMS(0);
+                    // This request is answered: the scan net80211 starts next (it rescans when nothing is joinable) must
+                    // not run its channels.
+                    ic->ic_wcl_scan_requested = false;
                 }
             }
             break;
@@ -984,6 +1120,7 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                 memcpy(event.bssid, joinBSSID, 6);
                 event.driverStatus = event.status ? kIOReturnError : kIOReturnSuccess;
                 assocNotified = !event.status;
+                wclMark(kMarkAssocDone, 0, event.status);
                 instance->postMessage(this, AirportWCL::AssocComplete, &event, sizeof(event), true);
                 if (event.status)
                     finishWCLJoin(event.status, 0, kIOReturnError);
@@ -994,6 +1131,8 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
             updateWCLLinkQuality(true);
             AirportWCL::DeauthEvent event = {};
             event.reason = ic->ic_deauth_reason;
+            wclMark(kMarkDeauth, 0, event.reason);
+            wclMarksPublish(instance);
             if (ic->ic_bss)
                 memcpy(event.bssid, ic->ic_bss->ni_bssid, 6);
             instance->postMessage(this, AirportWCL::Deauth, &event, sizeof(event), true);

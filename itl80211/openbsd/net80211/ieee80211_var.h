@@ -458,6 +458,12 @@ struct ieee80211com {
     bool ic_wcl_scan_restricted;
     uint8_t ic_wcl_scan_channels[32];
     uint32_t ic_wcl_scan_away_time_ms;
+    // The channel of the BSS a join was asked for, taken from the scan cache: the join's scan visits only that channel
+    // (0 = all channels, as before). Cleared when the join ends or the targeted scan finds nothing.
+    uint8_t ic_wcl_join_channel;
+    // The SCAN state is held without a scan running: nothing (macOS or a join) asked for one, so net80211's own endless scan
+    // loop is not run. The next scan or join request starts a scan from this state.
+    bool ic_wcl_scan_idle;
     uint64_t ic_wcl_tx_packets[4];
     uint64_t ic_wcl_rx_packets[4];
 #endif

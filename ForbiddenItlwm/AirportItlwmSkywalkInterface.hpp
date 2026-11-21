@@ -471,6 +471,8 @@ private:
     bool joinPending;
     bool joinDeferred = false;
     AirportWCL::JoinRequest deferredJoin = {};
+    // The channel of the deferred join's BSS, read from the scan cache before the firmware restart that cleared it.
+    uint8_t wclJoinChannelHint = 0;
     bool assocNotified;
     bool firstBeaconNotified;
     bool portAuthorized;

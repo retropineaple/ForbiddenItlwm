@@ -91,6 +91,7 @@ Users on Reddit and GitHub have reported:
 | Intel AX201 (Tiger Lake, dynabook G83) | macOS Sequoia 15.8.3, with 0.5.3-test1: AirDrop works both ways, also with an iPad, and iPad → Mac AirPlay works. On a network without 149, Mac → iPad works only without `-itlawdlcoexmulti` (issue #29) |
 | Intel AX210 (Dell Precision 5540) | macOS 26.7.3, with 0.5.3-test1: Mac → iPhone works; iPhone → Mac stalls on large photos and videos (issue #26, open) |
 | Intel AX411 class (AX1690i) | macOS 26.7.2, with 0.4.1-beta1: AirDrop works both ways, on channel 6 (issue #15) |
+| Intel AX200 (AMD Ryzen 9 5950X desktop) | macOS Sequoia 15.8.2 (24H232), with 0.5.4-beta.2 plus the filter fix: AirDrop works both ways. A 2.8 GB Mac → iPhone send over AWDL ran at 34 MB/s once the wired interface's MTU was 1484 (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#big-airdrop-sends-die-after-a-couple-of-seconds-unexpected-40)) |
 | Intel AX211 (Lenovo ThinkPad E16 Gen 3, Raptor Lake, PCI 8086:51F1) | macOS 26.7.1, with 0.3.1-test1: AirDrop works both ways (issue #6, which found the frame padding fixed in that build) |
 | Intel AX210 (Lenovo ThinkPad E14 Gen 5, AMD) | macOS 26.7.3, with 0.5.3-test1: the driver runs and the checks pass; AirDrop untested, no Apple device at hand (issue #43) |
 | Intel AX210 | macOS 26.7.2, with 0.5.4-beta.2: AirDrop works both ways; Sidecar and Universal Control fail (issue #56, same cause as #42) |

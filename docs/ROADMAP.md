@@ -43,3 +43,14 @@ What's being worked on, what comes next, and what's planned further out. These a
 - **0.2.0:** iMessage and other push services over Wi-Fi.
 
 See the [changelog](../CHANGELOG.md) for everything.
+
+## Open items from the 2026-11-20 camera and AirDrop investigation
+
+Details and numbers are in [AWDL-REFERENCE-DATA](AWDL-REFERENCE-DATA.md).
+
+- Block Ack: the iPhone answers our ADDBA requests (status 0, window 64) but the host never sees the answers, so aggregation never starts. Read `ITLAWDLRawBaAction` after a transfer to see whether the answers reach the host.
+- AirDrop Mac to iPhone over `awdl0` is much slower than the real Mac (peak 15 Mbit/s against 80 to 93): few slots used, 25% retries, rates capped at HT MCS 7 (`-itlawdlht2ss` lifts the cap; untested).
+- A listener that visits channels 149 and 6 per the family's plans (the real Mac does) is not implemented; discovery after the iPhone's AWDL has idled depends on it coming back to 161.
+- Continuity Camera: the remaining 2.8% loss is spread over all slots and is not explained by the iPhone's schedule.
+- Frame differences against the real Mac still to measure over the air: TLV 4 flags, remaining-AW field, TLV 18 width.
+

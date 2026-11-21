@@ -114,6 +114,20 @@ None of this moves data. It lets the registration finish. The video itself needs
 - **Two frame formats share the radio.** On Broadcom's host code the frames from the air are split by their SNAP header: Apple's OUI (`aa aa 03 00 17 f2 08 00`, then `03 04`, a sequence, `00 00` and the ethertype) goes to `awdl0`; an empty OUI (RFC 1042: `aa aa 03 00 00 00 86 dd`, then IPv6) goes to `llw0`. The same holds for transmit: only `awdl0` gets the Apple header added. This driver does the same in software: the receive parser marks plain RFC 1042 frames and the hand-off delivers them to `llw0` only; `llw0`'s transmit frames are queued on `awdl0`'s ring with a flag and built plain. The iPhone's camera stream is these frames: UDP between `fd00::/8` addresses, up to about 1,400 bytes each, addressed to the Mac's own AWDL address. (The AWDLLab notes describe the Broadcom side: `AWDL_DATA_ENCAP.md`, `AWDL_RX_DATA_TO_SKYWALK.md`, `AWDL_STAGE4_LLW_CLOSURE.md`.)
 - **What is left.** The stream arrives and the media stack reads it, but about 7.5% of the iPhone's frames never reach the radio's receive path (measured by 802.11 sequence number, in bursts of up to 100). The camera's video has no error correction, so a burst breaks a frame. See [DEBUGGING.md Case 3](DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way) for how that is measured and what has been ruled out.
 
+### 9. Continuity Camera and Sidecar: what the driver answers
+
+These two ask the driver for things AirDrop never does. Before it registers real-time traffic with the iPhone, macOS:
+
+- asks the driver to add the peer to a firmware cache (`setPEER_CACHE_CONTROL`, a 464-byte record: version at +0, operation at +4, peer address at +8) and sleeps until the driver posts event 51 with the same record and +4 set to 1 (added) or 3 (deleted). The driver posts it from a timer on the interface work loop a few milliseconds after its handler returns; posted from inside the handler, the wakeup would arrive before the caller sleeps and be lost. The record layout, the event number and this timing rule were first worked out by DrogaBox's [RTL8814Native](https://github.com/DrogaBox/RTL8814Native) for Tahoe; here they were checked on Sequoia.
+- sends low-latency parameters (`setLLW_PARAMS`), which are acknowledged and counted.
+- sends the iPhone a unicast action frame and waits for its transmit status, message 69 (peer address, then a status byte at +6; 0 means acknowledged). macOS sends that frame itself, but only inside an availability window, which this driver does not report. With `-itlawdlumiack` the driver posts the status instead, so the wait ends. Nothing is transmitted for it.
+
+None of this moves data. It lets the registration finish. The video itself needs `llw0`:
+
+- **`llw0`** (`-itlawdlllw`, `ForbiddenItlwm/AirportLLWInterface.*`). After registration the media stack opens a UDP connection with the flags "LowLatency Handoff" and wants the low latency interface macOS asks the driver to create (request 293, "companion Skywalk interface"). `llw0` is a second Skywalk interface on the Wi-Fi interface's class chain (role 2, id 9, BSD prefix `llw`, `awdl0` as its parent, same MAC). It needs a few things Apple's class does that the base family doesn't: its power state handler must not take the work loop that the 293 handler holds, its `ifnet` unique id must differ from `awdl0`'s (the 6-byte MAC plus `"ll"`), and its power state has to stay at 1 like every Skywalk interface.
+- **Two frame formats share the radio.** On Broadcom's host code the frames from the air are split by their SNAP header: Apple's OUI (`aa aa 03 00 17 f2 08 00`, then `03 04`, a sequence, `00 00` and the ethertype) goes to `awdl0`; an empty OUI (RFC 1042: `aa aa 03 00 00 00 86 dd`, then IPv6) goes to `llw0`. The same holds for transmit: only `awdl0` gets the Apple header added. This driver does the same in software: the receive parser marks plain RFC 1042 frames and the hand-off delivers them to `llw0` only; `llw0`'s transmit frames are queued on `awdl0`'s ring with a flag and built plain. The iPhone's camera stream is these frames: UDP between `fd00::/8` addresses, up to about 1,400 bytes each, addressed to the Mac's own AWDL address. (The AWDLLab notes describe the Broadcom side: `AWDL_DATA_ENCAP.md`, `AWDL_RX_DATA_TO_SKYWALK.md`, `AWDL_STAGE4_LLW_CLOSURE.md`.)
+- **What is left.** The stream arrives and the media stack reads it, but about 7.5% of the iPhone's frames never reach the radio's receive path (measured by 802.11 sequence number, in bursts of up to 100). The camera's video has no error correction, so a burst breaks a frame. See [DEBUGGING.md Case 3](DEBUGGING.md#case-3-continuity-camera-gets-part-of-the-way) for how that is measured and what has been ruled out.
+
 ## Why speed and connect time vary
 
 - **Speed follows the iPhone's own Wi-Fi.** Its channel sequence gives AirDrop the slots its station doesn't need:
@@ -139,7 +153,7 @@ These each took one or more test boots to learn.
 - **Cross-band retunes on a live binding crash the firmware.** Band changes are refused.
 - **Firmware TX status depends on the frame:** for broadcasts it only means the frame left the queue.
 - **ACKs must match the MAC context's address.** The listener carries the AWDL address so the firmware credits the peer's ACKs.
-- **`LOW_LATENCY_CMD` fails on the AX211's firmware** and takes Wi-Fi down with it, so it is disabled.
+- **`LOW_LATENCY_CMD` fails on the AX211's firmware** and takes Wi-Fi down with it, so it is skipped there. It is allowed on pre-AX210 cards with `-itlawdlcoexlowlat`.
 
 ## Source layout
 

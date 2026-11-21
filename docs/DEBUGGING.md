@@ -104,6 +104,8 @@ All under the I/O Registry root (`ioreg -l -w0 | grep ITLAWDLCoex`). Counters on
 
 **On the interface** (`ioreg -w0 -r -c ItlAWDLInterface -d 1 -l`): `ItlwmAWDLTxPacketsOffered`, `TxAccepted`, `TxCompleted` and `TxDropped` count packets from macOS into the driver. `TxDropped` should stay 0. `ItlwmAWDLClientEvents` records who opened and closed `awdl0`. `ItlwmAWDLLastUnsupported` names the last call the driver refused, usually `setMacAddress` or `setAWDL_AWDL_ADVERTISERS`, which is expected ([noise](#6-log-noise-that-is-harmless)).
 
+The action-frame gap counters (`ITLAWDLAf*`), the UMI and RTG counters and the analysis tools added for the camera and AirDrop work are described in [AWDL-DIAGNOSTICS](AWDL-DIAGNOSTICS.md).
+
 ## 4. Logs
 
 Use `/usr/bin/log`: in zsh a bare `log` is a built-in. `log show --start` wants whole seconds (`"2026-11-15 11:35:26"`); fractions return nothing.
@@ -124,6 +126,9 @@ Use `/usr/bin/log`: in zsh a bare `log` is a built-in. `log show --start` wants 
 What to read in a `send-finish` line: `result` 0 is success; `failureSubType` says why it failed (`cancelled`, `unexpected-40` is `EMSGSIZE`, `unexpected-57` is `ENOTCONN`); `transport` is `awdl`, `directWired` (your Ethernet, not AWDL at all), or `other` (cancelled before a path was chosen); `size` and `bytesPerSec` give the speed.
 
 ## 5. Capture and trace
+
+`python3 -I tools/diag/cc_analyze.py` reads a run's registry keys and prints PASS or FAIL for each thing that has gone wrong in a camera run so far: a wedged command ring, no TID 7 Block Ack, a station that never sleeps or a power table the firmware refused, loss by sequence number, gaps tied to the access point's beacons (chi-square against a uniform spread, and split by beacon class), and what rates and widths the iPhone really uses. Run it live, on a saved `ioreg -l -w0`, or with two dumps to see the difference. `tests/cc_analyze_test.py` keeps its maths honest.
+
 
 ### Packets (root to capture)
 

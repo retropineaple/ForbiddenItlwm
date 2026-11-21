@@ -93,7 +93,7 @@ with tempfile.TemporaryDirectory(prefix='forbidden-samech-') as d:
 # RX parsing/address/reorder guards. Continuity Camera updates the mpdu and frame hashes (plain RFC 1042 / llw0 routing, reject and sequence counters).
 import hashlib
 # iwx_rx_pkt: the security fixes add only length checks to fixed-size notifications (audit HL05).
-a=s.index('iwx_rx_pkt(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='b8f0830905eb3f86c3dcb30103a1126ad97a718073cd3154dc19f0776e7f08a7'
-a=s.index('iwx_rx_mpdu_mq(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='abcfa3705d1ec08491a833710eea48084d764a262a48889414b4920d6ec9cc80'
+a=s.index('iwx_rx_pkt(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='99c81bf68b1ed66d11815391e27059994cc67d94082ebb1e8e611ae0b596eb4d'
+a=s.index('iwx_rx_mpdu_mq(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='0b8fc0f5665c18be79e1a159609aa1bfdd20825a06ed2b7ae3eac0075116964a'
 # iwx_rx_frame: 0.6.0 phone 5 GHz channel tracking (PR #21) plus Continuity Camera receive diagnostics.
-a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='a890a3cf240ba2449a008549411885b30062f5fadf455796e627fb24b1b6569a'
+a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='23743ba67b1f14f7f612aa981c1479302a27676a7adc4a8da9576ec857345a9e'

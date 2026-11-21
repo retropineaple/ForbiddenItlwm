@@ -11,3 +11,13 @@ MacKernelSDK
 include/FwBinary.cpp
 .DS_Store
 *.log
+# Local build output and MCP tool state
+build-*/
+graphify-out/
+.serena/
+.codegraph/
+build-sequoia/
+test_cc_debug.txt
+*.pcap
+*.pcapng
+.claude/

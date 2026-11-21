@@ -205,6 +205,73 @@ private:
     IOTimerEventSource *umiAckTimer = nullptr;
     static void umiAckTick(OSObject *, IOTimerEventSource *);
     void postUmiAcks();
+    // -itlawdlpeeralive: the family drops the iPhone from its peer table when it has heard no action frame for 2 s and has no
+    // unicast activity from it for 6 s (IO80211AWDLPeer::shouldRemovePeerFromNDP, 24H232 0xffffff8002149bf5). That clears the
+    // camera's traffic registration and ends the real-time group every 6-11 s. The camera's video arrives on llw0, which does
+    // not update the family's per-peer unicast time, so this sets it (IO80211Peer::setLastRxUnicastLinkActivity, a plain store
+    // of mach_absolute_time) at most every 250 ms per peer, from the RX path (inside the work loop gate).
+    // -itlawdlndpkeep: raises the family's own limit (ndpRemovalTimeoutmSec) to 100 s through IO80211AWDLPeerManager::setAwdlCtl.
+    // Both call IO80211Family symbols that exist in 24H232 (Sequoia 15.x) only; other targets build them as no-ops.
+    bool peerAliveWanted = false, ndpKeepWanted = false, ullInfraWanted = false;
+    struct PeerAliveSlot { uint8_t mac[6]; uint64_t last; };
+    PeerAliveSlot peerAlive[4] = {};
+    uint64_t peerAliveInterval = 0;
+    uint32_t peerAliveCalls = 0, peerAliveNoManager = 0, peerAliveNoPeer = 0, ndpKeepApplied = 0, ullInfraApplied = 0;
+    // -itlawdlrtgkeep: the iPhone never sends the real-time group TLV (type 31) in the action frames we hear (ITLAWDLRtgPeerSeen 0 of
+    // 752), and the family removes an active RTG peer after 5 s without one (IO80211AWDLPeer::actionFrameReport, 24H232
+    // 0xffffff8002151549: "Active RTG Peer has no RTG TLV for 5 Seconds", then removePeerFromRealTimeGroup). The time it compares
+    // is a mach_absolute_time stamp at peer ivars +0x6a0 that parseAWDLRealTimeGroupTLV writes. This refreshes it while we hear the peer.
+    bool rtgKeepWanted = false;
+    uint64_t rtgKeepSanity = 0;
+    uint32_t rtgKeepRefreshed = 0, rtgKeepSkipped = 0;
+    void keepPeerAlive(const uint8_t *peer);
+    IOTimerEventSource *ndpKeepTimer = nullptr;
+    // -itlawdlawevents: availability-window events 41 (start, 36 B) and 43 (end, 40 B) for the family. The firmware's AWDL scheduler
+    // posts them on Broadcom; without them the family believes it is never inside a window, so handleUmiTimer / sendUnicastMI
+    // ("Asked to send an UMI, but we are not in an AW") never send the real-time UMI that makes the iPhone join the RTG and move to
+    // our channel plan (a real Mac: UMI 0xb000000, the iPhone's RTG TLV 40 ms later, its channel sequence converges on the Mac's).
+    // One start every 64 TU slot (AwNumber +4), the end 16 TU later, timed from the host clock. Layouts: AWDL_PEERMANAGER_DRIVER_ABI.md
+    // 2.2/2.5, handler of 24H232 read with REA. Also records the UMI requests the family then makes (ioctl 149 = AWDL_OOB_REQUEST).
+    bool awEventsWanted = false, awSyncEnabled = false, awInWindow = false;
+    IOTimerEventSource *awEventTimer = nullptr;
+    static void awEventTick(OSObject *, IOTimerEventSource *);
+    void postAwEvent();
+    void stopAwEvents();
+    uint16_t awNumber = 0;
+    uint32_t awStarts = 0, awEnds = 0, umiRequests = 0, awAlignedStarts = 0;
+    uint64_t awSlotStartUS = 0;
+    void noteUmiRequest(const apple80211_awdl_oob_request *data);
+    // -itlawdlumitx: the UMI is transmitted for real. noteUmiRequest keeps the family's template (copied inside the ioctl, the
+    // buffer is only valid during it), the HAL builds a unicast master indication from it and sends it in the iPhone's listening
+    // time, and the frame's own transmit result is reported as message 69 (status byte at +6: 0 acknowledged) instead of the
+    // fabricated acknowledgement of -itlawdlumiack, which is not posted while this is on.
+public:
+    struct UmiRequest { uint8_t peer[6]; uint16_t option; uint16_t length; uint8_t tlvs[512]; };
+private:
+    static constexpr unsigned umiQueueDepth = 2, umiResultDepth = 4;
+    bool umiTxWanted = false;
+    UmiRequest umiQueue[umiQueueDepth] = {};
+    unsigned umiQueueCount = 0, umiResultCount = 0;
+    uint8_t umiResultPeers[umiResultDepth][6] = {};
+    uint8_t umiResultOk[umiResultDepth] = {};
+    uint32_t umiTxQueued = 0, umiTxDropped = 0, umiResultsPosted = 0;
+    // What arrives in the 3 s after a UMI went out (ItlwmAWDLUmiRxRing, 20-byte entries: ms since the UMI u16, flags u8 (1 = to us,
+    // 2 = from the UMI's peer, 4 = unicast), subtype u8, length u16, rssi s8, channel u8, TLV count u8, then up to 11 TLV types).
+    struct UmiWatchEntry { uint16_t ms; uint8_t flags, subtype; uint16_t length; int8_t rssi; uint8_t channel, tlvCount; uint8_t types[11]; };
+    static constexpr unsigned umiWatchDepth = 40;
+    UmiWatchEntry umiWatch[umiWatchDepth] = {};
+    unsigned umiWatchCount = 0;
+    uint64_t umiWatchStartUS = 0, umiWatchEndUS = 0;
+    uint8_t umiWatchPeer[6] = {};
+    void noteUmiWatch(const uint8_t *frame, size_t length, uint32_t channel, int32_t rssi);
+public:
+    bool umiPending();
+    bool takeUmi(UmiRequest *out);
+    void noteUmiTxResult(const uint8_t *peer, bool acknowledged);
+private:
+    void postUmiResults();
+    static void ndpKeepTick(OSObject *, IOTimerEventSource *);
+    void applyNdpKeep();
     bool oobSampled = false, debugFlagsSet = false, debugFlagsWanted = false;
     IOReturn noteOobRequest(const apple80211_awdl_oob_request *, const char *);
     // Native 25G241 layout read from both the sender and Apple's Broadcom handler:
@@ -233,8 +300,17 @@ private:
         IOLockLock(configurationLock);
         const IOReturn result = slot.set(data);
         IOLockUnlock(configurationLock);
-        if (result == kIOReturnSuccess)
+        if (result == kIOReturnSuccess) {
             setProperty("ItlwmAWDLLastStoredRequest", name);
+            // The request exactly as macOS sent it (for example the channel sequence and its width flags), under ItlwmAWDLRaw_<name>.
+            char key[80];
+            snprintf(key, sizeof(key), "ItlwmAWDLRaw_%s", name);
+            if (auto *raw = OSData::withBytes(data, sizeof(T))) {
+                setProperty(key, raw);
+                raw->release();
+            }
+        }
+        noteCall(name, result);
         return result;
     }
     template <typename T> IOReturn readRequested(const ItlAWDLRequestedValue<T> &slot,
@@ -262,6 +338,44 @@ private:
     uint32_t managementSubmissions = 0;
     IOReturn unsupported(const char *operation) {
         setProperty("ItlwmAWDLLastUnsupported", operation);
+        noteCall(operation, kIOReturnUnsupported);
         return kIOReturnUnsupported;
     }
+    // Every apple80211 request the daemons make of this interface that goes through unsupported() or storeRequested():
+    // name, how many, and the last answer, published as ItlwmAWDLCalls ("name=count/result;..."). It shows what a
+    // Continuity Camera session asks for, not only the last refused call.
+    struct CallStat { const char *name; uint32_t count; uint32_t last; };
+    static constexpr unsigned callStatCapacity = 64;
+    CallStat callStats[callStatCapacity] = {};
+    unsigned callStatCount = 0;
+    uint32_t callTotal = 0;
+    void noteCall(const char *name, IOReturn result);
+    // Each distinct channel sequence macOS has asked for (up to four), published as ItlwmAWDLRawSeq0..3: the plan changes between
+    // the idle one and the real-time group's, and ItlwmAWDLRaw_<name> only keeps the latest.
+    uint8_t seqHistory[4][sizeof(apple80211_awdl_sync_channel_sequence)] = {};
+    unsigned seqHistoryCount = 0;
+    void noteSequenceHistory(const apple80211_awdl_sync_channel_sequence *data) {
+        if (!data)
+            return;
+        for (unsigned i = 0; i < seqHistoryCount; ++i)
+            if (!memcmp(seqHistory[i], data, sizeof(*data)))
+                return;
+        if (seqHistoryCount >= 4)
+            return;
+        memcpy(seqHistory[seqHistoryCount], data, sizeof(*data));
+        char key[32];
+        snprintf(key, sizeof(key), "ItlwmAWDLRawSeq%u", seqHistoryCount);
+        ++seqHistoryCount;
+        if (auto *raw = OSData::withBytes(data, sizeof(*data))) {
+            setProperty(key, raw);
+            raw->release();
+        }
+    }
+    // The raw traffic registration records (ioctl 164, 184 bytes: version, peer, name length and name, active, and 12 bytes
+    // the struct above stops short of), the distinct ones, for decoding the preferred channels and the bandwidth and latency
+    // a service asks for.
+    static constexpr unsigned trafficRegBytes = 184, trafficRegCapacity = 6;
+    uint8_t trafficRegs[trafficRegCapacity][trafficRegBytes] = {};
+    unsigned trafficRegCount = 0, trafficRegSeen = 0;
+    void noteTrafficRegistration(const apple80211_awdl_peer_traffic_registration *data);
 };
