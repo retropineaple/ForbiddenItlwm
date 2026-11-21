@@ -319,6 +319,16 @@ static void wclMarksPublish(IOService *service)
     service->setProperty("ItlwmWCLTimelineCount", wclMarkCount, 32);
 }
 
+// The channel of the cached BSS `bssid`, 0 when it is not cached, is a different network, or was heard too long ago.
+static uint8_t wclCachedJoinChannel(ieee80211com *ic, const uint8_t *bssid, const uint8_t *ssid, size_t ssidLength)
+{
+    ieee80211_node *cached = ieee80211_find_node(ic, bssid);
+    if (!cached || !cached->ni_chan || cached->ni_esslen != ssidLength || memcmp(cached->ni_essid, ssid, ssidLength) ||
+        airport_up_time() - cached->ni_age_ts > kWclJoinCacheMaxAgeMs)
+        return 0;
+    return uint8_t(ieee80211_chan2ieee(ic, cached->ni_chan));
+}
+
 static void wclScanPublish(IOService *service, const char *last)
 {
     char text[200];
@@ -383,7 +393,7 @@ IOReturn AirportItlwmSkywalkInterface::startWCLScan(apple80211ScanRequest *reque
     }
     scanPending = true;
     scanCompleted = false;
-    scanSkipCompletion = ic->ic_state == IEEE80211_S_SCAN &&
+    scanSkipCompletion = ic->ic_state == IEEE80211_S_SCAN && !ic->ic_wcl_scan_idle &&
         ((scan.type != 2 && scan.ssidLength != 0) ||
          ic->ic_wcl_scan_ssid_length != 0 || ic->ic_des_esslen != 0);
     ic->ic_wcl_scan_requested = true;
@@ -402,7 +412,7 @@ IOReturn AirportItlwmSkywalkInterface::startWCLScan(apple80211ScanRequest *reque
             ++wclScanStats.bgscanFailed;
             return kIOReturnBusy;
         }
-    } else if (ic->ic_state != IEEE80211_S_SCAN) {
+    } else if (ic->ic_state != IEEE80211_S_SCAN || ic->ic_wcl_scan_idle) {
         int error = ic->ic_newstate(ic, IEEE80211_S_SCAN, -1);
         if (error) {
             scanPending = false;
@@ -571,6 +581,7 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     if (supported && !joinPending && ic->ic_wcl_mac_reconfig &&
         (ic->ic_if.if_flags & IFF_UP)) {
         deferredJoin = join;
+        wclJoinChannelHint = wclCachedJoinChannel(ic, join.bssid, join.ssid, join.ssidLength);
         memcpy(joinBSSID, join.bssid, sizeof(joinBSSID));
         explicit_bzero(&join, sizeof(join));
         joinDeferred = joinPending = true;
@@ -656,12 +667,13 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     char fastJoinOff[8];
     if (PE_parse_boot_argn("-itlnofastjoin", fastJoinOff, sizeof(fastJoinOff)))
         ;   // boot-arg: always scan every channel before a join, as before
-    else if (ieee80211_node *cached = ieee80211_find_node(ic, joinBSSID)) {
-        if (cached->ni_chan && cached->ni_esslen == ic->ic_des_esslen &&
-            !memcmp(cached->ni_essid, ic->ic_des_essid, ic->ic_des_esslen) &&
-            airport_up_time() - cached->ni_age_ts <= kWclJoinCacheMaxAgeMs)
-            ic->ic_wcl_join_channel = uint8_t(ieee80211_chan2ieee(ic, cached->ni_chan));
+    else {
+        // A deferred join's cache was cleared by the firmware restart it waited for; its channel was read first.
+        ic->ic_wcl_join_channel = wclCachedJoinChannel(ic, joinBSSID, ic->ic_des_essid, ic->ic_des_esslen);
+        if (!ic->ic_wcl_join_channel)
+            ic->ic_wcl_join_channel = wclJoinChannelHint;
     }
+    wclJoinChannelHint = 0;
     wclMark(kMarkJoinChannel, ic->ic_wcl_join_channel);
     ic->ic_wcl_join_requested = true;
     ic->ic_wcl_scan_requested = false;
@@ -675,7 +687,7 @@ IOReturn AirportItlwmSkywalkInterface::startWCLJoin(AirportWCL::JoinRequest &joi
     bzero(wclBeaconInfo, sizeof(wclBeaconInfo));
     disassocIsVoluntary = false;
     joinTimer->setTimeoutMS(30000);
-    if (ic->ic_state != IEEE80211_S_SCAN && ic->ic_newstate(ic, IEEE80211_S_SCAN, -1)) {
+    if ((ic->ic_state != IEEE80211_S_SCAN || ic->ic_wcl_scan_idle) && ic->ic_newstate(ic, IEEE80211_S_SCAN, -1)) {
         joinPending = false;
         joinTimer->cancelTimeout();
         ic->ic_wcl_join_requested = false;
@@ -1022,6 +1034,9 @@ void AirportItlwmSkywalkInterface::handleWCLEvent(int code, void *data)
                 else {
                     scanCompleted = true;
                     scanSource->setTimeoutMS(0);
+                    // This request is answered: the scan net80211 starts next (it rescans when nothing is joinable) must
+                    // not run its channels.
+                    ic->ic_wcl_scan_requested = false;
                 }
             }
             break;

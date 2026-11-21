@@ -47,8 +47,32 @@ python3 -I tools/diag/assoc_timeline.py
 | join finished | `arg` is the status macOS was given |
 | driver ready / stopped | firmware initialisation done or torn down |
 
+## What the first timeline showed (2026-11-21, `assoc1`)
+
+```
+0      driver ready        453   scan requested        4003  scan done (3550 ms later)
+4015   scan requested      4120  scan done (105 ms)    4189  scan requested -> done 7923 (3734 ms)
+11724  scan done           12455 scan requested -> done 14861 (2406 ms)
+14944  join requested; driver stopped, ready again at 15131; join channel 0
+18934  scan done (3803 ms)  18968 association done (+34 ms)  18989 first beacon  19003 link up
+```
+
+- Authentication, association and the first beacon take about 70 ms. Nearly everything else is scanning.
+- A scan request waited 2.4 to 3.8 s because net80211 never stopped scanning: whenever a scan found nothing joinable,
+  `ieee80211_end_scan` started another full scan of every channel (3.8 s each), and a WCL scan or join request only attached to the scan
+  that happened to be running. The done events at 4003, 7923, 11724, 14861 and 18934 are that loop.
+- The join restarted the firmware (the private-MAC change: "driver stopped" then "driver ready" 187 ms later). That cleared the scan cache, so the
+  join found no cached BSS and scanned all channels (`join channel 0`).
+
+## Changes after the timeline (`assoc2`)
+
+- The SCAN state is held idle (`ic_wcl_scan_idle`) when neither a WCL scan nor a join asked for a scan; `iwx_newstate_task` no longer starts a scan
+  then. A WCL scan or join request starts one from the idle state, and a finished WCL scan clears `ic_wcl_scan_requested` so net80211's follow-up
+  iteration stays idle.
+- A deferred join reads its BSS's channel from the cache before the firmware restart (`wclJoinChannelHint`) and uses it afterwards.
+
 ## Open
 
-- The three 2.4 to 3.8 s airportd scans are not explained by the firmware's dwell times (three channels at 110 TU is about 0.35 s). The timeline
-  separates the time spent before the scan reaches the firmware from the time spent after the scan ends.
-- The link dropped about 4 s after the first association on the second boot (BSSID changed at 27 s). The deauth entry in the timeline gives the reason.
+- Whether the link drop about 4 s after the first association (second boot, BSSID changed at 27 s) was a real deauth; check the deauth entry
+  (`val` is the reason) in the new timeline.
+- How long a one-channel scan really takes on the AX200 (expected 0.1 to 0.2 s); the timeline's scan requested and scan done event steps give it.

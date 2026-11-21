@@ -17667,6 +17667,23 @@ iwx_newstate_task(void *psc)
             
         case IEEE80211_S_SCAN:
         next_scan:
+#ifdef AIRPORT_WCL
+            if (ic->ic_opmode == IEEE80211_M_STA && !ic->ic_wcl_scan_requested && !ic->ic_wcl_join_requested) {
+                // Nothing asked for a scan. macOS drives them, so net80211's own loop (a full scan of every channel, over
+                // and over, about 3.8 s each, which every scan or join request then waited out) is not run: the SCAN
+                // state is held, and the next WCL scan or join starts a scan from here.
+                ic->ic_wcl_scan_idle = true;
+                if ((sc->sc_flags & IWX_FLAG_BGSCAN) == 0) {
+                    ieee80211_set_link_state(ic, LINK_STATE_DOWN);
+                    ieee80211_node_cleanup(ic, ic->ic_bss);
+                }
+                ic->ic_state = IEEE80211_S_SCAN;
+                that->getMainCommandGate()->commandWakeup(&ic->ic_state); /* wake iwx_init() */
+                splx(s);
+                return;
+            }
+            ic->ic_wcl_scan_idle = false;
+#endif
             err = that->iwx_scan(sc);
             if (err)
                 break;
