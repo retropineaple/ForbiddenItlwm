@@ -35,8 +35,27 @@ Newer cards (`mld`) add NAN: `iwl_mld_limits_nan` and the NAN cluster and discov
 - **A transmit aggregation queue is only enabled after the peer's ADDBA response.** Linux's mac80211 handles that response; here
   it is our job, and the response has never reached the host (`ITLAWDLRawBaAction` [92, 0, 0]).
 
+## What the AX200's own firmware declares
+
+`itlwm/firmware/iwlwifi-cc-a0-68.ucode` (the image this driver loads on the AX200; version string `release/core66_LinADLPV::01d30b0c`,
+API 68, build 30608140), parsed from its TLV header with the names of `if_iwxreg.h`. Its ENABLED_CAPABILITIES and API_CHANGES_SET
+TLVs say:
+
+| Declared | Why it matters for AWDL |
+| --- | --- |
+| `SESSION_PROT_CMD` (54) | time on a channel is asked for with session protection (`0x305`), as Linux does when this is set; the older time event is the fallback |
+| `DYNAMIC_QUOTA` (44), `BINDING_CDB_SUPPORT` (39) | the firmware manages the airtime split between bindings itself, and bindings can sit on different PHY contexts at once |
+| `NAN_SUPPORT` (34) and API `NAN2_VER2` (31) | the image contains a NAN engine (discovery windows, a sync beacon, data paths). NAN frames are not AWDL frames, so it is not a drop-in for the 16-slot schedule, but it is the only firmware-side slot scheduler on this card |
+| `TLC_OFFLOAD` (43) | the firmware chooses the TX rate and aggregation for a station from the capabilities it is given |
+| `MULTI_QUEUE_RX_SUPPORT` (68) | receive queues per CPU, with the firmware's own reorder (BAID) path |
+| `UMAC_SCAN` (2), API `ADAPTIVE_DWELL` (32), `ADAPTIVE_DWELL_V2` (42) | the scan path our association work already uses |
+| `BT_MPLUT_SUPPORT` (67) | the Bluetooth multi-priority table; sent with the coexistence command |
+| API `STA_TYPE` (30), `NEW_RX_STATS` (35), `WIDE_CMD_HDR` (14) | the station and receive descriptor layouts the driver already uses |
+
+Not declared: `CHANNEL_SWITCH_CMD` is among the unnamed bits here and was not decoded.
+
 ## Open questions this data does not answer
 
-- Which of time events, session protection and ROC the AX200's firmware (the `cc` image we load) accepts: that depends on its
-  capability flags (`IWL_UCODE_TLV_CAPA_*`), which are in the firmware file, not in this driver.
+- Whether the firmware accepts a repeating session protection (or time event) with an interval, as AWDL's slots need. The capability
+  says it takes the command, not what interval and repeat it permits.
 - Why the firmware delivers the phone's ADDBA requests and not its responses.
