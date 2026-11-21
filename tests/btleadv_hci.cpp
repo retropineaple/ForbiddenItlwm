@@ -192,5 +192,23 @@ int main(){
         const uint32_t exp=d.expired;
         assert(extraRemoteReads(d,rst,3,t0)==0&&d.aborts==2&&d.expired==exp);
     }
+    {   // Resolving-list use is only counted.
+        PrivacyStats p{};
+        const uint8_t add[3+39] = {0x27,0x20,39};
+        notePrivacy(p, add, sizeof(add));
+        uint8_t conn[3+25] = {0x0d,0x20,25}; conn[8] = 0;            // public peer, resolution never enabled
+        notePrivacy(p, conn, sizeof(conn));
+        assert(p.resolvingAdds == 1 && p.connects[0] == 1 && p.connectsWithoutResolution == 1);
+        const uint8_t on[4] = {0x2d,0x20,1,1};
+        notePrivacy(p, on, sizeof(on));
+        uint8_t ext[3+10] = {0x43,0x20,10}; ext[5] = 2;               // extended, public identity
+        notePrivacy(p, ext, sizeof(ext));
+        assert(p.resolutionEnabled && p.resolutionOn == 1 && p.connects[2] == 1 && p.connectsWithoutResolution == 1);
+        const uint8_t reset[3] = {0x03,0x0c,0};
+        notePrivacy(p, reset, sizeof(reset));
+        assert(!p.resolutionEnabled);
+        notePrivacy(p, conn, 8);                                      // too short: ignored
+        assert(p.connects[0] == 1);
+    }
     puts("BTLEAdvFixup HCI decisions: passed (host only)");
 }

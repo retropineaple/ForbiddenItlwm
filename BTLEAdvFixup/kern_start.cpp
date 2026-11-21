@@ -78,6 +78,8 @@ static IOReturn patched_device_request(void *that, IOService *provider, Standard
 
 // Evidence for tests, in the I/O Registry root. Set only on rare events, in thread context.
 static uint32_t extraCommands {}, setAddresses {}, extraFailures {};
+static BTLEAdv::PrivacyStats privacyStats {};   // under hciLock
+static bool privacyChanged {};
 static void noteHook(const char *key, uint32_t value) {
     IORegistryEntry::getRegistryRoot()->setProperty(key, value, 32);
 }
@@ -156,6 +158,8 @@ static IOReturn patched_device_request(void *that, IOService *provider, Standard
             }
         }
         legacyScanAddress = BTLEAdv::wantsLegacyScanAddress(hciState, hci, hciLength);
+        BTLEAdv::notePrivacy(privacyStats, hci, hciLength);
+        privacyChanged = true;
         action = BTLEAdv::onCommand(hciState, hci, hciLength, patchScanning);
         IOLockUnlock(hciLock);
         if (lengthLock) {
@@ -190,6 +194,24 @@ static IOReturn patched_device_request(void *that, IOService *provider, Standard
         noteHook("BTLEAdvFirstRequest", request.bRequest);
     }
     const IOReturn result = FunctionCast(patched_device_request, orig_device_request)(that, provider, request, data, descriptor, length, completion, timeout);
+    if (hciLength >= 3 && privacyChanged) {
+        const uint16_t op = uint16_t(hci[0] | hci[1] << 8);
+        if (op == BTLEAdv::kOpLeAddResolving || op == BTLEAdv::kOpLeAddressResolution ||
+            op == BTLEAdv::kOpLeCreateConnection || op == BTLEAdv::kOpLeExtCreateConnection) {
+            IOLockLock(hciLock);
+            const BTLEAdv::PrivacyStats p = privacyStats;
+            privacyChanged = false;
+            IOLockUnlock(hciLock);
+            noteHook("BTLEAdvResolvingAdds", p.resolvingAdds);
+            noteHook("BTLEAdvResolutionOn", p.resolutionOn);
+            noteHook("BTLEAdvResolutionOff", p.resolutionOff);
+            noteHook("BTLEAdvResolutionEnabled", p.resolutionEnabled ? 1 : 0);
+            noteHook("BTLEAdvConnectsPublic", p.connects[0]);
+            noteHook("BTLEAdvConnectsRandom", p.connects[1]);
+            noteHook("BTLEAdvConnectsIdentity", p.connects[2] + p.connects[3]);
+            noteHook("BTLEAdvConnectsNoResolution", p.connectsWithoutResolution);
+        }
+    }
     if (action.sendSetAddress || action.sendEventMask) {
         // Only after the command it depends on was accepted. A set address that didn't go out is
         // forgotten, so the next parameters command for that set tries again.
