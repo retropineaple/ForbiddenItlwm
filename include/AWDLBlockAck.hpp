@@ -56,6 +56,20 @@ private:
     AddbaRequest requests[8]{};
 };
 
+// A Block Ack action frame with the Order bit set carries a 4-byte HT Control field after its sequence control, so its
+// category is at 28 and its action at 29. Every parser here reads them at 24 and 25. The field is cut out and the bit
+// cleared, so the frame reads as the plain one. Returns true when it did, with the action code (0 request, 1 answer,
+// 2 teardown) in `action`; frames of any other kind, and plain ones, are left alone. `length` shrinks by 4.
+inline bool stripBaActionHtc(uint8_t *f, uint32_t *length, uint8_t *action) {
+    if (!f || !length || !action || *length < 30 || f[0] != 0xd0 || !(f[1] & 0x80) || f[28] != 3 || f[29] > 2)
+        return false;
+    *action = f[29];
+    memmove(f + 24, f + 28, *length - 28);
+    f[1] = uint8_t(f[1] & ~0x80);
+    *length -= 4;
+    return true;
+}
+
 // A management action frame to `own`: category 3 (Block Ack), action 0 (ADDBA request).
 inline bool parseAddbaRequest(const uint8_t *f, size_t length, const uint8_t *own, AddbaRequest *out) {
     if (!f || !own || !out || length < 33 || f[0] != 0xd0 || memcmp(f + 4, own, 6) || f[24] != 3 || f[25] != 0)

@@ -6418,7 +6418,7 @@ static uint32_t awdlCoexBaActionSeen[4], awdlCoexBaActionAwdlBssid, awdlCoexBaAc
 // code (0 request, 1 answer, 2 teardown) and, in [1][..], those whose receiver address is unicast. The 2026-11-20
 // sniffer showed the phone answering our ADDBA requests (status 0, immediate, window 64) while ITLAWDLCoexBaActionSeen[1]
 // stayed 0: these say whether the answers reach the host at all (ITLAWDLRawBaAction / ITLAWDLRawBaActionUnicast).
-static uint32_t awdlRawBaAction[3], awdlRawBaActionUnicast[3];
+static uint32_t awdlRawBaAction[3], awdlRawBaActionUnicast[3], awdlRawBaActionHtc[3];   // the last: carried +HTC (see iwx_rx_mpdu_mq)
 static uint32_t awdlCoexRxWhileFilterOff;
 // The listener's queue carries data too now, so a sync frame can wait behind retried data while the radio
 // is on the station's channel (iface136: one wait over 1 s halted TX for good). A stall counts only if no
@@ -6997,6 +6997,9 @@ static void awdlCoexPublish()
             }
             if (auto *d = OSData::withBytes(awdlRawBaActionUnicast, sizeof(awdlRawBaActionUnicast))) {
                 root->setProperty("ITLAWDLRawBaActionUnicast", d); d->release();
+            }
+            if (auto *d = OSData::withBytes(awdlRawBaActionHtc, sizeof(awdlRawBaActionHtc))) {
+                root->setProperty("ITLAWDLRawBaActionHtc", d); d->release();
             }
             root->setProperty("ITLAWDLRxReorderHeld", awdlRxReorderHeld, 32);
             if (auto *d = OSData::withBytes(awdlCoexSeqGapRing, sizeof(awdlCoexSeqGapRing))) {
@@ -10794,7 +10797,19 @@ iwx_rx_mpdu_mq(struct iwx_softc *sc, mbuf_t m, void *pktdata,
     mbuf_pkthdr_setlen(m, len);
     mbuf_setlen(m, len);
     if (len >= 26) {
-        const uint8_t *rawFrame = static_cast<const uint8_t *>(mbuf_data(m));
+        uint8_t *rawFrame = static_cast<uint8_t *>(mbuf_data(m));
+        // A Block Ack action frame with the Order bit set carries a 4-byte HT Control field after its sequence control
+        // (+HTC), so its category is at 28, not 24. Every parser here reads the category at 24: a phone answering at an HE
+        // rate with +HTC would be counted as nothing and ignored, while its plain ADDBA requests get through (2026-11-21:
+        // ITLAWDLRawBaAction [92 requests, 0 answers] although the sniffer saw the answers). The field is cut out, and
+        // the Order bit cleared, so what follows sees the plain frame. A management frame's header is a multiple of 4
+        // bytes with or without it, so the firmware's padding flag is not set for it.
+        uint8_t htcAction = 0;
+        if (!(desc->mac_flags2 & IWX_RX_MPDU_MFLG2_PAD) && ItlAWDL::stripBaActionHtc(rawFrame, &len, &htcAction)) {
+            ++awdlRawBaActionHtc[htcAction];
+            mbuf_setlen(m, len);
+            mbuf_pkthdr_setlen(m, len);
+        }
         if (rawFrame[0] == 0xd0 && rawFrame[24] == 3 && rawFrame[25] < 3) {
             ++awdlRawBaAction[rawFrame[25]];
             if (!(rawFrame[4] & 1))
