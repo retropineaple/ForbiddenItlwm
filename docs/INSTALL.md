@@ -115,7 +115,7 @@ All of this goes on the **USB stick's** EFI.
    ioreg -l -w0 | grep -E '"ItlwmAWDL(InterfaceBuild|BuildCheck)"|"ITLAWDLCoex(Added|Channel|CountryLearned)"'
    ```
 
-   You should see `forbidden-0.6.0-beta.2` (`forbidden-0.6.0-beta.2-sequoia` on Sequoia, `forbidden-0.6.0-beta.2-sonoma` on Sonoma), `BuildCheck` `verified`, `Added` Yes, `Channel` 149 (or 44 where your iPhone uses 44, for example in Japan) and `CountryLearned` Yes. `Channel` 6 means the firmware hasn't opened 149 or 44: see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+   You should see `forbidden-0.6.0-beta.3` (`forbidden-0.6.0-beta.3-sequoia` on Sequoia, `forbidden-0.6.0-beta.3-sonoma` on Sonoma), `BuildCheck` `verified`, `Added` Yes, `Channel` 149 (or 44 where your iPhone uses 44, for example in Japan) and `CountryLearned` Yes. `Channel` 6 means the firmware hasn't opened 149 or 44: see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
 4. Or run `bash tools/compat/check_compat.sh` again. It now also reads the listener's state.
 5. Turn on AirDrop on both devices. Contacts Only works when the iPhone and the Mac share an Apple Account or know each other as contacts. Otherwise use Everyone for 10 Minutes.
@@ -123,7 +123,7 @@ All of this goes on the **USB stick's** EFI.
 
 ## Before a macOS update
 
-Boot once without `-btleadv` (or with BTLEAdvFixup disabled), then update. While BTLEAdvFixup is active, `bluetoothd`'s patched pages are what the system reads, and an incremental update that checks the file can fail. Then check that the new build is supported before turning `-btleadv` back on: see [the macOS builds](TESTED-HARDWARE.md#macos-builds).
+Boot once without `-btleadv` (or with BTLEAdvFixup disabled), then update. While BTLEAdvFixup is active, `bluetoothd`'s patched pages are what the system reads, and an incremental update that checks the file can fail. If the update still fails, disable BlueToolFixup and BTLEAdvFixup too for the update (#78): BlueToolFixup patches `bluetoothd` the same way, whatever the flags. Then check that the new build is supported before turning `-btleadv` back on: see [the macOS builds](TESTED-HARDWARE.md#macos-builds).
 
 ## Uninstalling
 

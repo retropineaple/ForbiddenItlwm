@@ -844,7 +844,19 @@ extern unsigned itlAWDLFixedChannel();
 extern unsigned itlAWDLChannelClass();
 extern bool itlAWDLBuildAllowed();
 extern const char *itlAWDLBuildStatus();
+// The card's own spatial streams, from the HAL's MCS set: MCS 8-15 exists only with MIMO enabled and
+// two receive antennas (iwx_setup_ht_rates). 0 until the set is known. A one-antenna card (9461, 9462,
+// AX101; #87) must not tell macOS or peers it has two streams.
+static volatile int gItlAWDLCardStreams = 0;
+int itlAWDLNoteCardStreams(const struct ieee80211com *ic)
+{
+    if (ic && ic->ic_sup_mcs[0])
+        gItlAWDLCardStreams = ic->ic_sup_mcs[1] ? 2 : 1;
+    return gItlAWDLCardStreams;
+}
+
 // With -itlawdlcaps the driver reports two HT streams and VHT to macOS; our TLV 7 says the same.
+// Two streams only while the card isn't known to have one.
 static bool itlAWDLTwoStreams()
 {
     static int cached = -1;
@@ -853,7 +865,7 @@ static bool itlAWDLTwoStreams()
         cached = itlAWDLBuildAllowed() && PE_parse_boot_argn("-itlawdlcaps", &dummy, sizeof(dummy)) &&
             !PE_parse_boot_argn("-itlawdlcapshtonly", &dummy, sizeof(dummy)) ? 1 : 0;
     }
-    return cached == 1;
+    return cached == 1 && gItlAWDLCardStreams != 1;
 }
 
 bool ItlAWDLInterface::copyMasterIndication(uint8_t *output, size_t capacity, size_t *written)
@@ -2989,9 +3001,13 @@ bool AirportItlwm::startDriver(IOService *provider)
     setLinkStatus(kIONetworkLinkValid);
     if (TAILQ_EMPTY(&fHalService->get80211Controller()->ic_ess))
         fHalService->get80211Controller()->ic_flags |= IEEE80211_F_AUTO_JOIN;
+    // The HAL built its rate set at the first firmware load: record the card's streams for -itlawdlcaps.
+    setProperty("ItlwmCardStreams", uint32_t(itlAWDLNoteCardStreams(fHalService->get80211Controller())), 32);
 #ifdef AIRPORT_WCL
     awdlManagementInputEnabled = true;
     bsdInterface->registerService();
+#else
+    awdlManagementInputEnabled = true;
 #endif
     registerService();
     return true;
@@ -3567,6 +3583,10 @@ getCARD_CAPABILITIES(OSObject *object,
                            0x80
                            );
     *(uint16_t *)&cd->capabilities[8] = 0x201;
+
+    if (awdlInterfaceTest) {
+        cd->capabilities[4] |= 0x01;
+    }
 //
 //    cd->capabilities[2] |= 0x10;
 //    cd->capabilities[5] |= 0x1;

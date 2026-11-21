@@ -56,6 +56,25 @@
 - **Credits:** [DrogaBox](https://github.com/DrogaBox) / RTL8814Native — peer-cache control layout and event 51 (re-verified on Sequoia 24H232). No code was copied.
 - **Found, outside this driver:** Continuity Camera refused on AMD "Force Penryn" CPU family before any traffic; Skylake family (`0x37fc219f`) passes.
 
+**Release names.** `x.y.z-stage.n`: `alpha` releases bring new or untested changes for testers; `beta` releases are tested on the project's hackintosh; `n` counts the builds of one version. `z` counts fixes after a stable release, so it stays 0 until a version is declared stable, and 1.0.0 will be the first stable release. Releases up to 0.5.3 were named `-test1` (now alpha) and `-beta1`.
+
+## 0.6.0-beta.3
+
+**AirDrop**
+- **AirDrop on Sonoma ([#55](https://github.com/retropineaple/ForbiddenItlwm/issues/55), [PR #77](https://github.com/retropineaple/ForbiddenItlwm/pull/77), thanks to panjips and maddog860).** The Sonoma kext never switched on AirDrop's frame paths and never told macOS the card can do AWDL, so macOS didn't create `awdl0`. Both are fixed. One user reports AirDrop working both ways on an AX200 with 14.8.9 at 5–7 MB/s. Not tested here; the Tahoe and Sequoia kexts don't change.
+- **Mac → iPhone no longer stalls without `-itlawdlcoexmulti` ([#63](https://github.com/retropineaple/ForbiddenItlwm/issues/63), thanks to jkbuha).** When the listener shares the Mac's Wi-Fi channel, 0.6.0's receive-filter rule stopped Mac → iPhone sends. That mode now uses the earlier rule by default, so `-itlawdlfilterbysession` isn't needed there anymore. Nothing changes with `-itlawdlcoexmulti` (the tested set).
+- **The listener finds an iPhone that uses only channel 44 ([#35](https://github.com/retropineaple/ForbiddenItlwm/issues/35)).** With no Apple device heard yet, the listener stayed on 149 and never heard an iPhone that only uses 44 (Russia and Germany, for example). From 30 s after it starts, while it hasn't heard any device, it now spends 15 s of every minute on channel 6, where every Apple device spends a slot, and follows the iPhone from there. `-itlawdlnosearch6` turns it off; `ITLAWDLCoexSearch6` and `ITLAWDLCoexSearch6Dwells` show it.
+- **One-antenna cards report one stream ([#87](https://github.com/retropineaple/ForbiddenItlwm/issues/87)).** `-itlawdlcaps` told macOS and other devices the card has two spatial streams, also on cards with one antenna (9461, 9462, AX101), so an iPhone could send at rates the card can't receive. It now reports what the card has. New key `ItlwmCardStreams`.
+
+**Wi-Fi**
+- **Correct keys on SHA-256 networks ([PR #84](https://github.com/retropineaple/ForbiddenItlwm/pull/84), thanks to ann0see).** For networks that use SHA-256 key derivation (802.1X-SHA256, which the driver picks when an enterprise network offers it, and PSK-SHA256-only networks), the driver hashed the label with its trailing NUL and asked for 64 bytes instead of 48, so every such key came out wrong and the handshake failed. Plain WPA2-PSK uses a different function and was never affected. A known-answer test now checks the derivation. Not tested here (this hackintosh's network doesn't use SHA-256 keys).
+
+**Docs:** TROUBLESHOOTING covers an iPhone kept waiting by another Apple device nearby (#81), Universal Clipboard from the Mac with an AirDrop window open (#65), DFS channels without `-itlawdlcoexmulti` (#63) and turning Bluetooth off to join the iPhone's hotspot (#39). INSTALL: disable BlueToolFixup too if a macOS update still fails (#78). BOOT-FLAGS and ROADMAP: Wi-Fi 6 (`itlwm_he=1`) can drop Wi-Fi when AirDrop starts (#83). README: 9560/9461/9462 on 10th-gen and newer boards run on the part of the driver with AirDrop (#87); AirDrop with a Mac as the other device on the stock release (#81). TESTED-HARDWARE adds #45, #53, #77, #81, #83 and #87.
+
+**Tested on** the project's hackintosh (Tahoe 26.7.1, AX211, the tested flag set): AirDrop both ways, Bluetooth headphones, the listener on 149 at 80 MHz, `ItlwmCardStreams` 2. The channel-6 search was tested here with an earlier build (it found an iPhone in airplane mode and stopped). Not tested here: the Sonoma fix (one user's report), shared mode without `-itlawdlcoexmulti` (#63), SHA-256 networks (#84), one-antenna cards (#87), and the Sequoia and Sonoma builds (built and checked offline).
+
+BTLEAdvFixup is unchanged (0.9.3).
+
 ## 0.6.0-beta.2
 
 **Bluetooth: BTLEAdvFixup 0.9.3**

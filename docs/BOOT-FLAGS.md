@@ -24,7 +24,7 @@ What each one does:
 | `-itlawdlcoexdata` | Carries AirDrop's data through the listener, both ways |
 | `-itlawdlmitx` | Sends macOS's own AWDL announcement (its name and services) in the sync frames. Only on verified macOS builds: `ItlwmAWDLMiState` says `on`, `off` or `blocked: build not verified` |
 | `-itlawdlelicit` | Adds the extra AWDL fields Apple devices expect: election parameters, channel sequence and HT capabilities |
-| `-itlawdlcaps` | Reports two spatial streams and VHT to macOS and to peers, so the iPhone uses 80 MHz two-stream rates |
+| `-itlawdlcaps` | Reports VHT and the card's spatial streams to macOS and to peers, so the iPhone uses 80 MHz rates. Two streams on two-antenna cards; from 0.6.0-beta.3, one on one-antenna cards such as the 9461, 9462 and AX101 (#87). `ItlwmCardStreams` shows what the driver found |
 | `-itlawdlsvcmerge` | Merges macOS's service records into the announcement frames, which helps discovery |
 | `-itlawdlawsync` | Times idle sync frames to the iPhone's availability windows |
 | `itlawdlintcoal=4` | Shorter interrupt coalescing for the listener, for lower latency |
@@ -77,7 +77,8 @@ These restore earlier behaviour, for A/B testing only. Leave them off.
 | `-itlawdlsameband` | Test (0.5.2): while the Mac's Wi-Fi is on 2.4 GHz, keep the listener on channel 6 instead of 149, so the radio doesn't time-share across bands. For setups where Wi-Fi keeps dropping with `-itlawdlcoexmulti` (#16) |
 | `-itlawdlsta44` | Test: while the Mac's own Wi-Fi is on channel 44 and the other device is seen on 44 too, keep the listener on 44 (at 80 MHz when allowed) instead of following the other device's 149 slots. For setups where the listener moves between 44 and 149 every few seconds (#68): the router on 44, and the other device on the same network. Confirmed with a MacBook Air M1 on an AX200; not tested with iPhones |
 | `-itlawdlnosamechprobe` | Turns off the same-channel fix for Mac → iPhone block ack ([PR #47](https://github.com/retropineaple/ForbiddenItlwm/pull/47)), on by default from 0.6.0. The old opt-in flag `-itlawdlcoexsamechprobe` is still accepted and changes nothing |
-| `-itlawdlfilterbysession` | Keeps the listener's promiscuous receive off only during a receive block-ack session, as before 0.6.0 (PR #57). From 0.6.0 it stays off while the iPhone's firmware station exists, which fixed stalled sends after the iPhone was idle |
+| `-itlawdlfilterbysession` | Keeps the listener's promiscuous receive off only during a receive block-ack session, as before 0.6.0 (PR #57). From 0.6.0 it stays off while the iPhone's firmware station exists, which fixed stalled sends after the iPhone was idle. From the next release that applies only with `-itlawdlcoexmulti`; without it (the listener sharing the station's channel) the old rule is used, since the new one stopped Mac → iPhone there (#63), so this flag is then only needed with `-itlawdlcoexmulti` |
+| `-itlawdlnosearch6` | Turns off the search on channel 6: while no device's schedule has been heard, the listener spends 15 s of every minute on 6 to find a device that uses only 44 (#35). From the next release |
 | `-itlawdlnoirconcurrent` | Doesn't use passive channels next to the Mac's own Wi-Fi (0.6.0's rule, taken from Linux's rule for Wi-Fi Direct interfaces) |
 | `-itlawdloverlap80` | Uses 80 MHz on the listener's channel even when the Mac's Wi-Fi uses the same 80 MHz block with another main channel, as before 0.6.0 (#26) |
 | `-itlawdlnosharedba` | Turns off block ack when the listener shares your Wi-Fi's channel (without `-itlawdlcoexmulti`), as before 0.5.4 |
@@ -97,7 +98,7 @@ Not needed for AirDrop. Listed so you know what they do if you find them in a gu
 | `-itlawdlpoolprobe` | Probes the `awdl0` packet pools once at start and publishes the result. Diagnostic only |
 | `-btlenoscan` | BTLEAdvFixup: advertising fixes only, without the scanning changes. For comparison |
 | `-btleadvdbg`, `-btleadvbeta` | Lilu's standard debug and beta switches for BTLEAdvFixup |
-| `itlwm_he=1` | Wi-Fi 6 (802.11ax), from the upstream driver. One tester ran all their AirDrop tests with it without problems; not tested here, and speeds vary (#58) |
+| `itlwm_he=1` | Wi-Fi 6 (802.11ax), from the upstream driver. Not tested here. One tester ran all their AirDrop tests with it without problems (#58); on another's AX201, Wi-Fi dropped as soon as an AirDrop started, and AirDrop worked once it was removed (#83). Leave it off if you use AirDrop |
 | `-novht`, `-noht40` | Upstream: no 802.11ac, or no 40 MHz on the Mac's own Wi-Fi |
 
 ## Don't use
