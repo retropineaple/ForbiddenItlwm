@@ -493,6 +493,12 @@ void ItlAWDLInterface::postAwEvent()
         // is scheduled as after an end, without posting 43.
     } else {
         uint8_t event[40] = {};   // the CCA block stays zero: its flag at +0x10 must be 1 to be read
+        // +4, big endian: the firmware time of the end, in microseconds. IO80211AWDLPeerManager::logAWEnd (24H232,
+        // 0xffffff8002181756) stores it at +0x7f90, and the sanity check after it (0xffffff8002181a50) takes
+        // (end - start) >> 10 as the AW's length in TU and, when that is 11 TU or more away from its own expected length, counts a
+        // failure and reports 0xe082220e. A zero here is before the start, which that check skips without recording an end.
+        const uint32_t endBE = __builtin_bswap32(uint32_t(awSlotStartUS + kWindowUS));
+        memcpy(event + 4, &endBE, sizeof(endBE));
         postMessage(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_END, event, sizeof(event), false);
         awInWindow = false;
         ++awEnds;
