@@ -29,6 +29,7 @@ tools added for the 2026-11-20 investigation. The measurements they produced are
 | `umi_rx.py` | Decodes `ItlwmAWDLUmiRxRing`, the action frames heard in the 3 s after an acknowledged UMI |
 | `airdrop_paths.py [seconds] [interfaces]` | Samples `netstat -I` for `en0`, `en1` and `awdl0` during a transfer and prints bytes, share and peak rate per interface. Exits 1 when `en0` carried more than 1% |
 | `trace_rtg_tlv.d` | `dtrace` script that follows the family building and parsing the RTG TLV |
+| `airdrop_measure.py` | measures a transfer: per-interface throughput (mean, median, p95, peak, stalls), the driver's counters before and after (unicast failures, drops, parked frames, command ring errors, block ack, availability windows), the MTUs against Apple's 1500, and sharingd's send and receive results with the failure signatures. `--seconds 120 --json run.json --min-mbit 60` while a file is sent; `--replay run.json` judges it again. Exits 1 on any FAIL. Tests: `tests/airdrop_measure_test.py` |
 | `trace_emsgsize_size.d` | sizes of IPv6 packets `sharingd` has refused with EMSGSIZE (the header comment still mentions an old awdl0 MTU of 1484) |
 
 Typical sequence for a camera run:

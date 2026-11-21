@@ -78,6 +78,7 @@ subprocess.run(["python3", str(root / "tests/awdl_snapshot.py")], check=True)
 subprocess.run(["python3", "-I", str(root / "tests/cc_analyze_test.py")], check=True)
 # The AirDrop checker: parsers, failure signatures and the verdict, on the 2026-11-18 failure.
 subprocess.run(["python3", "-I", str(root / "tests/airdrop_check_test.py")], check=True)
+subprocess.run(["python3", "-I", str(root / "tests/airdrop_measure_test.py")], check=True)
 subprocess.run(["python3", "-I", str(root / "tests/awdl_ctl_test.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_bridge.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_pool_lease.py")], check=True)

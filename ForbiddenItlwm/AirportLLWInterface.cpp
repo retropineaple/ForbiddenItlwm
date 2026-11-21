@@ -1,5 +1,6 @@
 // llw0, the low latency companion of awdl0. See AirportLLWInterface.hpp for what it is and where the sequence
 // comes from.
+#include <AWDLMtu.hpp>
 #include "AirportItlwmV2.hpp"
 #include "AirportLLWInterface.hpp"
 
@@ -66,8 +67,8 @@ IOReturn ItlLLWInterface::bringUp(IO80211Controller *owner, IOWorkLoop *loop, It
     parent = parentInterface;
     receiveRule = rule;
     int requestedMtu = 0;
-    if (PE_parse_boot_argn("itlawdlllwmtu", &requestedMtu, sizeof(requestedMtu)) && requestedMtu >= 1280 && requestedMtu <= 1500)
-        mtu = uint32_t(requestedMtu);
+    PE_parse_boot_argn("itlawdlllwmtu", &requestedMtu, sizeof(requestedMtu));
+    mtu = ItlAWDL::awdlMtu(requestedMtu);   // Apple's 1500 unless the boot-arg gives a value in range
     workLoop = loop;
     workLoop->retain();
     auto fail = [this](const char *where, IOReturn result) {

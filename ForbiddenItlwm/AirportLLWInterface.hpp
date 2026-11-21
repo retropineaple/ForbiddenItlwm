@@ -47,10 +47,11 @@ public:
     // Apple's override refuses the driver-specific ioctls (SIOCSDRVSPEC and SIOCGDRVSPEC, the Apple80211 request path)
     // with EINVAL and leaves the rest to the family.
     IOReturn processBSDCommand(struct __ifnet *ifp, unsigned int command, void *data) override;
-    // The family leaves this interface at MTU 1500. Everything it sends goes out through awdl0's ring and radio path,
-    // and awdl0 is held to 1484; whether the peer takes AWDL data frames carrying more than that is unknown, and a
-    // packet it drops makes a connection stall quietly. So the MTU is set to awdl0's after the family's own setup.
-    // itlawdlllwmtu=1280..1500 chooses another value, to test Apple's 1500.
+    // MTU 1500, as on Apple's own Broadcom hardware: IO80211VirtualInterface::peerToPeerConfigureIfnet (24H232,
+    // 0xffffff80022a6cfc, reached from configureIfnet at 0xffffff80022a6df8 for every interface role but 6, 8, 9 and 10)
+    // sets 1500 when the controller is AppleBCMWLANCore and 1484 for any other; see include/AWDLMtu.hpp. awdl0 carries
+    // 1497-byte frames without a refusal at 1500 (14294 of them traced), and llw0's frames go through the same ring.
+    // itlawdlllwmtu=1280..1500 chooses another value.
     IOReturn prepareBSDInterface(struct __ifnet *ifp, unsigned int flags) override;
     // Apple's driver answers these from its own queues and pools; the family's defaults return nothing.
     void *getRxCompQueue() override { return packetQueues[3]; }
@@ -103,7 +104,7 @@ private:
     unsigned txClass[4] = {}, rxClass[4] = {};
     unsigned rxWanted = 0, rxDelivered = 0, rxFailed = 0, rxSupplyCallbacks = 0;
     unsigned lastPublished = 0;
-    uint32_t mtu = 1484;
+    uint32_t mtu = 1500;
     uint8_t uniqueId[8] = {};   // MAC and "ll": the ifnet's unique id, which has to outlive the ifnet
 };
 #endif
