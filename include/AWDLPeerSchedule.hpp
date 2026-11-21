@@ -87,8 +87,14 @@ struct PeerSchedule {
     uint32_t anchorEaw;
     uint8_t channels[kPeerSeqEntries];
     uint8_t ourChannel;
-    // Calibration: the peer's frames by eaw % 16, since the sequence last changed.
-    uint32_t bins[kPeerSeqEntries], binFrames;
+    bool onOurs(uint8_t channel) const { return channel == ourChannel; }
+    // Calibration evidence. gf75-ax201: for each candidate offset, how many of the peer's frames fell in an
+    // entry that says it is away, judged against the sequence in force when the frame was heard. WAS: frames
+    // binned by eaw % 16 and thrown away on every sequence change. A phone associated to a busy network
+    // changes its sequence every few seconds (11 changes in 3 minutes, 2026-11-10), so 300 frames under one
+    // sequence never came and the schedule stayed unknown. The offset ties the sequence index to the AW
+    // counter, which a new sequence doesn't change, so the evidence now carries over.
+    uint32_t awayAt[kPeerSeqEntries], scoredFrames, binFrames;
     bool calibrated;
     uint8_t offset;
     uint32_t sequenceChanges, calibrations, decalibrations;
@@ -110,20 +116,30 @@ struct PeerSchedule {
     uint8_t entryOffset() const { return calibrated ? offset : 0; }
     unsigned presentEntries() const {
         unsigned n = 0;
-        for (unsigned k = 0; k < kPeerSeqEntries; ++k) n += channels[k] == ourChannel;
+        for (unsigned k = 0; k < kPeerSeqEntries; ++k) n += onOurs(channels[k]);
         return n;
     }
-    void clearEvidence() {
-        memset(bins, 0, sizeof(bins));
-        binFrames = checkedFrames = awayFrames = 0;
+    void clearChecks() {
+        checkedFrames = awayFrames = 0;
         multipleAwayEntries = false;
     }
-    void invalidate() {
+    void clearEvidence() {
+        memset(awayAt, 0, sizeof(awayAt));
+        scoredFrames = binFrames = 0;
+        clearChecks();
+    }
+    // `keepEvidence` (gf75-ax201): the anchor only went stale. A phone that gives AWDL one entry in 16 is
+    // unheard for longer than kPeerScheduleStaleUS between visits, and every such gap used to wipe the offset
+    // evidence, so it never added up (2026-11-11: 481 frames heard, 0 kept). The same peer's next sync frame
+    // re-anchors the same AW counter, and the counter-to-entry offset is unchanged. A phase jump or a new
+    // period is different: the counters themselves restarted, and the evidence goes.
+    void invalidate(bool keepEvidence = false) {
         valid = false;
         if (calibrated) ++decalibrations;
         calibrated = false;
         refuted = false;  // A new anchor: the assumption gets a fresh check.
-        clearEvidence();
+        if (keepEvidence) clearChecks();
+        else clearEvidence();
     }
     // `nowUS` is when the frame arrived; the counters describe that moment closely enough.
     void note(const PeerSyncInfo &s, uint64_t nowUS, uint8_t channel) {
@@ -131,10 +147,10 @@ struct PeerSchedule {
         const uint64_t newEnd = nowUS + uint64_t(s.downCounterTU) * 1024;
         if (valid && memcmp(channels, s.channels, sizeof(channels))) {
             ++sequenceChanges;
-            clearEvidence();
+            clearChecks();  // The offset evidence stays: it doesn't depend on the sequence.
         }
         if (valid && (!fresh(nowUS) || channel != ourChannel || newPeriod != eawUS)) {
-            invalidate();
+            invalidate(channel == ourChannel && newPeriod == eawUS);
         } else if (valid && eawUS) {
             uint64_t into = 0;
             const uint32_t predicted = eawAt(newEnd, &into);
@@ -163,7 +179,7 @@ struct PeerSchedule {
         return uint32_t(int64_t(anchorEaw) + 1 + k);
     }
     bool presentInEntry(uint32_t eaw) const {
-        return channels[(eaw + entryOffset()) % kPeerSeqEntries] == ourChannel;
+        return onOurs(channels[(eaw + entryOffset()) % kPeerSeqEntries]);
     }
     // Every frame heard from the peer. Feeds calibration, then checks it.
     void notePeerFrame(uint64_t t) {
@@ -192,27 +208,33 @@ struct PeerSchedule {
             }
         }
         if (!calibrated) {
-            if (binFrames >= 4096) clearEvidence();
-            ++bins[eaw % kPeerSeqEntries];
+            if (binFrames >= 4096) {  // Age the evidence instead of dropping it.
+                for (unsigned r = 0; r < kPeerSeqEntries; ++r) awayAt[r] /= 2;
+                scoredFrames /= 2;
+                binFrames /= 2;
+            }
+            // Only a sequence with both present and away entries can tell offsets apart.
+            const unsigned present = presentEntries();
+            if (present && present < kPeerSeqEntries) {
+                for (unsigned r = 0; r < kPeerSeqEntries; ++r)
+                    awayAt[r] += !onOurs(channels[(eaw + r) % kPeerSeqEntries]);
+                ++scoredFrames;
+            }
             if (++binFrames >= kPeerCalibrateFrames) calibrate();
         }
     }
     // Picks the offset where the fewest of the peer's frames fall in entries that say it's away.
     // Only when there is an away entry to tell offsets apart, and the best one is nearly clean.
     void calibrate() {
-        unsigned away = 0;
-        for (unsigned k = 0; k < kPeerSeqEntries; ++k) away += channels[k] != ourChannel;
-        if (!away || away == kPeerSeqEntries) return;
+        if (scoredFrames < kPeerCalibrateFrames) return;
         uint32_t best = 0xffffffff, second = 0xffffffff;
         uint8_t bestOffset = 0;
         for (unsigned r = 0; r < kPeerSeqEntries; ++r) {
-            uint32_t inAway = 0;
-            for (unsigned s = 0; s < kPeerSeqEntries; ++s)
-                if (channels[(s + r) % kPeerSeqEntries] != ourChannel) inAway += bins[s];
+            const uint32_t inAway = awayAt[r];
             if (inAway < best) { second = best; best = inAway; bestOffset = uint8_t(r); }
             else if (inAway < second) second = inAway;
         }
-        if (best * 100 > binFrames * kPeerCalibrateMaxAwayPercent || second <= best) return;
+        if (best * 100 > scoredFrames * kPeerCalibrateMaxAwayPercent || second <= best) return;
         offset = bestOffset;
         calibrated = true;
         refuted = false;
@@ -230,7 +252,7 @@ struct PeerSchedule {
         return fresh(t) && eawUS && (known() || assumeOffsetZero);
     }
     bool presentForTiming(uint32_t eaw) const {
-        return channels[(eaw + entryOffset()) % kPeerSeqEntries] == ourChannel;
+        return onOurs(channels[(eaw + entryOffset()) % kPeerSeqEntries]);
     }
     // Whether `t` is within `windowUS` of the start of an AW in an entry where the peer is on our channel.
     bool inPresentAwStart(uint64_t t, uint64_t windowUS, bool assumeOffsetZero = false) const {

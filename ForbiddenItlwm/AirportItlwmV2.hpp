@@ -228,6 +228,8 @@ public:
     
     //scan
     static void fakeScanDone(OSObject *owner, IOTimerEventSource *sender);
+    static void awdlAwTimerFired(OSObject *owner, IOTimerEventSource *sender);
+    static void awdlPeerCacheTimerFired(OSObject *owner, IOTimerEventSource *sender);
     
     //-----------------------------------------------------------------------
     // Power management support.

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.0-beta.2-gf75 (MSI GF75, AX201, macOS 26.7 25G229)
+
+0.6.0-beta.2 with the work done on the GF75 merged in. Not a release; built for one machine.
+
+**Added on top of 0.6.0-beta.2**
+- **llw0, Sidecar's low-latency interface.** Created when wifip2pd asks (COMPANION_SKYWALK_IF_CREATE), attached to IO80211's table, with its own BSD unique id; its frames go out in the iPad's framing (QoS TID 7, no AWDL header) and are served before awdl0's.
+- **The Wi-Fi network's channel when a peer asks for it.** When the peer lists the station's 5 GHz channel in most of its sequence (an iPad starting Sidecar), the listener joins the station there. It leaves when the peer stops asking, or when the station itself starts checking its access point (past its own beacon-miss threshold), then waits 30 s doubling to 5 min.
+- **IO80211's AWDL events:** availability-window starts (no ends: with them IO80211 re-ran its election every 2 s and AirDrop fell from 111-126 to 16-38 Mbit/s), peer cache completions, unicast OOB completions (message 69), packet counts for the peer manager.
+- **The firmware's country is read** every 30 s until one is learned (MCC_SOURCE_GET_CURRENT, as Linux), so the listener leaves channel 6 even when the firmware never sends its notice.
+- **BTLEAdvFixup counters** for Instant Hotspot's LE connection (resolving list, connection address types); read-only.
+- **awdl0:** a peer that is away no longer holds the other peers' frames (a parking ring per held peer).
+- **Wi-Fi joins:** a new scan replaces our own unassociated scan (Instant Hotspot's directed scan), Fastlane requests counted.
+- **Bluetooth coexistence:** BT_COEX_NW with SYNC2SCO and HIGH_BAND_RET, plus MPLUT when the firmware declares it (the AX201's does), as Linux's iwl_mvm_send_bt_init_conf. `ITLAWDLBtCoexModules` shows what was sent.
+- **macOS 26.7 (25G229)** is on the verified list: its kernel is 26.7.1's, its IO80211 tables match, and AWDL has run there on the GF75.
+
+**Removed:** slot-by-slot 44/149 following (never engaged; with FR the firmware marks 44 passive). `-itlawdlcoexcalwait` is ignored.
+
+**Tested on the GF75** (f44c071, 2026-11-21): AWDL elections down from 450-634 per test to 2; the listener on 44 at 80 MHz once the firmware learned FR; AirDrop iPhone -> Mac up to 115 Mbit/s, Mac -> iPhone 60 Mbit/s on a 500 MB file. Sidecar collapsed 20 s after the listener left the iPad's network channel on 8 missed beacons; that exit now waits for the station's own threshold (not yet tested).
+
+**Known issue, Instant Hotspot:** bluetoothd opens its LE connection to the iPhone's public address but never loads the controller's resolving list (`BTLEAdvResolvingAdds` 0, `BTLEAdvConnectsPublic` 15), so the Intel controller can't match the iPhone's private addresses and the connection times out. Joining the iPhone's hotspot from the Wi-Fi menu works.
+
 ## 0.6.0-beta.2
 
 **Bluetooth: BTLEAdvFixup 0.9.3**

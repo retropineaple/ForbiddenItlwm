@@ -105,5 +105,8 @@ private: virtual void _abi_0fb8() __asm__("__ZN23IO80211VirtualInterface34_RESER
 private: virtual void _abi_0fc0() __asm__("__ZN23IO80211VirtualInterface34_RESERVEDIO80211VirtualInterface15Ev"); public:
 private:
     uint8_t _virtualLayout[0x130-sizeof(IO80211SkywalkInterface)];
+public:
+    // Non-virtual IO80211Family export (26.7): records llw0 as this interface's low-latency companion.
+    void setCompanionLowLatencySkywalkInterface(IO80211SkywalkInterface *);
 };
 static_assert(sizeof(IO80211VirtualInterface)==0x130, "Tahoe virtual interface ABI");

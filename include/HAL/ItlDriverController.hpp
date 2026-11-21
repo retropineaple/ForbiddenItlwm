@@ -22,6 +22,10 @@ public:
     virtual void clearScanningFlags() = 0;
     
     virtual IOReturn setMulticastList(IOEthernetAddress *addr, int count) = 0;
+
+    // Takes a new station address without restarting the firmware, when no firmware context holds the old one.
+    // False means a restart is needed to apply it.
+    virtual bool setAddressWithoutRestart(const uint8_t *address) { return false; }
 };
 
 #endif /* ItlDriverController_h */

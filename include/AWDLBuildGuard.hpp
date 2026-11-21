@@ -6,7 +6,8 @@
 // accept the risk of a kernel panic.
 //
 // Each macOS version has its own kext and its own list.
-// Tahoe: 25G241 on hardware; 25G332 and 25G342 offline, from Apple's Kernel Debug Kits
+// Tahoe: 25G241 and 25G229 on hardware (25G229: the AWDL interface has run there since 2026-11-10 on the GF75, and
+// its IO80211 vtables match the 25G241 reference slot by slot); 25G332 and 25G342 offline, from Apple's Kernel Debug Kits
 // (IOSkywalkFamily identical, IO80211Family's AWDL, interface, buffer and registration code
 // instruction-identical, all virtual table slots and all kernel imports matching).
 // Sequoia: 24H23 (15.8) and 24H241 (15.8.3) offline, from their Kernel Debug Kits (identical
@@ -39,6 +40,7 @@ constexpr const char *kExpectedKernelPrefix = "xnu-11417.140.69.71";
 constexpr const char *kExpectedKernelSuffix = "/RELEASE_X86_64";
 #else
 constexpr VerifiedBuild kVerifiedBuilds[] = {
+    {"25G229", "xnu-12377.161.15.700.19~2/RELEASE_X86_64"},   // macOS 26.7 (GF75 hardware, same kernel as 26.7.1)
     {"25G241", "xnu-12377.161.15.700.19~2/RELEASE_X86_64"},   // macOS 26.7.1
     {"25G332", "xnu-12377.161.15.701.48~2/RELEASE_X86_64"},   // macOS 26.7.2
     {"25G342", "xnu-12377.161.15.701.48~2/RELEASE_X86_64"},   // macOS 26.7.3

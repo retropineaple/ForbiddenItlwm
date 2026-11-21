@@ -38,6 +38,7 @@ struct apple80211_frame_counters;
 struct userPrintCtx;
 struct apple80211_lqm_summary;
 struct apple80211_infra_specific_stats;
+struct apple80211_data_path_interface_stats;
 
 struct TxPacketRequest {
     uint16_t    unk1;       // 0
@@ -189,7 +190,10 @@ private: virtual void _abi_0e08() __asm__("__ZN23IO80211SkywalkInterface25getDat
 private: virtual void _abi_0e10() __asm__("__ZN23IO80211SkywalkInterface20getDataPathPeerStatsEP31apple80211_data_path_peer_stats"); public:
 private: virtual void _abi_0e18() __asm__("__ZN23IO80211SkywalkInterface22getLastQueuePacketTimeEP10ether_addr"); public:
 private: virtual void _abi_0e20() __asm__("__ZN23IO80211SkywalkInterface32getLastRxUnicastLinkActivityTimeEP10ether_addr"); public:
-private: virtual void _abi_0e28() __asm__("__ZN23IO80211SkywalkInterface24updateInterfaceDataStatsEP36apple80211_data_path_interface_stats"); public:
+    // Copies a driver's interface counters into IO80211's peer manager (IO80211PeerManager::updateLocalCounters) and
+    // interface monitor. Read on 26.7: unicast tx packets at +0x08, tx bytes +0x10, unicast rx packets +0x18, rx
+    // bytes +0x20, group rx +0x30, group tx +0xe0, all cumulative; per-AC tx latency bins from +0x180, 0x140 each.
+    virtual IOReturn updateInterfaceDataStats(apple80211_data_path_interface_stats *);
 private: virtual void _abi_0e30() __asm__("__ZN23IO80211SkywalkInterface19updatePeerDataStatsEP31apple80211_data_path_peer_stats"); public:
 private: virtual void _abi_0e38() __asm__("__ZN23IO80211SkywalkInterface12logTxLatencyEPhjy"); public:
 private: virtual void _abi_0e40() __asm__("__ZN23IO80211SkywalkInterface12logRxLatencyEjy"); public:
@@ -202,6 +206,11 @@ public:
     OSString *setInterfaceRole(unsigned int);
     void *setInterfaceId(unsigned int);
     int getInterfaceRole();
+    // Non-virtual IO80211Family exports (26.7): how AppleBCMWLANLowLatencyInterface becomes awdl0's companion llw0.
+    unsigned int getInterfaceId();
+    void setLowLatencyEnabled(bool);
+    void setParentInterface(class IO80211VirtualInterface *);
+    void setCompanionInterfaceId(unsigned int);
 };
 static_assert(sizeof(IO80211SkywalkInterface) == 0x128, "WCL ABI size");
 #endif

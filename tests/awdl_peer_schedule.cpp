@@ -1,6 +1,7 @@
 #include <AWDLPeerSchedule.hpp>
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 #include <initializer_list>
 
 
@@ -120,14 +121,14 @@ int main() {
     // Stale schedule: no pause.
     assert(!s.shouldPause(s.heardUS + kPeerScheduleStaleUS + 1));
 
-    // A changed sequence restarts the counts but keeps the calibration until checked.
+    // A changed sequence restarts the checks but keeps the calibration and the offset evidence.
     uint8_t seq2[16]; memcpy(seq2, seq, 16); seq2[0] = 0;
     n = buildFrame(f, uint16_t(back * 4), 64, 16, seq2);
     assert(peerSyncFromAction(f, n, &info));
     s.heardUS = backStart - 1000;
     s.checkedFrames = 399;
     s.note(info, backStart, 149);
-    assert(s.sequenceChanges == 1 && s.binFrames == 0 && s.checkedFrames == 0 && s.calibrated);
+    assert(s.sequenceChanges == 1 && s.checkedFrames == 0 && s.calibrated);
     s.note(info, backStart + kPeerPhaseJumpUS + 1, 149);
     assert(!s.calibrated && s.decalibrations == 1);
 
@@ -149,6 +150,50 @@ int main() {
     for (uint64_t t = t0; bad.checkedFrames < 199 && bad.calibrated; t += 5003) bad.notePeerFrame(t);
     for (uint64_t t = t0 + 2000000; bad.calibrated && t < t0 + 3000000; t += 5003) { bad.heardUS = t; bad.notePeerFrame(t); }
     assert(!bad.calibrated && bad.decalibrations == 1);
+    // gf75-ax201: a phone on a busy network changes its sequence every few seconds. Fewer than 300 frames are
+    // heard under any one sequence, and the offset is still found from all of them together.
+    {
+        static PeerSchedule hop; hop.reset();
+        const uint8_t seqA[16] = {149,149,149,149, 36,36,36,36, 6, 149,149,149, 36,36,36,36};
+        const uint8_t seqB[16] = {149,149, 36,36,36,36,36,36, 149,149,149,149,149, 36,36,36};
+        const uint8_t seqC[16] = {36,36,36, 149,149,149,149,149,149, 36,36, 6, 149,149,149,149};
+        const uint8_t *seqs[3] = {seqA, seqB, seqC};
+        const unsigned hopOffset = 3;
+        uint8_t g[200]; PeerSyncInfo hi{};
+        size_t gn = buildFrame(g, 400, 20, 16, seqA);
+        assert(peerSyncFromAction(g, gn, &hi));
+        hop.note(hi, t0, 149);
+        unsigned heard = 0, which = 0, sinceChange = 0, maxUnderOne = 0;
+        for (uint64_t t = t0; heard < 900 && !hop.calibrated; t += 7919) {
+            uint64_t in = 0;
+            const uint32_t e = hop.eawAt(t, &in);
+            hop.heardUS = t;
+            if (sinceChange >= 90) {          // A new sequence, announced with exact counters.
+                which = (which + 1) % 3; sinceChange = 0;
+                memcpy(hop.channels, seqs[which], 16); ++hop.sequenceChanges; hop.clearChecks();
+            }
+            if (seqs[which][(e + hopOffset) % 16] == 149) { hop.notePeerFrame(t); ++heard; ++sinceChange; }
+            if (sinceChange > maxUnderOne) maxUnderOne = sinceChange;
+        }
+        assert(maxUnderOne < kPeerCalibrateFrames);
+        assert(hop.calibrated && hop.offset == hopOffset && hop.sequenceChanges >= 3);
+        // A stale gap (the phone unheard for 3 s) drops the calibration but not the evidence: the next
+        // sync frame re-anchors the same counters and the first frame after it calibrates again.
+        const uint32_t kept = hop.scoredFrames;
+        const uint64_t later = hop.heardUS + 3000000;
+        uint64_t in2 = 0;
+        const uint32_t eLater = hop.eawAt(later, &in2);
+        gn = buildFrame(g, uint16_t(eLater * 4), uint16_t((hop.eawUS - in2) / 1024), 16, seqs[which]);
+        assert(peerSyncFromAction(g, gn, &hi));
+        hop.note(hi, later, 149);
+        assert(!hop.calibrated && hop.decalibrations == 1 && hop.scoredFrames == kept && kept >= kPeerCalibrateFrames);
+        for (uint64_t t = later + 2000; !hop.calibrated && t < later + 1500000; t += 7919) {
+            uint64_t in = 0;
+            const uint32_t e = hop.eawAt(t, &in);
+            if (seqs[which][(e + hopOffset) % 16] == 149) hop.notePeerFrame(t);
+        }
+        assert(hop.calibrated && hop.offset == hopOffset && hop.calibrations == 2);
+    }
     // No away entry at all: nothing to calibrate against.
     static PeerSchedule all; all.reset();
     uint8_t seqAll[16]; memset(seqAll, 149, 16);

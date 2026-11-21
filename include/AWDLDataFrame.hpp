@@ -7,6 +7,8 @@ struct DataFrameView {
     const uint8_t *source;
     const uint8_t *destination;
     uint16_t wifiSequence;
+    // llw0's framing (buildLowLatencyFrameFromEthernet) rather than AWDL's own data header.
+    bool lowLatency;
 };
 // Caller-owned, disjoint output. This reconstructs Ethernet framing only; it
 // does not authorize delivery or take ownership of the borrowed packet view.
@@ -36,6 +38,15 @@ inline ParseResult parseDataFrame(const uint8_t *f,size_t captured,bool includes
     if(length<header) return ParseResult::Malformed;
     if(header==26 && (f[24]&0x80)) return ParseResult::Unsupported;
     IPv6PayloadView ip;
+    // llw0's frames: plain LLC/SNAP before the IPv6 packet (see buildLowLatencyFrameFromEthernet).
+    static const uint8_t snap[8]={0xaa,0xaa,0x03,0,0,0,0x86,0xdd};
+    bool plain=length-header>=8;
+    for(unsigned i=0;plain && i<8;++i) plain=f[header+i]==snap[i];
+    if(plain) {
+        if(!validIPv6Payload(f+header+8,length-header-8)) return ParseResult::Malformed;
+        *out={{f+header+8,length-header-8,0},f+10,f+4,uint16_t(read16(f+22)>>4),true};
+        return ParseResult::Valid;
+    }
     const auto result=parseIPv6DataPayload(f+header,length-header,&ip);
     if(result!=ParseResult::Valid) return result;
     *out={ip,f+10,f+4,uint16_t(read16(f+22)>>4)};

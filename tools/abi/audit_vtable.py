@@ -69,6 +69,25 @@ for i,e in enumerate(native):
     if method and actual and actual.startswith('__ZN16ItlAWDLInterface') and actual.endswith(method.group(2)):
         expected=actual
     results.append(dict(slot=hex(e['slot']),expected=expected,actual=actual,match=actual==expected))
+# llw0 (ItlLLWInterface) overrides only initBSDInterfaceParameters: every other slot must be IO80211SkywalkInterface's own, except the
+# destructors and getMetaClass, which every OSObject subclass defines.
+llw_symbol=next((x for x in symbols if x['name']=='__ZTV15ItlLLWInterface'),None)
+if llw_symbol:
+    assert llw_symbol['section']==symbol['section']
+    base=tables['IO80211SkywalkInterface']['entries'][:]
+    while base and int(base[-1]['packed'],16)==0:base.pop()
+    for e in base:
+        assert e['symbols'],e
+        expected=e['symbols'][0]
+        assert expected!='___cxa_pure_virtual',e
+        if e['slot'] in (0,8):
+            expected=expected.replace('__ZN23IO80211SkywalkInterface','__ZN15ItlLLWInterface')
+        elif e['slot']==0x38:
+            expected=expected.replace('__ZNK23IO80211SkywalkInterface','__ZNK15ItlLLWInterface')
+        elif e['slot']==0x8e0:   # initBSDInterfaceParameters: its own unique id, as Broadcom's llw0
+            expected=expected.replace('__ZN23IO80211SkywalkInterface','__ZN15ItlLLWInterface')
+        actual=relocations.get(llw_symbol['value']-section['addr']+16+e['slot'])
+        results.append(dict(table='ItlLLWInterface',slot=hex(e['slot']),expected=expected,actual=actual,match=actual==expected))
 failures=[x for x in results if not x['match']]
 controller=next(x for x in symbols if x['name']=='__ZTV12AirportItlwm')
 assert controller['section']==symbol['section']

@@ -17,6 +17,25 @@
 // -itlawdlsamples: raw samples of native requests, templates and packets in the registry. They can hold
 // addresses and service records, and any local user can read the registry, so they are off by default.
 static bool awdlRawSamples;
+// gf75-ax201 (-itlawdloobtrace): the last 16 OOB requests as received, header and the start of the payload, so
+// the undocumented layout can be worked out from real traffic (Sidecar, Universal Control). They hold peer
+// addresses: local diagnostics only, never published elsewhere. Static, so ItlAWDLInterface's layout is untouched.
+static bool awdlOobTrace;
+static constexpr unsigned kOobTraceSlots = 16, kOobTraceBytes = 48 + 160;
+static uint8_t awdlOobTraceBuf[kOobTraceSlots][kOobTraceBytes + 8];
+static uint32_t awdlOobTraceCount;
+// gf75-ax201: OOB requests carry their frame behind a pointer, not inline. AppleBCMWLANProximityInterface::
+// setAWDL_OOB_AUTO_REQUEST (26.7) reads: peer address at +4 (6 bytes), BSSID at +0x16 (6), length at +0x28 and
+// a pointer to the frame at +0x30, used directly during the call. WAS: the driver read the pointer's bytes as the
+// frame, and nothing was ever sent, so services announced only through OOB frames (Sidecar's _rdlink,
+// Universal Control's companion link) never reached peers. A single-producer, single-consumer ring hands the
+// frames to the radio side (-itlawdloobtx).
+static bool awdlOobTx;
+static constexpr unsigned kOobQueueSlots = 4, kOobMaxFrame = 1600;
+struct AwdlOobSlot { uint8_t peer[6], bssid[6]; uint16_t length; uint8_t frame[kOobMaxFrame]; };
+static AwdlOobSlot awdlOobQueue[kOobQueueSlots];
+static volatile uint32_t awdlOobHead, awdlOobTail;   // head: next to write (setter), tail: next to read (radio)
+static uint32_t awdlOobQueued, awdlOobDropped, awdlOobBadPointer, awdlOobBadLength;
 #include <IOKit/acpi/IOACPIPlatformDevice.h>
 #include <AWDLObservation.hpp>
 #include <sys/_netstat.h>
@@ -38,6 +57,16 @@ static bool awdlRawSamples;
 #include <libkern/OSDebug.h>
 #include <mach/vm_param.h>
 #include <sys/proc.h>
+
+// AW start event timer (see awdlAwTimerFired), -itlawdlawstart only.
+static IOTimerEventSource *awdlAwTimer;
+// Peer cache completions (see awdlPeerCacheTimerFired), -itlawdlawstart only.
+static IOTimerEventSource *awdlPeerCacheTimer;
+static IOSimpleLock *awdlPeerCacheLock;
+struct AwdlPeerCacheDone { uint32_t message; uint8_t peer[6]; uint16_t extra; uint32_t result; };
+static AwdlPeerCacheDone awdlPeerCacheDone[16];
+static unsigned awdlPeerCacheDoneCount;
+static uint32_t awdlPeerCacheCompleted, awdlPeerCacheDropped, awdlOobStatusPosted;
 #endif
 
 #define super IO80211Controller
@@ -45,6 +74,7 @@ OSDefineMetaClassAndStructors(AirportItlwm, IO80211Controller);
 OSDefineMetaClassAndStructors(CTimeout, OSObject)
 #if defined(ITL_AWDL_NATIVE)
 OSDefineMetaClassAndStructors(ItlAWDLInterface, IO80211AWDLProtocol)
+OSDefineMetaClassAndStructors(ItlLLWInterface, IO80211SkywalkInterface)
 #endif
 
 IO80211WorkQueue *_fWorkloop;
@@ -86,6 +116,42 @@ IOReturn ItlAWDLInterface::setAWDL_PEER_TRAFFIC_REGISTRATION(apple80211_awdl_pee
 
 extern bool itlAWDLBuildVerified();
 extern bool itlAWDLBuildForced();
+// IO80211's addPeerToFWCache asks the firmware to keep a peer's state before real-time traffic (Sidecar,
+// Universal Control) is registered with it; sendRealTimeUMI fails if the peer isn't cached. This driver keeps every
+// AWDL peer in software already, so there is no firmware cache to fill: the request is acknowledged and counted.
+IOReturn ItlAWDLInterface::setPEER_CACHE_CONTROL(apple80211_peer_cache_control *data)
+{
+    if (!nativeState.accept)
+        return unsupported("setPEER_CACHE_CONTROL");
+    if (!data)
+        return kIOReturnBadArgument;
+    static uint32_t peerCacheRequests;
+    setProperty("ItlwmAWDLPeerCacheRequests", ++peerCacheRequests, 32);
+    // A Broadcom firmware answers each cache command: AppleBCMWLANCore::completePeerCacheControl posts message 51
+    // (operation 0 or 6 done -> 1, operation 2 done -> 3, with the peer at +8), and
+    // IO80211P2PDataPathManager::handleCacheControlMessages then marks the peer cached (handlePeerAddIndication).
+    // Without it the peer stays "pending" and handleUmiTimer won't send Sidecar's UMI ("peer is not cached").
+    // Answered a moment later from the workloop, as the firmware's completion would be.
+    const uint8_t *raw = reinterpret_cast<const uint8_t *>(data);
+    uint32_t operation;
+    memcpy(&operation, raw + 4, sizeof(operation));
+    const uint32_t result = (operation == 0 || operation == 6) ? 1 : operation == 2 ? 3 : 0;
+    if (result && awdlPeerCacheLock && awdlPeerCacheTimer) {
+        IOSimpleLockLock(awdlPeerCacheLock);
+        if (awdlPeerCacheDoneCount < 16) {
+            AwdlPeerCacheDone &done = awdlPeerCacheDone[awdlPeerCacheDoneCount++];
+            done.message = 51;
+            memcpy(done.peer, raw + 8, 6);
+            memcpy(&done.extra, raw + 0xe, 2);
+            done.result = result;
+        } else {
+            ++awdlPeerCacheDropped;
+        }
+        IOSimpleLockUnlock(awdlPeerCacheLock);
+        awdlPeerCacheTimer->setTimeoutMS(2);
+    }
+    return kIOReturnSuccess;
+}
 
 void ItlAWDLInterface::acceptNativeRequests()
 {
@@ -141,6 +207,56 @@ IOReturn ItlAWDLInterface::noteOobRequest(const apple80211_awdl_oob_request *dat
     ++oobRequests;
     if (oobRequests == 1 || !(oobRequests % 16))
         setProperty("ItlwmAWDLOobRequests", oobRequests, 32);
+    if (awdlOobTx) {
+        uint64_t framePointer = 0;
+        memcpy(&framePointer, data->data, sizeof(framePointer));
+        const uint16_t length = data->data_len;
+        if (framePointer < 0xffffff8000000000ULL) {
+            ++awdlOobBadPointer;
+        } else if (length < 8 || length > kOobMaxFrame) {
+            ++awdlOobBadLength;
+        } else if (awdlOobHead - awdlOobTail >= kOobQueueSlots) {
+            ++awdlOobDropped;  // The radio side hasn't caught up: drop the newest, auto requests repeat.
+        } else {
+            AwdlOobSlot &q = awdlOobQueue[awdlOobHead % kOobQueueSlots];
+            const uint8_t *raw = reinterpret_cast<const uint8_t *>(data);
+            memcpy(q.peer, raw + 4, 6);
+            memcpy(q.bssid, raw + 0x16, 6);
+            memcpy(q.frame, reinterpret_cast<const void *>(framePointer), length);
+            q.length = length;
+            OSSynchronizeIO();
+            awdlOobHead = awdlOobHead + 1;
+            ++awdlOobQueued;
+        }
+        if (!(oobRequests % 16)) {
+            setProperty("ItlwmAWDLOobQueued", awdlOobQueued, 32);
+            setProperty("ItlwmAWDLOobDropped", awdlOobDropped, 32);
+            setProperty("ItlwmAWDLOobBadPointer", awdlOobBadPointer, 32);
+            setProperty("ItlwmAWDLOobBadLength", awdlOobBadLength, 32);
+        }
+    }
+    if (awdlOobTrace) {
+        // Slot: 4-byte sequence, 2-byte data_len, 1 byte auto flag, 1 spare, then header + payload start.
+        uint8_t *slot = awdlOobTraceBuf[awdlOobTraceCount % kOobTraceSlots];
+        const uint32_t seq = awdlOobTraceCount++;
+        bzero(slot, kOobTraceBytes + 8);
+        memcpy(slot, &seq, 4);
+        memcpy(slot + 4, &data->data_len, 2);
+        slot[6] = (name && name[0] && name[12] == 'A') ? 1 : 0;  // "setAWDL_OOB_AUTO_REQUEST"
+        const size_t header = offsetof(apple80211_awdl_oob_request, data);
+        const size_t body = data->data_len <= sizeof(data->data) ? data->data_len : sizeof(data->data);
+        memcpy(slot + 8, data, header);
+        uint64_t framePointer = 0;
+        memcpy(&framePointer, data->data, sizeof(framePointer));
+        if (framePointer >= 0xffffff8000000000ULL && data->data_len && data->data_len <= kOobMaxFrame)
+            memcpy(slot + 8 + header, reinterpret_cast<const void *>(framePointer),
+                   min(size_t(data->data_len), size_t(kOobTraceBytes - header)));
+        if (auto *all = OSData::withBytes(awdlOobTraceBuf, sizeof(awdlOobTraceBuf))) {
+            setProperty("ItlwmAWDLOobTrace", all);
+            all->release();
+        }
+        setProperty("ItlwmAWDLOobTraceCount", awdlOobTraceCount, 32);
+    }
     if (!oobSampled && awdlRawSamples) {
         oobSampled = true;
         uint16_t length;
@@ -414,6 +530,33 @@ void ItlAWDLInterface::observeDataFrame(const uint8_t *frame, size_t length)
     // Copy only multicast or our local AWDL destination; drop self echoes.
     if ((!(*view.destination & 1) && memcmp(view.destination, localFrameAddress, 6)) ||
         !memcmp(view.source, localFrameAddress, 6)) return;
+    // Frames in llw0's own framing (the iPad's llw0 sends plain LLC/SNAP, no AWDL header) are llw0's alone.
+    if (view.lowLatency) {
+        if (llwRegistered && dataDeliverEnabled) {
+            if (deliverEthernet(llwRxPool, llwQueues[2], llwQueues[3], view.destination, view.source, view.ip.bytes,
+                                view.ip.length))
+                ++llwDelivered;
+            else
+                ++llwDeliverFailed;
+        }
+        return;
+    }
+    // llw0 shares awdl0's address. It gets what is sent to a unique local address (fc00::/7: wifip2pd gives llw0
+    // its fdXX addresses, and the iPad's llw0 sends from one) and a copy of every group frame, for neighbor
+    // discovery. Everything else is awdl0's.
+    if (llwRegistered && dataDeliverEnabled && view.ip.length >= 40) {
+        const bool group = *view.destination & 1;
+        const bool local = (view.ip.bytes[24] & 0xfe) == 0xfc || (view.ip.bytes[8] & 0xfe) == 0xfc;
+        if (group || local) {
+            if (deliverEthernet(llwRxPool, llwQueues[2], llwQueues[3], view.destination, view.source, view.ip.bytes,
+                                view.ip.length))
+                ++llwDelivered;
+            else
+                ++llwDeliverFailed;
+            if (!group)
+                return;
+        }
+    }
     ++dataCopyAttempts;
     auto *pool = reinterpret_cast<ItlSkywalkPoolView *>(rxPool);
     ItlSkywalkPacketView *packet = nullptr;
@@ -441,6 +584,12 @@ void ItlAWDLInterface::observeDataFrame(const uint8_t *frame, size_t length)
                     if (delivered == kIOReturnSuccess) {
                         // The queue owns the packet now; don't touch or return it.
                         ++dataDelivered;
+                        if (*view.destination & 1) {
+                            ++rxGroupPackets;
+                        } else {
+                            ++rxUnicastPackets;
+                            rxUnicastBytes += wanted;
+                        }
                         if (dataDelivered == 1 || !(dataDelivered % 16))
                             setProperty("ItlwmAWDLDataDelivered", dataDelivered, 32);
                         return;
@@ -586,19 +735,70 @@ UInt32 ItlAWDLInterface::acceptTransmit(IOSkywalkPacket *const *packets, UInt32 
 bool ItlAWDLInterface::popTransmit(uint8_t *output, size_t available, size_t *written,
                                    const uint8_t *holdPayloadFor, bool holdEverySize)
 {
-    ++transmitDepthBins[ItlAWDL::depthBin(transmitQueued)];
+    ++transmitDepthBins[ItlAWDL::depthBin(transmitQueued + parkedQueued)];
+    // llw0 first: it is the low-latency interface, and Sidecar's video rides on it. Served only once awdl0 had nothing
+    // to send, it waited behind awdl0's backlog: 1.3 to 1.7 s of one-way delay at 3 to 5 Mbit/s of video, and 3702
+    // frames dropped from its full queue (2026-11-20 22:03-22:05). Its frames for a held peer still wait.
+    if (popLowLatency(output, available, written, holdPayloadFor, holdEverySize))
+        return true;
+    // A frame on its way to the radio, with our sequence number, counted as IO80211's data path counts it.
+    auto sent = [&](const TransmitFrame &frame) {
+        ++transmitPopped;
+        ++transmitSequence;
+        if (output[4] & 1) {
+            ++txGroupPackets;
+        } else {
+            ++txUnicastPackets;
+            txUnicastBytes += frame.length;
+        }
+        return true;
+    };
+    // The parked frames first, in their order, once their peer is no longer held.
+    while (parkedQueued && !(holdPayloadFor && ItlAWDL::sameAddress(parkedPeer, holdPayloadFor))) {
+        const auto &frame = parkedFrames[parkedHead];
+        const auto result = ItlAWDL::buildDataFrameFromEthernet(frame.bytes, frame.length, localFrameAddress,
+                                                                transmitSequence, output, available, written);
+        parkedHead = (parkedHead + 1) % parkedFrameCount;
+        --parkedQueued;
+        if (result == ItlAWDL::BuildResult::Ready)
+            return sent(frame);
+        ++transmitPopped;
+        ++transmitDropped;
+    }
     while (transmitQueued) {
         const auto &frame = transmitFrames[transmitHead];
         const auto result = ItlAWDL::buildDataFrameFromEthernet(frame.bytes, frame.length, localFrameAddress,
                                                                 transmitSequence, output, available, written);
-        // Hold what is for the capped peer. Leave the FIFO head and sequence intact. With holdEverySize
-        // (iface160) that is every unicast data frame for it: a short frame let past would overtake the
-        // held packets of the same QUIC connection on the listener's unpaused queue, and QUIC counts
-        // overtaken packets as lost. Without it, only payload-sized frames, as on iface157 to iface159.
-        if (result == ItlAWDL::BuildResult::Ready && holdPayloadFor && (holdEverySize || *written >= 1200) &&
-            output[0] == 0x08 && ItlAWDL::sameAddress(output + 4, holdPayloadFor)) {
+        // Hold what is for the capped peer. With holdEverySize (iface160) that is every unicast data frame for
+        // it: a short frame let past would overtake the held packets of the same QUIC connection on the
+        // listener's unpaused queue, and QUIC counts overtaken packets as lost. Without it, only payload-sized
+        // frames, as on iface157 to iface159. Once some of its frames are parked, all of its later ones join
+        // them, so the peer's own order is kept whatever their size.
+        const bool unicastData = result == ItlAWDL::BuildResult::Ready && output[0] == 0x08 && !(output[4] & 1);
+        const bool held = unicastData && holdPayloadFor && (holdEverySize || *written >= 1200) &&
+            ItlAWDL::sameAddress(output + 4, holdPayloadFor);
+        const bool behindParked = unicastData && parkedQueued && ItlAWDL::sameAddress(output + 4, parkedPeer);
+        if (held || behindParked) {
+            const bool shortFrame = *written < 1200;
+            if (parkedFrames && parkedQueued < parkedFrameCount &&
+                (!parkedQueued || ItlAWDL::sameAddress(output + 4, parkedPeer))) {
+                if (!parkedQueued)
+                    memcpy(parkedPeer, output + 4, sizeof(parkedPeer));
+                auto &slot = parkedFrames[(parkedHead + parkedQueued) % parkedFrameCount];
+                slot.length = frame.length;
+                memcpy(slot.bytes, frame.bytes, frame.length);
+                ++parkedQueued;
+                parkedPeak = max(parkedPeak, parkedQueued);
+                ++transmitParked;
+                if (shortFrame)
+                    ++transmitHeldShort;
+                transmitHead = (transmitHead + 1) % transmitFrameCount;
+                --transmitQueued;
+                continue;
+            }
+            // No room to park it: it waits at the head, and what is behind it waits too, as before.
             // Once per frame, not once per attempt: the pump asks again every millisecond.
-            if (*written < 1200 && transmitHeldMark != transmitPopped + 1) {
+            if (shortFrame && transmitHeldMark != transmitPopped + 1) {
                 transmitHeldMark = transmitPopped + 1;
                 ++transmitHeldShort;
             }
@@ -606,11 +806,12 @@ bool ItlAWDLInterface::popTransmit(uint8_t *output, size_t available, size_t *wr
         }
         transmitHead = (transmitHead + 1) % transmitFrameCount;
         --transmitQueued;
-        ++transmitPopped;
         if (result == ItlAWDL::BuildResult::Ready) {
-            ++transmitSequence;
-            return true;
+            if (parkedQueued)
+                ++transmitPassed;   // Went ahead of the held peer's frames.
+            return sent(frame);
         }
+        ++transmitPopped;
         ++transmitDropped;
     }
     return false;
@@ -618,6 +819,24 @@ bool ItlAWDLInterface::popTransmit(uint8_t *output, size_t available, size_t *wr
 
 bool ItlAWDLInterface::serviceTransmit()
 {
+    if (llwDoneCount && llwQueues[1]) {
+        const unsigned count = min(llwDoneCount, 32U);
+        if (itlTxComplete(llwQueues[1], reinterpret_cast<void *const *>(llwDone), count, 0) == kIOReturnSuccess) {
+            llwDoneCount -= count;
+            memmove(llwDone, llwDone + count, llwDoneCount * sizeof(llwDone[0]));
+        }
+    }
+    static unsigned llwPublished;
+    if (lowLatency && llwAccepted + llwDelivered != llwPublished) {
+        llwPublished = llwAccepted + llwDelivered;
+        setProperty("ItlwmLLWTxAccepted", llwAccepted, 32);
+        setProperty("ItlwmLLWTxSent", llwSent, 32);
+        setProperty("ItlwmLLWTxDropped", llwDropped, 32);
+        setProperty("ItlwmLLWTxDroppedFull", llwDroppedFull, 32);
+        setProperty("ItlwmLLWTxDroppedBuild", llwDroppedBuild, 32);
+        setProperty("ItlwmLLWRxDelivered", llwDelivered, 32);
+        setProperty("ItlwmLLWRxFailed", llwDeliverFailed, 32);
+    }
     if (transmitDoneCount) {
         const unsigned count = min(transmitDoneCount, 32U);
         const IOReturn result = itlTxComplete(packetQueues[1], reinterpret_cast<void *const *>(transmitDone), count, 0);
@@ -634,12 +853,45 @@ bool ItlAWDLInterface::serviceTransmit()
         setProperty("ItlwmAWDLTxAccepted", transmitAccepted, 32);
         setProperty("ItlwmAWDLTxCompleted", transmitCompleted, 32);
         setProperty("ItlwmAWDLTxDropped", transmitDropped, 32);
+        setProperty("ItlwmAWDLTxParked", transmitParked, 32);
+        setProperty("ItlwmAWDLTxParkedPeak", parkedPeak, 32);
+        setProperty("ItlwmAWDLTxPassedParked", transmitPassed, 32);
         if (auto *depths = OSData::withBytes(transmitDepthBins, sizeof(transmitDepthBins))) {
             setProperty("ItlwmAWDLTxDepthBins", depths);
             depths->release();
         }
     }
-    return transmitQueued || transmitDoneCount;
+    return transmitQueued || parkedQueued || transmitDoneCount || llwQueued || llwDoneCount;
+}
+
+// IO80211's AWDL state machine keeps the data schedule while its peer manager sees packets move
+// (IO80211AWDLPeerManager::monitorAWDLDataMode reads the counters updateLocalCounters sets), and leaves it within
+// half a second when they stand still (RptDataPathThres). Its own data path counts them for the drivers that use it;
+// ours bypasses it, so it read "In AW: Tx:0 Rx:0" throughout: during a 25 MB AirDrop to the iPhone it went from
+// Data to Idle after 1 s and to Low Power (2 slots in 16 on our channel) after 7 s, for the rest of the send
+// (2026-11-14 20:40). The counts are cumulative; everything else in the structure stays zero.
+void ItlAWDLInterface::reportDataStats(uint64_t nowUS)
+{
+    // After a refusal, once a minute rather than every second.
+    const uint64_t interval = dataStatsResult == kIOReturnSuccess ? 1000000ULL : 60000000ULL;
+    if (!nativeStarted || !networkRegistered || (dataStatsReportedUS && nowUS - dataStatsReportedUS < interval))
+        return;
+    dataStatsReportedUS = nowUS;
+    bzero(dataStats, sizeof(dataStats));
+    dataStats[0x08 / 8] = txUnicastPackets;
+    dataStats[0x10 / 8] = txUnicastBytes;
+    dataStats[0x18 / 8] = rxUnicastPackets;
+    dataStats[0x20 / 8] = rxUnicastBytes;
+    dataStats[0x30 / 8] = rxGroupPackets;
+    dataStats[0xe0 / 8] = txGroupPackets;
+    const IOReturn result = updateInterfaceDataStats(reinterpret_cast<apple80211_data_path_interface_stats *>(dataStats));
+    if (result != dataStatsResult || !(dataStatsReports & 63)) {
+        setProperty("ItlwmAWDLDataStatsResult", uint32_t(result), 32);
+        setProperty("ItlwmAWDLDataStatsTx", txUnicastPackets, 64);
+        setProperty("ItlwmAWDLDataStatsRx", rxUnicastPackets, 64);
+    }
+    dataStatsResult = result;
+    ++dataStatsReports;
 }
 
 UInt32 ItlAWDLInterface::rejectTransmit(OSObject *owner, IOSkywalkTxSubmissionQueue*,
@@ -712,6 +964,12 @@ void ItlAWDLInterface::releaseNetworkResources()
         dataTransmitEnabled = false;
     transmitQueued = 0;
     transmitHead = 0;
+    // The held peer's copies go with the queue they came from.
+    parkedQueued = 0;
+    parkedHead = 0;
+    networkRegistered = false;
+    if (queueWorkLoop)
+        destroyLowLatency();
     if (registrationAttempted) {
         registrationAttempted = false;
         deregisterEthernetInterface(0);
@@ -822,6 +1080,11 @@ void ItlAWDLInterface::free()
         IOFree(transmitFrames, transmitFramesBytes);
         transmitFrames = nullptr;
         transmitFramesBytes = 0;
+    }
+    if (parkedFrames) {
+        IOFree(parkedFrames, sizeof(TransmitFrame) * parkedFrameCount);
+        parkedFrames = nullptr;
+        parkedQueued = 0;
     }
     if (configurationLock) {
         IOLockFree(configurationLock);
@@ -1033,6 +1296,9 @@ IOReturn ItlAWDLInterface::initializeNetwork(IO80211Controller *controller,
         if (transmitFrames)
             transmitFramesBytes = sizeof(TransmitFrame) * transmitFrameCount;
         dataTransmitEnabled = transmitFrames != nullptr;
+        // Without it a held frame at the head waits with everything behind it, as before.
+        parkedFrameCount = min(transmitFrameCount, parkedFrameMax);
+        parkedFrames = static_cast<TransmitFrame *>(IOMalloc(sizeof(TransmitFrame) * parkedFrameCount));
         setProperty("ItlwmAWDLTxQueueFrames", transmitFrameCount, 32);
     }
     int queueEnable = 0;
@@ -1043,8 +1309,280 @@ IOReturn ItlAWDLInterface::initializeNetwork(IO80211Controller *controller,
         noteQueueState("ItlwmAWDLQueueStateAfterEnable");
     }
     stage("registered");
+    networkRegistered = true;
     registerService();
     return kIOReturnSuccess;
+}
+
+// ---- llw0 ----------------------------------------------------------------------------------------------------
+// ifnet_init_eparams (version 2, 0x158 bytes, as IOSkywalkNetworkBSDClient::start passes it): the unique id's
+// pointer at +0x10 and its length at +0x18. dlil copies the id, so it only has to outlive the call.
+SInt32 ItlLLWInterface::initBSDInterfaceParameters(ifnet_init_eparams *params, sockaddr_dl **address)
+{
+    const SInt32 result = IO80211SkywalkInterface::initBSDInterfaceParameters(params, address);
+    if (result || !params)
+        return result;
+    uniqueId = reinterpret_cast<uintptr_t>(this);
+    const void *id = &uniqueId;
+    const uint32_t length = sizeof(uniqueId);
+    memcpy(reinterpret_cast<uint8_t *>(params) + 0x10, &id, sizeof(id));
+    memcpy(reinterpret_cast<uint8_t *>(params) + 0x18, &length, sizeof(length));
+    return result;
+}
+
+// apple80211_companion_skywalk_if_create, as AppleBCMWLANProximityInterface::setCOMPANION_SKYWALK_IF_CREATE reads it
+// on 26.7: the operation at +4 (1 create, 0 delete) and the new interface's BSD name written back at +8, 16 bytes.
+IOReturn ItlAWDLInterface::setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create *data)
+{
+    if (!data)
+        return kIOReturnBadArgument;
+    if (!queueWorkLoop)
+        return kIOReturnNotReady;
+    // The queues and frames are the radio side's, under the controller's gate (recursive if already held).
+    if (!queueWorkLoop->inGate())
+        return queueWorkLoop->runAction([](OSObject *owner, void *argument, void *, void *, void *) -> IOReturn {
+            return static_cast<ItlAWDLInterface *>(owner)->setCOMPANION_SKYWALK_IF_CREATE(
+                static_cast<apple80211_companion_skywalk_if_create *>(argument));
+        }, this, data);
+    auto *raw = reinterpret_cast<uint8_t *>(data);
+    uint32_t operation;
+    memcpy(&operation, raw + 4, sizeof(operation));
+    if (operation == 0) {
+        destroyLowLatency();
+        return kIOReturnSuccess;
+    }
+    if (operation != 1)
+        return kIOReturnBadArgument;
+    char name[16] = {};
+    const IOReturn result = createLowLatency(name);
+    if (result == kIOReturnSuccess)
+        memcpy(raw + 8, name, sizeof(name));
+    return result;
+}
+
+IOReturn ItlAWDLInterface::createLowLatency(char name[16])
+{
+    if (lowLatency && llwRegistered) {
+        const char *bsd = lowLatency->getBSDName();
+        strlcpy(name, bsd && *bsd ? bsd : "llw0", 16);
+        return kIOReturnSuccess;
+    }
+    auto *controller = OSDynamicCast(IO80211Controller, getProvider());
+    if (!nativeStarted || !queueWorkLoop || !controller || lowLatency)
+        return kIOReturnNotReady;
+    ++llwCreates;
+    setProperty("ItlwmLLWCreates", llwCreates, 32);
+    auto fail = [this](IOReturn result, const char *stage) {
+        setProperty("ItlwmLLWStage", stage);
+        setProperty("ItlwmLLWCreateFailures", ++llwCreateFailures, 32);
+        destroyLowLatency();
+        return result;
+    };
+    ether_addr address;
+    memcpy(&address, localFrameAddress, sizeof(address));
+    lowLatency = new ItlLLWInterface;
+    if (!lowLatency)
+        return fail(kIOReturnNoMemory, "allocation-failed");
+    if (!lowLatency->init() || !lowLatency->init(controller, &address))
+        return fail(kIOReturnError, "init-failed");
+    lowLatency->setInterfaceRole(2);
+    lowLatency->setInterfaceId(9);
+    lowLatency->setLowLatencyEnabled(true);
+    lowLatency->setParentInterface(this);
+    if (!lowLatency->attach(controller))
+        return fail(kIOReturnError, "attach-failed");
+    llwAttached = true;
+    // AppleBCMWLANCore::createSkywalkInterface hands the new interface to IO80211's interface table before
+    // starting it (controller vtable 0xdc8); wifip2pd only finds llw0 there ("Timed out while waiting for the
+    // low latency interface with parent awdl0" otherwise, 2026-11-14 16:04).
+    if (!controller->attachInterface(lowLatency, controller))
+        return fail(kIOReturnError, "controller-attach-failed");
+    llwInterfaceAttached = true;
+    if (!lowLatency->start(controller))
+        return fail(kIOReturnError, "start-failed");
+    setCompanionLowLatencySkywalkInterface(lowLatency);
+    lowLatency->setCompanionInterfaceId(getInterfaceId());
+
+    const IOSkywalkPacketBufferPool::PoolOptions txOptions = {1024, 1024, 2048, 1, 4096, 0, 0};
+    const IOSkywalkPacketBufferPool::PoolOptions rxOptions = {128, 128, 2048, 1, 4096, 0, 0};
+    llwTxPool = IOSkywalkPacketBufferPool::withName("itlwm-llw-tx", lowLatency, 0, &txOptions);
+    llwRxPool = IOSkywalkPacketBufferPool::withName("itlwm-llw-rx", lowLatency, 0, &rxOptions);
+    llwFrames = static_cast<TransmitFrame *>(IOMalloc(sizeof(TransmitFrame) * llwFrameCount));
+    if (!llwTxPool || !llwRxPool || !llwFrames)
+        return fail(kIOReturnNoMemory, "pools-failed");
+    llwHead = llwQueued = llwDoneCount = 0;
+    // The owner is awdl0, which keeps every llw0 frame; acceptLowLatency tells the queues apart.
+    llwQueues[0] = itlMakeTxSubmission(llwTxPool, 64, 0, this, acceptLowLatency, nullptr, 0);
+    llwQueues[1] = itlMakeTxCompletion(llwTxPool, 64, 0, this, nullptr, nullptr, 0);
+    llwQueues[2] = itlMakeRxSubmission(llwRxPool, 64, 1, 0, this, deferReceive, nullptr, 0);
+    llwQueues[3] = itlMakeRxCompletion(llwRxPool, 64, 0, this, nullptr, nullptr, 0);
+    for (auto queue : llwQueues)
+        if (!queue)
+            return fail(kIOReturnNoMemory, "queues-failed");
+    for (auto queue : llwQueues) {
+        if (queueWorkLoop->addEventSource(queue) != kIOReturnSuccess)
+            return fail(kIOReturnError, "add-queues-failed");
+        ++llwAddedQueues;
+    }
+    IOSkywalkEthernetInterface::RegistrationInfo info = {};
+    if (!lowLatency->initRegistrationInfo(&info, 1, sizeof(info)))
+        return fail(kIOReturnBadArgument, "registration-info-failed");
+    // awdl0's registration (initializeNetwork) with the "llw" prefix.
+    auto put32 = [&info](size_t offset, UInt32 value) { memcpy(info.bytes + offset, &value, sizeof(value)); };
+    put32(0x0c, 3);
+    put32(0x14, 2);
+    put32(0x24, 0x80);
+    put32(0x28, 0x80);
+    const char *prefix = "llw";
+    memcpy(info.bytes + 0x30, &prefix, sizeof(prefix));
+    put32(0x38, 0);
+    const UInt16 headroom = 0x40;
+    memcpy(info.bytes + 0x3c, &headroom, sizeof(headroom));
+    put32(0x40, 4);
+    put32(0x48, 1428);
+    put32(0x4c, 1428);
+    memcpy(info.bytes + 0x108, &address, sizeof(address));
+    IOSkywalkPacketQueue *queues[4];
+    for (UInt32 i = 0; i < 4; ++i)
+        queues[i] = reinterpret_cast<IOSkywalkPacketQueue *>(llwQueues[i]);
+    llwRegistered = true;
+    const IOReturn registered = lowLatency->registerEthernetInterface(&info, queues, 4, llwTxPool, llwRxPool, 0);
+    if (registered != kIOReturnSuccess) {
+        setProperty("ItlwmLLWRegisterResult", registered, 32);
+        return fail(registered, "registration-failed");
+    }
+    for (auto queue : llwQueues)
+        queue->enable();
+    lowLatency->reportLinkStatus(3, 0x80);
+    lowLatency->registerService();
+    const char *bsd = lowLatency->getBSDName();
+    strlcpy(name, bsd && *bsd ? bsd : "llw0", 16);
+    setProperty("ItlwmLLWStage", "registered");
+    setProperty("ItlwmLLWName", name);
+    return kIOReturnSuccess;
+}
+
+void ItlAWDLInterface::destroyLowLatency()
+{
+    if (lowLatency && llwRegistered) {
+        llwRegistered = false;
+        lowLatency->deregisterEthernetInterface(0);
+    }
+    for (UInt32 i = llwAddedQueues; i; --i) {
+        llwQueues[i - 1]->disable();
+        queueWorkLoop->removeEventSource(llwQueues[i - 1]);
+    }
+    llwAddedQueues = 0;
+    for (auto &queue : llwQueues)
+        OSSafeReleaseNULL(queue);
+    OSSafeReleaseNULL(llwTxPool);
+    OSSafeReleaseNULL(llwRxPool);
+    llwHead = llwQueued = llwDoneCount = 0;
+    if (llwFrames) {
+        IOFree(llwFrames, sizeof(TransmitFrame) * llwFrameCount);
+        llwFrames = nullptr;
+    }
+    if (lowLatency) {
+        setCompanionLowLatencySkywalkInterface(nullptr);
+        if (llwInterfaceAttached) {
+            if (auto *controller = OSDynamicCast(IO80211Controller, getProvider()))
+                controller->detachInterface(lowLatency, false);
+            llwInterfaceAttached = false;
+        }
+        if (llwAttached) {
+            lowLatency->stop(getProvider());
+            lowLatency->detach(getProvider());
+            llwAttached = false;
+        }
+        OSSafeReleaseNULL(lowLatency);
+        setProperty("ItlwmLLWStage", "destroyed");
+    }
+}
+
+UInt32 ItlAWDLInterface::acceptLowLatency(OSObject *owner, IOSkywalkTxSubmissionQueue *, IOSkywalkPacket *const *packets,
+                                          UInt32 count, void *)
+{
+    auto *that = OSDynamicCast(ItlAWDLInterface, owner);
+    if (!that || !that->llwFrames || !that->llwRegistered)
+        return 0;
+    UInt32 accepted = 0;
+    for (; accepted < count && that->llwDoneCount < llwFrameCount; ++accepted) {
+        auto *packet = reinterpret_cast<ItlSkywalkPacketView *>(packets[accepted]);
+        const UInt32 length = packet ? packet->getDataLength() : 0;
+        const auto *base = packet && packet->getPacketBufferCount() ?
+            reinterpret_cast<const uint8_t *>(packet->getDataVirtualAddress()) : nullptr;
+        if (base && length >= 14 && length <= sizeof(that->llwFrames->bytes) && that->llwQueued < llwFrameCount) {
+            auto &frame = that->llwFrames[(that->llwHead + that->llwQueued) % llwFrameCount];
+            memcpy(frame.bytes, base + itlPacketGetDataOffset(packet), length);
+            frame.length = uint16_t(length);
+            ++that->llwQueued;
+        } else {
+            ++that->llwDropped;
+            ++that->llwDroppedFull;
+        }
+        that->llwDone[that->llwDoneCount++] = packets[accepted];
+    }
+    that->llwAccepted += accepted;
+    return accepted;
+}
+
+bool ItlAWDLInterface::popLowLatency(uint8_t *output, size_t available, size_t *written,
+                                     const uint8_t *holdPayloadFor, bool holdEverySize)
+{
+    while (llwQueued && llwFrames) {
+        const auto &frame = llwFrames[llwHead];
+        // In llw0's own framing, which the iPad's llw0 takes (AWDL-framed, Sidecar showed nothing on 2026-11-14).
+        const auto result = ItlAWDL::buildLowLatencyFrameFromEthernet(frame.bytes, frame.length, localFrameAddress,
+                                                                      transmitSequence, output, available, written);
+        // Held for a peer that is away exactly as awdl0's frames are (popTransmit).
+        if (result == ItlAWDL::BuildResult::Ready && holdPayloadFor && (holdEverySize || *written >= 1200) &&
+            ItlAWDL::sameAddress(output + 4, holdPayloadFor))
+            return false;
+        llwHead = (llwHead + 1) % llwFrameCount;
+        --llwQueued;
+        if (result == ItlAWDL::BuildResult::Ready) {
+            ++transmitSequence;
+            ++llwSent;
+            return true;
+        }
+        ++llwDropped;
+        ++llwDroppedBuild;
+    }
+    return false;
+}
+
+bool ItlAWDLInterface::deliverEthernet(IOSkywalkPacketBufferPool *nativePool, IOEventSource *submission,
+                                       IOEventSource *completion, const uint8_t *destination, const uint8_t *source,
+                                       const uint8_t *ip, size_t ipLength)
+{
+    auto *pool = reinterpret_cast<ItlSkywalkPoolView *>(nativePool);
+    ItlSkywalkPacketView *packet = nullptr;
+    if (!pool || !submission || !completion || pool->allocatePacket(1, &packet, 1) != kIOReturnSuccess || !packet)
+        return false;
+    const size_t wanted = 14 + ipLength;
+    bool delivered = false;
+    if (packet->prepareWithQueue(submission, 0, 0) == kIOReturnSuccess && packet->getPacketBufferCount() == 1 &&
+        packet->setDataLength(unsigned(wanted)) == kIOReturnSuccess && packet->getDataLength() == wanted) {
+        if (auto *bytes = reinterpret_cast<uint8_t *>(packet->getDataVirtualAddress())) {
+            memcpy(bytes, destination, 6);
+            memcpy(bytes + 6, source, 6);
+            bytes[12] = 0x86;
+            bytes[13] = 0xdd;
+            memcpy(bytes + 14, ip, ipLength);
+            IOReturn result = itlPacketSetHeadroom(packet, 0);
+            if (result == kIOReturnSuccess)
+                result = itlPacketSetLinkHeaderLength(packet, 14);
+            if (result == kIOReturnSuccess)
+                result = itlRxEnqueue(completion, &packet, 1, 0);
+            if (result == kIOReturnSuccess)
+                return true;   // The queue owns the packet now.
+            bzero(bytes, wanted);
+        }
+    }
+    (void)packet->setDataLength(0);
+    (void)packet->completeWithQueue(submission, 0, 0);
+    pool->deallocatePacket(packet);
+    return delivered;
 }
 #endif
 
@@ -1351,6 +1889,25 @@ bool AirportItlwm::serviceAWDLTransmit()
     return pending;
 }
 
+// Takes the oldest queued OOB frame. Called from the radio side only.
+bool itlAWDLTakeOob(uint8_t *peer, uint8_t *bssid, uint8_t *frame, size_t capacity, size_t *length)
+{
+    if (!awdlOobTx || awdlOobTail == awdlOobHead)
+        return false;
+    OSSynchronizeIO();
+    const AwdlOobSlot &q = awdlOobQueue[awdlOobTail % kOobQueueSlots];
+    const bool fits = q.length <= capacity;
+    if (fits) {
+        memcpy(peer, q.peer, 6);
+        memcpy(bssid, q.bssid, 6);
+        memcpy(frame, q.frame, q.length);
+        *length = q.length;
+    }
+    OSSynchronizeIO();
+    awdlOobTail = awdlOobTail + 1;
+    return fits;
+}
+
 IOReturn itlAWDLBuildSyncProbe(IOEthernetController *owner, mbuf_t *packet, uint64_t nowUS)
 {
     auto *controller = OSDynamicCast(AirportItlwm, owner);
@@ -1384,6 +1941,15 @@ void AirportItlwm::releaseAll()
         watchdogTimer = NULL;
     }
     OSSafeReleaseNULL(fWatchdogWorkLoop);
+    // Before the AWDL interface goes: disable() takes the gate, so a running callback finishes first.
+    if (awdlAwTimer) {
+        awdlAwTimer->cancelTimeout();
+        awdlAwTimer->disable();
+    }
+    if (awdlPeerCacheTimer) {
+        awdlPeerCacheTimer->cancelTimeout();
+        awdlPeerCacheTimer->disable();
+    }
     teardownAWDLInterface();
 #ifdef AIRPORT_WCL
     if (fNetIf)
@@ -1432,6 +1998,20 @@ void AirportItlwm::releaseAll()
             _fWorkloop->removeEventSource(scanSource);
             scanSource->release();
             scanSource = NULL;
+        }
+        if (awdlAwTimer) {
+            _fWorkloop->removeEventSource(awdlAwTimer);
+            awdlAwTimer->release();
+            awdlAwTimer = nullptr;
+        }
+        if (awdlPeerCacheTimer) {
+            _fWorkloop->removeEventSource(awdlPeerCacheTimer);
+            awdlPeerCacheTimer->release();
+            awdlPeerCacheTimer = nullptr;
+        }
+        if (awdlPeerCacheLock) {
+            IOSimpleLockFree(awdlPeerCacheLock);
+            awdlPeerCacheLock = nullptr;
         }
         _fWorkloop->release();
         _fWorkloop = NULL;
@@ -1484,6 +2064,167 @@ void AirportItlwm::watchdogAction(IOTimerEventSource *timer)
     watchdogTimer->setTimeoutMS(kWatchDogTimerPeriod);
 }
 
+// -itlawdlawstart: availability-window start events (APPLE80211_M_AWDL_AVAILABILITY_WINDOW_START, 41), as a
+// Broadcom firmware raises at the start of every AW. Apple's peer manager learns its AW timing from them: without
+// them it logs "Did not get AW start event", awRemainingTime() has nothing to count from and isSafeToSendUmiNow()
+// stays false, so real-time traffic (Sidecar's UMI) never starts. Layout read from
+// AppleBCMWLANProximityInterface::handleAvailabilityWindowStart on 26.7, which converts the firmware's
+// awdl_aws_event_data_t: AW counter, role (1 master, 2 slave, 3 non-election master), current master, firmware
+// time in microseconds and the AW channel. The AWs are the ones our own sync frames announce: we are master of
+// our tree, 16 TU periods counted from uptime zero (buildLocalFixedSchedule).
+struct __attribute__((packed)) ItlAwdlAwStart {
+    uint32_t counter;
+    uint32_t role;
+    uint8_t master[6];
+    uint32_t reserved0;     // firmware event +0x16
+    uint16_t reserved1;     // firmware event +0x1a
+    uint32_t fwTimeUS;
+    apple80211_channel channel;
+};
+static_assert(sizeof(ItlAwdlAwStart) == 0x24, "AW start event size");
+extern bool itlAWDLOwnAddress(uint8_t out[6]);
+extern unsigned itlAWDLOwnWidth();
+static uint32_t awdlAwPosted, awdlAwSkipped, awdlAwNoAddress, awdlAwIdleSlots;
+static uint64_t awdlAwLastCounter = ~0ULL;
+static constexpr uint64_t kAwdlAwPeriodUS = 16 * 1024;
+static uint64_t itlUptimeUS()
+{
+    uint64_t uptime, ns;
+    clock_get_uptime(&uptime);
+    absolutetime_to_nanoseconds(uptime, &ns);
+    return ns / 1000;
+}
+
+void AirportItlwm::awdlAwTimerFired(OSObject *owner, IOTimerEventSource *sender)
+{
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_26_0
+    auto *that = OSDynamicCast(AirportItlwm, owner);
+    if (!that || !awdlAwTimer || sender != awdlAwTimer)
+        return;
+    uint64_t now = itlUptimeUS();
+    uint64_t delayUS = 100000;   // AWDL off: look again in 100 ms.
+    auto *interface = static_cast<ItlAWDLInterface *>(that->fAWDLInterface);
+    if (interface)
+        interface->reportDataStats(now);
+    if (that->awdlManagementInputEnabled && interface && interface->syncEnabled()) {
+        // A Broadcom firmware raises one start event per channel-sequence slot, each slot lasting (step + 1) AWs,
+        // and none for a slot whose channel is 0: sanityCheckAWStart expects exactly that (slot + 1, counter +
+        // (step + 1) per slot, 65 +/- 10 ms apart), and counts every other pattern as skipped events. Without a
+        // sequence yet, every AW on our channel. (Counting the duplicate count instead, 0, posted one event per AW:
+        // IO80211 logged a sanity failure for nearly every one of them.)
+        uint8_t length = 0, step = 0;
+        uint32_t channels[32], flags[32];
+        const bool haveSequence = interface->copyChannelSequence(&length, &step, channels, flags, 32);
+        const uint64_t perSlot = haveSequence ? uint64_t(step) + 1 : 1;
+        const uint64_t counter = now / kAwdlAwPeriodUS;
+        const uint64_t slotStart = counter - counter % perSlot;
+        if (slotStart != awdlAwLastCounter) {
+            if (awdlAwLastCounter != ~0ULL && slotStart > awdlAwLastCounter + perSlot)
+                awdlAwSkipped += uint32_t((slotStart - awdlAwLastCounter) / perSlot - 1);
+            awdlAwLastCounter = slotStart;
+            const unsigned slot = haveSequence ? unsigned((slotStart % (uint64_t(length) * perSlot)) / perSlot) : 0;
+            const uint32_t slotChannel = haveSequence ? channels[slot] : itlAWDLFixedChannel();
+            ItlAwdlAwStart event = {};
+            if (!slotChannel) {
+                ++awdlAwIdleSlots;      // A slot the sequence leaves empty: no event, as the firmware does.
+            } else if (itlAWDLOwnAddress(event.master)) {
+                event.counter = uint32_t(slotStart & 0xffff);
+                event.role = 1;
+                event.fwTimeUS = uint32_t(now);
+                event.channel.version = APPLE80211_VERSION;
+                event.channel.channel = slotChannel;
+                if (haveSequence && flags[slot]) {
+                    event.channel.flags = flags[slot];
+                } else {
+                    const unsigned width = itlAWDLOwnWidth();
+                    event.channel.flags = APPLE80211_C_FLAG_5GHZ | APPLE80211_C_FLAG_ACTIVE |
+                        (width == 80 ? APPLE80211_C_FLAG_80MHZ : width == 40 ? APPLE80211_C_FLAG_40MHZ : APPLE80211_C_FLAG_20MHZ);
+                }
+                that->postMessage(interface, APPLE80211_M_AWDL_AVAILABILITY_WINDOW_START, &event, sizeof(event), true);
+                if (!(++awdlAwPosted & 15)) {
+                    that->setProperty("ItlwmAWDLAwStartPosted", awdlAwPosted, 32);
+                    that->setProperty("ItlwmAWDLAwStartSkipped", awdlAwSkipped, 32);
+                    that->setProperty("ItlwmAWDLAwStartIdleSlots", awdlAwIdleSlots, 32);
+                    that->setProperty("ItlwmAWDLAwStartSequence", haveSequence ? uint32_t(length) << 8 | step : 0, 32);
+                }
+            } else if (!(++awdlAwNoAddress & 63)) {
+                that->setProperty("ItlwmAWDLAwStartNoAddress", awdlAwNoAddress, 32);
+            }
+        }
+        now = itlUptimeUS();
+        const uint64_t nextUS = (now / kAwdlAwPeriodUS / perSlot + 1) * perSlot * kAwdlAwPeriodUS;
+        delayUS = nextUS - now;
+        if (delayUS < 200)
+            delayUS += perSlot * kAwdlAwPeriodUS;
+    } else {
+        awdlAwLastCounter = ~0ULL;
+    }
+    awdlAwTimer->setTimeoutUS(uint32_t(delayUS));
+#endif
+}
+
+// From the radio's completion of a unicast OOB action frame (a UMI): 0 acknowledged, else 0xda as
+// AppleBCMWLANProximityInterface::handleOobAfIovarAsyncCallBack reports a failure. IO80211 waits for this
+// message before it treats the peer as having joined: without it the AirDrop and Sidecar UMIs never
+// completed ("Ensemble start Failure, waiting for UMIStatus", 2026-11-14 11:43). Posted from the workloop
+// like the peer cache completions.
+void itlAWDLOobStatus(const uint8_t *peer, bool acked)
+{
+    if (!peer || !awdlPeerCacheLock || !awdlPeerCacheTimer)
+        return;
+    IOSimpleLockLock(awdlPeerCacheLock);
+    if (awdlPeerCacheDoneCount < 16) {
+        AwdlPeerCacheDone &done = awdlPeerCacheDone[awdlPeerCacheDoneCount++];
+        done.message = 69;
+        memcpy(done.peer, peer, 6);
+        done.extra = 0;
+        done.result = acked ? 0 : 0xda;
+    } else {
+        ++awdlPeerCacheDropped;
+    }
+    IOSimpleLockUnlock(awdlPeerCacheLock);
+    awdlPeerCacheTimer->setTimeoutMS(1);
+}
+
+void AirportItlwm::awdlPeerCacheTimerFired(OSObject *owner, IOTimerEventSource *sender)
+{
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_26_0
+    auto *that = OSDynamicCast(AirportItlwm, owner);
+    if (!that || !awdlPeerCacheLock || sender != awdlPeerCacheTimer)
+        return;
+    AwdlPeerCacheDone pending[16];
+    IOSimpleLockLock(awdlPeerCacheLock);
+    const unsigned count = awdlPeerCacheDoneCount;
+    memcpy(pending, awdlPeerCacheDone, sizeof(pending));
+    awdlPeerCacheDoneCount = 0;
+    IOSimpleLockUnlock(awdlPeerCacheLock);
+    auto *interface = static_cast<ItlAWDLInterface *>(that->fAWDLInterface);
+    if (!interface || !that->awdlManagementInputEnabled)
+        return;
+    static uint8_t message[0x1d0];
+    for (unsigned i = 0; i < count; ++i) {
+        bzero(message, sizeof(message));
+        if (pending[i].message == 69) {
+            // apple80211_actionFrame_status: the peer, then 0 if it acknowledged our unicast action frame.
+            memcpy(message, pending[i].peer, 6);
+            message[6] = uint8_t(pending[i].result);
+            that->postMessage(interface, 69, message, 7, true);
+            ++awdlOobStatusPosted;
+            continue;
+        }
+        memcpy(message + 4, &pending[i].result, 4);
+        memcpy(message + 8, pending[i].peer, 6);
+        memcpy(message + 0xe, &pending[i].extra, 2);
+        that->postMessage(interface, 51, message, sizeof(message), true);
+        ++awdlPeerCacheCompleted;
+    }
+    that->setProperty("ItlwmAWDLPeerCacheCompleted", awdlPeerCacheCompleted, 32);
+    that->setProperty("ItlwmAWDLOobStatusPosted", awdlOobStatusPosted, 32);
+    if (awdlPeerCacheDropped)
+        that->setProperty("ItlwmAWDLPeerCacheDropped", awdlPeerCacheDropped, 32);
+#endif
+}
+
 void AirportItlwm::fakeScanDone(OSObject *owner, IOTimerEventSource *sender)
 {
 #ifndef AIRPORT_WCL
@@ -1514,6 +2255,8 @@ bool AirportItlwm::init(OSDictionary *properties)
         PE_parse_boot_argn("-itlawdliface", &awdlBootValue, sizeof(awdlBootValue));
     setProperty("ItlwmAWDLBuildCheck", itlAWDLBuildStatus());
     awdlRawSamples = PE_parse_boot_argn("-itlawdlsamples", &awdlBootValue, sizeof(awdlBootValue));
+    awdlOobTrace = PE_parse_boot_argn("-itlawdloobtrace", &awdlBootValue, sizeof(awdlBootValue));
+    awdlOobTx = PE_parse_boot_argn("-itlawdloobtx", &awdlBootValue, sizeof(awdlBootValue));
     awdlExtendFrames = PE_parse_boot_argn("-itlawdlelicit", &awdlBootValue, sizeof(awdlBootValue));
     awdlCreateRequests = 0;
     awdlManagementInputEnabled = false;
@@ -1877,6 +2620,30 @@ bool AirportItlwm::startDriver(IOService *provider)
     _fWorkloop->addEventSource(scanSource);
 #endif
     scanSource->enable();
+#if defined(AIRPORT_WCL) && __IO80211_TARGET == __MAC_26_0
+    {
+        int awStart = 0;
+        if (PE_parse_boot_argn("-itlawdlawstart", &awStart, sizeof(awStart)) && !awdlAwTimer) {
+            awdlAwTimer = IOTimerEventSource::timerEventSource(this, &awdlAwTimerFired);
+            if (awdlAwTimer && _fWorkloop->addEventSource(awdlAwTimer) == kIOReturnSuccess) {
+                awdlAwTimer->enable();
+                awdlAwTimer->setTimeoutMS(100);
+                setProperty("ItlwmAWDLAwStartEvents", true);
+            } else if (awdlAwTimer) {
+                awdlAwTimer->release();
+                awdlAwTimer = nullptr;
+            }
+            awdlPeerCacheLock = IOSimpleLockAlloc();
+            awdlPeerCacheTimer = awdlPeerCacheLock ? IOTimerEventSource::timerEventSource(this, &awdlPeerCacheTimerFired) : nullptr;
+            if (awdlPeerCacheTimer && _fWorkloop->addEventSource(awdlPeerCacheTimer) == kIOReturnSuccess) {
+                awdlPeerCacheTimer->enable();
+            } else if (awdlPeerCacheTimer) {
+                awdlPeerCacheTimer->release();
+                awdlPeerCacheTimer = nullptr;
+            }
+        }
+    }
+#endif
 
     fNetIf = new AirportItlwmSkywalkInterface;
 #ifdef AIRPORT_WCL
@@ -2160,7 +2927,6 @@ setLinkStatus(UInt32 status, const IONetworkMedium * activeMedium, UInt64 speed,
             bsdInterface->startOutputThread();
 #endif
             getCommandGate()->runAction(setLinkStateGated, (void *)kIO80211NetworkLinkUp, (void *)0);
-//            fNetIf->setLinkQualityMetric(100);
         } else if (!(status & kIONetworkLinkNoNetworkChange)) {
 #ifdef __PRIVATE_SPI__
             bsdInterface->stopOutputThread();
@@ -2377,6 +3143,14 @@ IOReturn AirportItlwm::setHardwareAddress(const void *addrP, UInt32 addrBytes)
     if_setlladdr(&fHalService->get80211Controller()->ic_ac.ac_if, (const UInt8 *)addrP);
 #ifdef AIRPORT_WCL
     if (ic->ic_if.if_flags & IFF_RUNNING) {
+        // The private address WCL sets before each join: applied as is when no firmware context holds the old
+        // one, as Apple's drivers do, rather than by restarting the card (which loses its learned country).
+        static uint32_t addressLive, addressRestarts;
+        if (fHalService->getDriverController()->setAddressWithoutRestart(address)) {
+            setProperty("ItlwmAddressChangesLive", ++addressLive, 32);
+            return kIOReturnSuccess;
+        }
+        setProperty("ItlwmAddressRestarts", ++addressRestarts, 32);
         ic->ic_wcl_mac_reconfig = true;
 #else
     if (fHalService->get80211Controller()->ic_state > IEEE80211_S_INIT) {

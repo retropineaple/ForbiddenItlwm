@@ -140,6 +140,35 @@ inline BuildResult buildDataFrameFromEthernet(const uint8_t *eth, size_t length,
     *written = 24 + payload;
     return BuildResult::Ready;
 }
+// llw0's frames, as the iPad's llw0 sends them to us (2026-11-14, 35 samples): QoS data on TID 7 (voice), AWDL's
+// BSSID, then plain LLC/SNAP and the IPv6 packet, without AWDL's own data header. Group frames ask for no ACK.
+constexpr uint8_t kLowLatencyTid = 7;
+inline BuildResult buildLowLatencyFrameFromEthernet(const uint8_t *eth, size_t length, const uint8_t *own,
+                                                    uint16_t sequence, uint8_t *output, size_t available,
+                                                    size_t *written) {
+    if (!eth || !own || !output || !written || length < 14 + 40 || eth[12] != 0x86 || eth[13] != 0xdd)
+        return BuildResult::Invalid;
+    bool destination = false, sameSource = true;
+    for (unsigned i = 0; i < 6; ++i) { destination |= eth[i] != 0; sameSource &= eth[6 + i] == own[i]; }
+    if (!destination || !sameSource || (*own & 1) || !validIPv6Payload(eth + 14, length - 14))
+        return BuildResult::Invalid;
+    if (available < 26 + 8 + (length - 14)) return BuildResult::NoSpace;
+    for (unsigned i = 0; i < 26; ++i) output[i] = 0;
+    output[0] = 0x88;
+    const uint8_t bssid[6] = {0, 0x25, 0, 0xff, 0x94, 0x73};
+    for (unsigned i = 0; i < 6; ++i) {
+        output[4 + i] = eth[i];
+        output[10 + i] = own[i];
+        output[16 + i] = bssid[i];
+    }
+    write16(output + 22, uint16_t((sequence & 4095) << 4));
+    output[24] = uint8_t(kLowLatencyTid | ((eth[0] & 1) ? 0x20 : 0));
+    const uint8_t snap[8] = {0xaa, 0xaa, 0x03, 0, 0, 0, 0x86, 0xdd};
+    for (unsigned i = 0; i < 8; ++i) output[26 + i] = snap[i];
+    for (size_t i = 0; i < length - 14; ++i) output[34 + i] = eth[14 + i];
+    *written = 34 + (length - 14);
+    return BuildResult::Ready;
+}
 // Modified EUI-64, which is what awdl0 uses for its own link-local address.
 inline void linkLocalFromAddress(const uint8_t *m, uint8_t *ip) {
     for (unsigned i = 0; i < 16; ++i) ip[i] = 0;

@@ -73,7 +73,8 @@ static bool awdlCoexAdded, awdlCoexTxStaAdded, awdlCoexInFlight, awdlCoexAddrApp
     awdlCoexMulti, awdlCoexMultiActive, awdlCoexMovePending, awdlCoexPromiscLive,
     awdlCoexPromiscUncertain, awdlCoexBaPeerAdded, awdlCoexBaPeerAccepted,
     awdlCoexBaFilterOff, awdlCoexRemoveRequested, awdlStopping, awdlCoexLowLatency,
-    awdlCoexAddrKnown, awdlCoexTx, awdlCoexTxHalted;
+    awdlCoexAddrKnown, awdlCoexTx, awdlCoexTxHalted,
+    awdlCoexFollowing, awdlCoexFollowMoving, awdlCoexFollowBeaconLoss;
 // PR #47's same-channel window, which the listener teardown resets (merged after this harness was written).
 static struct {
     bool applied, restorePending;

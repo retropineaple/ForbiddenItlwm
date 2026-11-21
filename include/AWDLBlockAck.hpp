@@ -293,6 +293,77 @@ inline bool noteBaTxTraffic(BaTxBulkState &s, uint64_t nowUS, uint32_t frames, b
     return true;
 }
 
+// Payload-sized unicast frames (1200 bytes and up) to one peer, within a second of each other. Short frames
+// to other peers (mDNS, keepalives, TCP ACKs) don't restart the count, so an AirDrop send to the phone is
+// still recognised while the iPad nearby gets the odd frame.
+constexpr size_t kPayloadFrameBytes = 1200;
+constexpr uint64_t kPayloadGapUS = 1000000;
+constexpr uint32_t kPayloadSendFrames = 16;
+struct PayloadTracker {
+    uint8_t peer[6];
+    uint32_t frames;
+    uint64_t lastUS;
+    void note(const uint8_t *to, uint64_t nowUS) {
+        if (!lastUS || nowUS < lastUS || nowUS - lastUS > kPayloadGapUS || memcmp(peer, to, 6)) {
+            memcpy(peer, to, 6);
+            frames = 0;
+        }
+        ++frames;
+        lastUS = nowUS;
+    }
+    bool recentTo(const uint8_t *to, uint64_t nowUS, uint64_t windowUS = kPayloadGapUS) const {
+        return lastUS && nowUS >= lastUS && nowUS - lastUS <= windowUS && !memcmp(peer, to, 6);
+    }
+    // A send is under way to `peer` (the address it holds) right now.
+    bool sending(uint64_t nowUS) const {
+        return frames >= kPayloadSendFrames && lastUS && nowUS >= lastUS && nowUS - lastUS <= kPayloadGapUS;
+    }
+};
+
+// The listener has one peer station, and it carries Block Ack both ways. Whoever opened a session first
+// kept it for as long as we heard them: with an iPad nearby, the phone's ADDBA requests went unanswered
+// and its AirDrop to the Mac ran without aggregation (6 Mbit/s instead of 75 to 117), and the Mac's
+// send to the phone did too. The station changes hands once the holder has been quiet (no data frame
+// either way) for kBaHandoverIdleUS. The holder's receive sessions end with our DELBA first, so it asks
+// again when it comes back instead of sending aggregates we no longer acknowledge; after
+// kBaHandoverWaitUS the station is taken anyway.
+constexpr uint64_t kBaHandoverIdleUS = 500000, kBaHandoverWaitUS = 3500000;
+inline bool baHolderIdle(uint64_t holderLastUS, uint64_t nowUS) {
+    return !holderLastUS || (nowUS >= holderLastUS && nowUS - holderLastUS >= kBaHandoverIdleUS);
+}
+struct BaHandover {
+    uint8_t peer[6];
+    AddbaRequest request;  // Its latest ADDBA request, answered once the station is its own.
+    bool hasRequest;
+    uint64_t heardUS, sinceUS;
+    // Still wanted: the peer asked (or we sent to it) within the wait.
+    bool active(uint64_t nowUS) const {
+        return heardUS && nowUS >= heardUS && nowUS - heardUS < kBaHandoverWaitUS;
+    }
+    bool overdue(uint64_t nowUS) const {
+        return sinceUS && nowUS >= sinceUS && nowUS - sinceUS >= kBaHandoverWaitUS;
+    }
+    void want(const uint8_t *who, uint64_t nowUS) {
+        if (!active(nowUS) || memcmp(peer, who, 6)) {
+            memcpy(peer, who, 6);
+            hasRequest = false;
+            sinceUS = nowUS;
+        }
+        heardUS = nowUS;
+    }
+    void wantRequest(const AddbaRequest &r, uint64_t nowUS) {
+        want(r.peer, nowUS);
+        if (r.immediate && r.tid < 8) {
+            request = r;
+            hasRequest = true;
+        }
+    }
+    void clear() {
+        heardUS = sinceUS = 0;
+        hasRequest = false;
+    }
+};
+
 // What a peer's data frames to us look like: how many are new, and how they're grouped. A long
 // run of retries or repeats means the peer isn't hearing that its frames arrived.
 struct RxSequenceCounts {

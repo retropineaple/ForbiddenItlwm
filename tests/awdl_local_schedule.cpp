@@ -17,12 +17,26 @@ int main()
         for(unsigned i=0;i<16;++i) assert(out[39+2*i]==0x1b && out[40+2*i]==36);
         five.nextChannel=five.masterChannel=1; assert(buildLocalFixedSchedule(five,0,0,0,out,73,&n)==BuildResult::Ready);
         for(unsigned i=0;i<16;++i) assert(out[39+2*i]==0x2b && out[40+2*i]==1);
-        for (uint8_t bad : {0, 14, 40+2, 52, 100, 144, 169}) {
+        // A radar channel is encoded too (the network's channel, met while associated there); sending on it
+        // is decided at send time.
+        for (uint8_t dfs : {52, 64, 100, 112, 144}) {
+            five.nextChannel=five.masterChannel=dfs; assert(buildLocalFixedSchedule(five,0,0,0,out,73,&n)==BuildResult::Ready);
+            for(unsigned i=0;i<16;++i) assert(out[39+2*i]==0x1b && out[40+2*i]==dfs);
+        }
+        for (uint8_t bad : {0, 14, 40+2, 68, 96, 98, 146, 169}) {
             five.nextChannel=five.masterChannel=bad; assert(buildLocalFixedSchedule(five,0,0,0,out,73,&n)==BuildResult::Invalid);
         }
         assert(globalOperatingClass20(6)==81 && globalOperatingClass20(36)==115 && globalOperatingClass20(48)==115 &&
+               globalOperatingClass20(52)==118 && globalOperatingClass20(64)==118 && globalOperatingClass20(100)==121 &&
+               globalOperatingClass20(112)==121 && globalOperatingClass20(144)==121 &&
                globalOperatingClass20(149)==124 && globalOperatingClass20(161)==124 && globalOperatingClass20(165)==125 &&
-               globalOperatingClass20(52)==0);
+               globalOperatingClass20(68)==0);
+        // The network's channel mode: entered at 8 of 16 entries, kept above 3.
+        const uint8_t sidecar[16] = {112,112,149,112,112,112,112,112,112,112,149,112,112,112,112,112};
+        const uint8_t idle[16] = {112,0,149,0,0,44,0,0,6,0,44,0,0,44,0,0};
+        assert(entriesOn(sidecar, 112)==14 && entriesOn(idle, 112)==1 && entriesOn(idle, 0)==0);
+        assert(infraFollowWanted(false, 14) && !infraFollowWanted(false, 7) && infraFollowWanted(false, 8));
+        assert(infraFollowWanted(true, 4) && !infraFollowWanted(true, 3) && !infraFollowWanted(true, 1));
     }
     SyncPrefix p = {6,6,0,0,16,110,0x1000,16,16,0,3,3,3,3,{2,1,2,3,4,5}};
     const uint64_t epoch=7000000;

@@ -1314,15 +1314,28 @@ IOReturn AirportItlwmSkywalkInterface::getHW_ADDR(apple80211_hw_mac_address *dat
     return kIOReturnSuccess;
 }
 
+// A firmware restart ended any WCL scan in flight (aborted), so the join that follows a new address was never
+// refused as busy. When the address applies without one, that scan is ended here the same way.
+IOReturn AirportItlwmSkywalkInterface::applyWCLAddress(const void *address)
+{
+    ieee80211com *ic = fHalService->get80211Controller();
+    uint8_t before[IEEE80211_ADDR_LEN];
+    memcpy(before, ic->ic_myaddr, sizeof(before));
+    const IOReturn result = instance->setHardwareAddress(address, IEEE80211_ADDR_LEN);
+    if (result == kIOReturnSuccess && !ic->ic_wcl_mac_reconfig && memcmp(before, ic->ic_myaddr, sizeof(before)))
+        finishWCLScan(kIOReturnAborted);
+    return result;
+}
+
 #if __IO80211_TARGET == __MAC_15_2
 IOReturn AirportItlwmSkywalkInterface::setMacAddress(ether_addr &address)
 {
-    return instance->setHardwareAddress(&address, IEEE80211_ADDR_LEN);
+    return applyWCLAddress(&address);
 }
 #else
 IOReturn AirportItlwmSkywalkInterface::setMacAddress(mloAddrArray &addresses)
 {
-    return instance->setHardwareAddress(&addresses, IEEE80211_ADDR_LEN);
+    return applyWCLAddress(&addresses);
 }
 #endif
 

@@ -52,7 +52,6 @@ These restore earlier behaviour, for A/B testing only. Leave them off.
 | Flag | Effect |
 | --- | --- |
 | `-itlawdlcoexnogate` | Turns off the send gate, which holds frames for the iPhone while its schedule has it away |
-| `-itlawdlcoexcalwait` | Waits for a 300-frame calibration of the iPhone's schedule instead of assuming it straight away |
 | `-itlawdlsameband` | Test (0.5.2): while the Mac's Wi-Fi is on 2.4 GHz, keep the listener on channel 6 instead of 149, so the radio doesn't time-share across bands. For setups where Wi-Fi keeps dropping with `-itlawdlcoexmulti` (#16) |
 | `-itlawdlsta44` | Test: while the Mac's own Wi-Fi is on channel 44 and the other device is seen on 44 too, keep the listener on 44 (at 80 MHz when allowed) instead of following the other device's 149 slots. For setups where the listener moves between 44 and 149 every few seconds (#68): the router on 44, and the other device on the same network. Confirmed with a MacBook Air M1 on an AX200; not tested with iPhones |
 | `-itlawdlnosamechprobe` | Turns off the same-channel fix for Mac → iPhone block ack ([PR #47](https://github.com/retropineaple/ForbiddenItlwm/pull/47)), on by default from 0.6.0. The old opt-in flag `-itlawdlcoexsamechprobe` is still accepted and changes nothing |

@@ -38,6 +38,7 @@ int main() {
     const char *k2 = "Darwin Kernel Version 25.6.0: Mon Oct 12 00:33:09 PDT 2026; root:xnu-12377.161.15.701.48~2/RELEASE_X86_64";
     const char *kx = "Darwin Kernel Version 25.7.0: root:xnu-12377.200.1~1/RELEASE_X86_64";
     assert(checkBuild(k1, "25G241") == BuildCheck::Verified);
+    assert(checkBuild(k1, "25G229") == BuildCheck::Verified && buildPairVerified(k1, "25G229"));  // macOS 26.7
     assert(checkBuild(k2, "25G332") == BuildCheck::Verified);
     assert(checkBuild(k2, "25G342") == BuildCheck::Verified);
     assert(checkBuild(k1, "") == BuildCheck::Verified);          // osversion not set yet

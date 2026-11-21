@@ -191,6 +191,8 @@ public:
     
     virtual IOReturn setMulticastList(IOEthernetAddress *addr, int count) override;
     
+    virtual bool setAddressWithoutRestart(const uint8_t *address) override;
+    
     void releaseAll();
     void joinSSID(const char *ssid, const char *pwd);
     
@@ -347,6 +349,8 @@ public:
     static void    awdlRxTask(void *);
     static void    awdlCoexCycleTimeout(void *);
     static void    awdlCoexCycleTask(void *);
+    static void    iwxUpCheckTimeout(void *);
+    static void    iwxUpCheckTask(void *);
     static void    awdlCoexTxTimeout(void *);
     static void    awdlCoexTxTask(void *);
     void    awdlAfterCompletion(struct iwx_softc *);
@@ -466,12 +470,16 @@ public:
     void   awdlCoexTxSend(struct iwx_softc *);
     void   awdlCoexCountryAnswer(struct iwx_softc *);
     void   awdlCoexRetarget(struct iwx_softc *);
+    bool   awdlCoexFollowCheck(struct iwx_softc *);
+    void   awdlCoexFollowMove(struct iwx_softc *, bool enter);
+    int    awdlCoexBindingCmd(struct iwx_softc *, struct iwx_phy_ctxt *, uint32_t action, bool station, bool listener);
     void   awdlCoexDataPump(struct iwx_softc *, unsigned budget = ~0U);
     void   awdlCoexBaHandle(struct iwx_softc *);
     int    awdlCoexBaRemovePeer(struct iwx_softc *);
     int    awdlCoexBaAddPeer(struct iwx_softc *, const uint8_t *);
     void   awdlCoexBaPauseStep(struct iwx_softc *);
     bool   awdlCoexSendMgmt(struct iwx_softc *, const uint8_t *, size_t, uint8_t kind);
+    void   awdlCoexSendOob(struct iwx_softc *);
     int    iwx_auth(struct iwx_softc *);
     int    iwx_deauth(struct iwx_softc *);
     int    iwx_run(struct iwx_softc *);

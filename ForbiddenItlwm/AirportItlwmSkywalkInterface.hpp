@@ -447,6 +447,7 @@ private:
     IOReturn abortWCLJoin();
     IOReturn leaveWCLNetwork();
     void finishWCLScan(IOReturn);
+    IOReturn applyWCLAddress(const void *);
     void finishWCLJoin(uint16_t, uint16_t, IOReturn);
     void publishWCLBeacon(const ieee80211_node *, const uint8_t *, size_t);
     IOTimerEventSource *joinTimer;

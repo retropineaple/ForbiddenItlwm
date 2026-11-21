@@ -57,6 +57,7 @@ public:
             data->state = state;
         return result;
     }
+    bool isEnabled() const { return enabled; }
 private:
     bool enabled = false;
     uint32_t state = 1;

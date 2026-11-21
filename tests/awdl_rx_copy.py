@@ -25,12 +25,19 @@ static IOReturn itlRxEnqueue(void *q,ItlSkywalkPacketView *const *p,unsigned n,u
 struct ItlAWDLInterface:Owner {
     bool dataCopyProbeEnabled=true,nativeStarted=true;
     unsigned dataCopyAttempts=0,dataCopySuccess=0,dataDelivered=0,dataDeliverFailed=0;
+    uint64_t rxUnicastPackets=0,rxUnicastBytes=0,rxGroupPackets=0;
     bool dataDeliverEnabled=false;
     uint8_t localFrameAddress[6]={2,0,0,0,0,1};
     Loop loop;Loop *queueWorkLoop=&loop;
     void observeDataFrame(const uint8_t*,size_t);
     unsigned queueNotes=0;
     void noteQueueState(const char*) { ++queueNotes; }
+    // llw0: what reaches it, recorded instead of queued.
+    bool llwRegistered=false;void *llwRxPool=nullptr;void *llwQueues[4]={};
+    unsigned llwDelivered=0,llwDeliverFailed=0,llwCalls=0;uint8_t llwLastDestinationIP=0;
+    bool deliverEthernet(void*,void*,void*,const uint8_t*,const uint8_t*,const uint8_t *ip,size_t n) {
+        assert(n>=40);++llwCalls;llwLastDestinationIP=ip[24];return true;
+    }
 };
 '''
 source=(root/'ForbiddenItlwm/AirportItlwmV2.cpp').read_text()
@@ -67,6 +74,8 @@ int main() {
         deliver.rx.allocated=deliver.rx.returned=0;deliver.rx.packet={};
     }
     assert(!deliver.dataDeliverFailed);
+    // Counted for IO80211 as its own data path counts them: these were all group frames.
+    assert(deliver.rxGroupPackets==12 && !deliver.rxUnicastPackets && !deliver.rxUnicastBytes);
     // A refused enqueue consumes nothing, so the normal cleanup still runs.
     enqueueResult=7;
     deliver.observeDataFrame(frame,84);
@@ -77,6 +86,26 @@ int main() {
     // Frames to someone else are never delivered.
     ItlAWDLInterface other;other.dataDeliverEnabled=true;const unsigned before=enqueues;
     frame[4]=2;other.observeDataFrame(frame,84);assert(enqueues==before && !other.dataCopyAttempts);frame[4]=255;
+    // With llw0: a unique local destination is llw0's alone, a group frame goes to both, the rest to awdl0.
+    {
+        ItlAWDLInterface both;both.dataDeliverEnabled=true;both.llwRegistered=true;
+        uint8_t local[84];memcpy(local,frame,84);
+        uint8_t ula[40]={0x60};ula[24]=0xfd;size_t n;
+        assert(ItlAWDL::buildIPv6DataPayload(ula,40,1,local+24,56,&n)==ItlAWDL::BuildResult::Ready);
+        local[4]=2;local[5]=0;local[6]=0;local[7]=0;local[8]=0;local[9]=1;
+        const unsigned queued=enqueues;
+        both.observeDataFrame(local,84);
+        assert(both.llwCalls==1 && both.llwDelivered==1 && both.llwLastDestinationIP==0xfd && enqueues==queued);
+        both.observeDataFrame(frame,84);   // Group: llw0's copy and awdl0's.
+        assert(both.llwCalls==2 && enqueues==queued+1 && both.dataDelivered==1);
+        both.rx.allocated=both.rx.returned=0;both.rx.packet={};
+        uint8_t plain[84];memcpy(plain,local,84);
+        assert(ItlAWDL::buildIPv6DataPayload(ip,40,1,plain+24,56,&n)==ItlAWDL::BuildResult::Ready);
+        both.observeDataFrame(plain,84);   // Link-local unicast: awdl0 only.
+        assert(both.llwCalls==2 && enqueues==queued+2 && both.dataDelivered==2);
+        // awdl0's own deliveries only (not llw0's): one group, one unicast of 14 + 40 bytes.
+        assert(both.rxGroupPackets==1 && both.rxUnicastPackets==1 && both.rxUnicastBytes==54);
+    }
     puts("bounded real-frame RX copy/delivery/cleanup: passed (host mocks only)");
 }
 '''

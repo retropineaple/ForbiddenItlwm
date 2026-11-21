@@ -6,9 +6,52 @@
 #include "AWDLInactiveProtocol.hpp"
 #include <IOKit/IOLocks.h>
 
+// llw0, awdl0's low-latency companion. wifip2pd asks awdl0 for it at boot (COMPANION_SKYWALK_IF_CREATE) and
+// configures its IPv6 addresses; Rapport then runs Sidecar's video over it ("Server ignoring low latency without
+// local llw0" otherwise, and the iPad's llw0 address is unreachable over awdl0: GKVoiceChatServiceErrorDomain 32002).
+// Apple's is AppleBCMWLANLowLatencyInterface: role 2, id 9, awdl0's MAC address, parent awdl0. This one adds no
+// virtual method to IO80211SkywalkInterface (which has no pure ones) and overrides one, so its table is the native
+// one; awdl0 owns its queues and frames and sends them as AWDL data, like its own.
+class ItlLLWInterface : public IO80211SkywalkInterface {
+    OSDeclareDefaultStructors(ItlLLWInterface)
+public:
+    // As AppleBCMWLANLowLatencyInterface::initBSDInterfaceParameters does on 26.7: the base fills the parameters,
+    // then the object's address (8 bytes) replaces the unique id, which IOSkywalkEthernetInterface takes from the
+    // MAC address. With awdl0's address, dlil refuses the interface while awdl0 is up (EBUSY): the BSD client
+    // retries for 5 s and gives up, and there is no llw0 (2026-11-14 16:31, "busy 5034 ms", no BSD client).
+    virtual SInt32 initBSDInterfaceParameters(ifnet_init_eparams *params, sockaddr_dl **address) override;
+private:
+    uint64_t uniqueId;
+};
+
 class ItlAWDLInterface : public IO80211AWDLProtocol {
     OSDeclareDefaultStructors(ItlAWDLInterface)
 public:
+    // Apple's peer manager has turned AWDL synchronization on (AWDL_SYNC_ENABLED).
+    bool syncEnabled() const { return nativeState.isEnabled(); }
+    // The channel sequence Apple's peer manager configured (AWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE). Layout read from
+    // AppleBCMWLANProximityInterface::buildAWDLChanSequence on 26.7: length at +5, step count at +7 (the firmware
+    // sequence's byte 3: each slot lasts step + 1 AWs, 3 in every sequence Apple configures), duplicate count at
+    // +8, then one apple80211_channel (12 bytes) per slot from +0x0c, so slot i's channel is at +0x10+12i and its
+    // flags at +0x14+12i. (The packed apple80211_channel_sequence in apple80211_ioctl.h does not match it.)
+    bool copyChannelSequence(uint8_t *length, uint8_t *step, uint32_t *channels, uint32_t *flags,
+                             unsigned capacity) const {
+        apple80211_awdl_sync_channel_sequence sequence;
+        if (!length || !step || !channels || !flags ||
+            requested_AWDL_SYNCHRONIZATION_CHANNEL_SEQUENCE.get(&sequence) != kIOReturnSuccess)
+            return false;
+        const uint8_t *raw = reinterpret_cast<const uint8_t *>(&sequence);
+        const unsigned count = raw[5];
+        if (!count || count > 32 || count > capacity)
+            return false;
+        *length = uint8_t(count);
+        *step = raw[7];
+        for (unsigned i = 0; i < count; ++i) {
+            memcpy(&channels[i], raw + 0x10 + 12 * i, 4);
+            memcpy(&flags[i], raw + 0x14 + 12 * i, 4);
+        }
+        return true;
+    }
     struct FrameConfiguration {
         apple80211_awdl_sync_params parameters;
         bool hasRequestedTiming;
@@ -29,7 +72,9 @@ public:
     // Under the shared gate. Converts the oldest queued frame into a caller-owned buffer.
     bool popTransmit(uint8_t *, size_t, size_t *, const uint8_t *holdPayloadFor, bool holdEverySize = false);
     // Frames macOS has queued that the driver hasn't taken yet.
-    unsigned queuedTransmit() const { return transmitQueued; }
+    unsigned queuedTransmit() const { return transmitQueued + parkedQueued + llwQueued; }
+    // On the workloop, at most once a second: awdl0's packet counts to IO80211 (see dataStats).
+    void reportDataStats(uint64_t nowUS);
     unsigned heldShortTransmit() const { return transmitHeldShort; }
     IOReturn initializeNetwork(IO80211Controller*, IOWorkLoop*, const ether_addr&);
     IOReturn receiveManagementFrame(IO80211Controller*, const uint8_t*, size_t, uint32_t, int32_t);
@@ -87,7 +132,7 @@ public:
     IOReturn setAWDL_SYNC_STATE(apple80211_awdl_sync_state *data) override;
     IOReturn setAWDL_ELECTION_RSSI_THRESHOLDS(apple80211_awdl_election_rssi_thresholds *data) override { return storeRequested(requested_AWDL_ELECTION_RSSI_THRESHOLDS, data, "AWDL_ELECTION_RSSI_THRESHOLDS"); }
     IOReturn setAWDL_PRESENCE_MODE(apple80211_awdl_presence_mode *data) override { return storeRequested(requested_AWDL_PRESENCE_MODE, data, "AWDL_PRESENCE_MODE"); }
-    IOReturn setPEER_CACHE_CONTROL(apple80211_peer_cache_control*) override { return unsupported("setPEER_CACHE_CONTROL"); }
+    IOReturn setPEER_CACHE_CONTROL(apple80211_peer_cache_control*) override;
     IOReturn setAWDL_OOB_REQUEST(apple80211_awdl_oob_request *) override;
     IOReturn setAWDL_SYNC_FRAME_TEMPLATE(apple80211_awdl_sync_frame_template *data) override;
     IOReturn setAWDL_ELECTION_PARAMS(apple80211_awdl_election_params *) override;
@@ -102,7 +147,7 @@ public:
     IOReturn setAWDL_AWDL_ADVERTISERS(awdl_peer_advert_add*) override { return unsupported("setAWDL_AWDL_ADVERTISERS"); }
     IOReturn setAWDL_DFSP_CONFIG(apple80211_awdl_dfsp_config*) override { return unsupported("setAWDL_DFSP_CONFIG"); }
     IOReturn setAWDL_DFSP_UCSA_CONFIG(apple80211_awdl_dfsp_ucsa_config*) override { return unsupported("setAWDL_DFSP_UCSA_CONFIG"); }
-    IOReturn setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create*) override { return unsupported("setCOMPANION_SKYWALK_IF_CREATE"); }
+    IOReturn setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create*) override;
     IOReturn setAWDL_OOB_SEC_PAYLOAD_REQUEST(apple80211_awdl_af_sec_payload_request*) override { return unsupported("setAWDL_OOB_SEC_PAYLOAD_REQUEST"); }
     IOReturn setLLW_PARAMS(apple80211_llw_params*) override { return unsupported("setLLW_PARAMS"); }
     IOReturn setTX_RATE(apple80211_tx_rate*) override { return unsupported("setTX_RATE"); }
@@ -117,6 +162,26 @@ private:
     static constexpr unsigned clientEventCapacity = 12;
     char clientEvents[clientEventCapacity][200] = {};
     unsigned clientEventCount = 0;
+    // llw0 (see ItlLLWInterface). Its frames wait in their own FIFO and go out after awdl0's.
+    ItlLLWInterface *lowLatency = nullptr;
+    IOSkywalkPacketBufferPool *llwTxPool = nullptr, *llwRxPool = nullptr;
+    IOEventSource *llwQueues[4] = {};
+    UInt32 llwAddedQueues = 0;
+    bool llwRegistered = false, llwAttached = false, llwInterfaceAttached = false;
+    static constexpr unsigned llwFrameCount = 512;
+    struct TransmitFrame;
+    TransmitFrame *llwFrames = nullptr;
+    unsigned llwHead = 0, llwQueued = 0, llwDropped = 0, llwAccepted = 0, llwSent = 0;
+    unsigned llwDroppedFull = 0, llwDroppedBuild = 0;   // The two parts of llwDropped: queue full, frame refused.
+    IOSkywalkPacket *llwDone[llwFrameCount] = {};
+    unsigned llwDoneCount = 0;
+    unsigned llwDelivered = 0, llwDeliverFailed = 0, llwCreates = 0, llwCreateFailures = 0;
+    IOReturn createLowLatency(char name[16]);
+    void destroyLowLatency();
+    static UInt32 acceptLowLatency(OSObject*, IOSkywalkTxSubmissionQueue*, IOSkywalkPacket *const*, UInt32, void*);
+    // A received IPv6 frame (Ethernet layout) into an interface's receive queues.
+    bool deliverEthernet(IOSkywalkPacketBufferPool *, IOEventSource *submission, IOEventSource *completion,
+                         const uint8_t *destination, const uint8_t *source, const uint8_t *ip, size_t ipLength);
     // These are desired host settings, not an active radio schedule. Native
     // synchronization/state/frame operations remain unsupported.
     IOLock *configurationLock = nullptr;
@@ -143,6 +208,7 @@ private:
     UInt32 acceptTransmit(IOSkywalkPacket *const *, UInt32);
     // Only under the shared gate. Each frame is a copy, so no packet waits on the radio.
     struct TransmitFrame { uint16_t length; uint8_t bytes[1514]; };
+    bool popLowLatency(uint8_t *, size_t, size_t *, const uint8_t *holdPayloadFor, bool holdEverySize);
     // itlawdltxqueue=N, 128 to 4096: frames held while the radio can't send, such as while the
     // peer is on another channel. A full queue drops, and the sender's transport reads that as loss.
     // Set once, before the frames are allocated (about 1.5 KB each).
@@ -160,6 +226,24 @@ private:
     void drainTransmitDone();
     uint32_t transmitDepthBins[9] = {};
     uint16_t transmitSequence = 0;
+    // Frames for the one peer the radio holds (holdPayloadFor), taken off the FIFO in their order so the frames
+    // behind them, for other peers, still go. They leave first, in order, once that peer is no longer held, and
+    // the peer's later frames join them meanwhile. Without this a held frame at the head stopped all of awdl0:
+    // with the iPhone idle on the box's Wi-Fi (on our channel 1 slot in 16) and the iPad in Sidecar, the iPad's TCP
+    // over awdl0 resent 26 to 66 % of its packets and the iPad ended each session after 20 to 52 s (2026-11-14 20:37).
+    static constexpr unsigned parkedFrameMax = 2048;
+    unsigned parkedFrameCount = 0;
+    TransmitFrame *parkedFrames = nullptr;
+    unsigned parkedHead = 0, parkedQueued = 0, parkedPeak = 0, transmitParked = 0, transmitPassed = 0;
+    uint8_t parkedPeer[6] = {};
+    // awdl0's traffic as IO80211's own data path counts it (IO80211PeerManager::skywalkLogTxPacket and
+    // skywalkInputPacket), which ours bypasses. Unicast and group, packets and bytes.
+    uint64_t txUnicastPackets = 0, txUnicastBytes = 0, txGroupPackets = 0;
+    uint64_t rxUnicastPackets = 0, rxUnicastBytes = 0, rxGroupPackets = 0;
+    uint64_t dataStatsReportedUS = 0;
+    uint32_t dataStatsReports = 0;
+    IOReturn dataStatsResult = kIOReturnSuccess;
+    uint64_t dataStats[0x800 / 8] = {};
     bool dataTransmitEnabled = false;
     ItlAWDLNativeState nativeState;
     unsigned oobRequests = 0;
@@ -217,6 +301,7 @@ private:
     UInt32 addedQueues = 0;
     bool nativeStarted = false;
     bool registrationAttempted = false;
+    bool networkRegistered = false;   // initializeNetwork finished; cleared first thing on release.
     uint32_t managementSubmissions = 0;
     IOReturn unsupported(const char *operation) {
         setProperty("ItlwmAWDLLastUnsupported", operation);

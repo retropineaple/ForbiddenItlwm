@@ -310,12 +310,55 @@ static void testRxSequences() {
     t.noteAmpdu(false);t.noteAmpdu(false);t.noteAmpdu(true);t.noteAmpdu(true);t.noteAmpdu(false);
     assert(t.counts.ampduFrames==5 && t.counts.aggregates==3);
 }
+static void testBaHandover() {
+    // The holder is quiet only after half a second without a data frame either way.
+    assert(baHolderIdle(0, 5));
+    assert(!baHolderIdle(1000000, 1000000 + kBaHandoverIdleUS - 1));
+    assert(baHolderIdle(1000000, 1000000 + kBaHandoverIdleUS));
+    assert(!baHolderIdle(2000000, 1000000));  // A clock that went back is not idleness.
+
+    BaHandover h{};
+    assert(!h.active(1) && !h.overdue(1));
+    AddbaRequest r{};
+    memcpy(r.peer, peer, 6); r.immediate = true; r.tid = 0; r.token = 3;
+    h.wantRequest(r, 1000);
+    assert(h.active(1000) && h.hasRequest && !memcmp(h.peer, peer, 6) && h.request.token == 3);
+    // Repeated requests keep it wanted, and the wait counts from the first one.
+    r.token = 4;
+    h.wantRequest(r, 1000 + kBaHandoverWaitUS - 10);
+    assert(h.request.token == 4 && h.overdue(1000 + kBaHandoverWaitUS) && h.active(1000 + kBaHandoverWaitUS));
+    // Another peer replaces it and starts its own wait, without the first peer's request.
+    h.want(own, 5000000);
+    assert(!memcmp(h.peer, own, 6) && !h.hasRequest && !h.overdue(5000000 + kBaHandoverWaitUS - 1));
+    // A delayed (non-immediate) request is not kept.
+    AddbaRequest delayed = r; memcpy(delayed.peer, own, 6); delayed.immediate = false;
+    h.wantRequest(delayed, 5000001);
+    assert(!h.hasRequest);
+    assert(!h.active(5000001 + kBaHandoverWaitUS));
+    h.clear();
+    assert(!h.active(5000002));
+
+    // Payload runs: short frames elsewhere don't count, a gap or another destination restarts the run.
+    PayloadTracker t{};
+    for (unsigned i = 0; i < kPayloadSendFrames - 1; ++i)
+        t.note(peer, 1000 + i * 1000);
+    assert(!t.sending(20000) && t.recentTo(peer, 20000) && !t.recentTo(own, 20000));
+    t.note(peer, 20000);
+    assert(t.sending(20000) && !t.sending(20000 + kPayloadGapUS + 1));
+    t.note(own, 21000);
+    assert(!t.sending(21000) && t.frames == 1 && t.recentTo(own, 21000));
+    t.note(own, 21000 + kPayloadGapUS + 1);
+    assert(t.frames == 1);
+    assert(t.recentTo(own, 21000 + kPayloadGapUS + 1 + 1500000, 2000000));
+}
+
 int main() {
     testBlockAck();
     testRxSequences();
     testNoFcsOuterHeader();
     testBlockAckSend();
     testPendingAddbaRequests();
+    testBaHandover();
     testBaFilter();
     testServiceDigest();
     testServiceMerge();
@@ -485,10 +528,16 @@ int main() {
         uint8_t low[400];memcpy(low,tlvsBefore,400);size_t lowLen=oldLen;
         assert(extendWithPeerTLVs(low,&lowLen,sizeof(low),own,36) && lowLen==oldLen+80);
         for(unsigned i=0;i<16;++i) assert(low[24+9+2*i]==36 && low[24+10+2*i]==115);
+        // The network's radar channel, met there while associated: its own 20 MHz class, or 80 MHz.
         uint8_t radar[400];memcpy(radar,tlvsBefore,400);size_t radarLen=oldLen;
-        assert(!extendWithPeerTLVs(radar,&radarLen,sizeof(radar),own,52) && radarLen==oldLen && !memcmp(radar,tlvsBefore,400));
-        // An explicit class doesn't get round the channel list, and must fit the channel.
-        assert(!extendWithPeerTLVs(radar,&radarLen,sizeof(radar),own,52,128) && radarLen==oldLen && !memcmp(radar,tlvsBefore,400));
+        assert(extendWithPeerTLVs(radar,&radarLen,sizeof(radar),own,112) && radarLen==oldLen+80);
+        for(unsigned i=0;i<16;++i) assert(radar[24+9+2*i]==112 && radar[24+10+2*i]==121);
+        uint8_t radar80[400];memcpy(radar80,tlvsBefore,400);size_t radar80Len=oldLen;
+        assert(extendWithPeerTLVs(radar80,&radar80Len,sizeof(radar80),own,52,128) && radar80Len==oldLen+80);
+        for(unsigned i=0;i<16;++i) assert(radar80[24+9+2*i]==52 && radar80[24+10+2*i]==128);
+        // A number that isn't a channel is refused, and an explicit class must fit the channel.
+        memcpy(radar,tlvsBefore,400);radarLen=oldLen;
+        assert(!extendWithPeerTLVs(radar,&radarLen,sizeof(radar),own,68) && radarLen==oldLen && !memcmp(radar,tlvsBefore,400));
         assert(!extendWithPeerTLVs(radar,&radarLen,sizeof(radar),own,6,128) && radarLen==oldLen);
         assert(!extendWithPeerTLVs(radar,&radarLen,sizeof(radar),own,36,124) && radarLen==oldLen);
         uint8_t wide[400];memcpy(wide,tlvsBefore,400);size_t wideLen=oldLen;
