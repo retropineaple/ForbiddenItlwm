@@ -112,6 +112,7 @@ What's planned: [ROADMAP](docs/ROADMAP.md).
 | [AWDL-DIAGNOSTICS](docs/AWDL-DIAGNOSTICS.md) | Registry counters and the analysis tools |
 | [AWDL-REFERENCE-DATA](docs/AWDL-REFERENCE-DATA.md) | Real Mac, sniffer and hackintosh measurements, and what is still open |
 | [ASSOCIATION-SPEED](docs/ASSOCIATION-SPEED.md) | Scan and join timing, the one-channel join scan, and the timeline tool |
+| [HEVC-DECODE-CC](docs/HEVC-DECODE-CC.md) | Why the Continuity Camera stream is decoded in software on an AMD GPU, and where it fails |
 | [ROADMAP](docs/ROADMAP.md) | What's being worked on and what's planned |
 | [HOW-IT-WORKS](docs/HOW-IT-WORKS.md) | How the driver gives macOS an AWDL radio |
 | [DEBUGGING](docs/DEBUGGING.md) | What each counter means, how to capture and trace the link, and two worked cases (stalls after idle, big sends dying with `unexpected-40`) |
