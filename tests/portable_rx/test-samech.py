@@ -43,6 +43,7 @@ static ItlAWDL::SameChannelProbe awdlCoexSameChannelProbe;
 static uint64_t nowUS=1000000,awdlCoexBaProbeUntilUS=1250000;
 static uint64_t awdlUptimeUS(){return nowUS;}
 static void iwx_ack_rates(iwx_softc*,iwx_node*,int *cck,int *ofdm){*cck=15;*ofdm=21;}
+static bool awdlCoexEdca=false;static void awdlCoexFillEdca(ieee80211com*,iwx_mac_ctx_cmd*){}
 static int injected; static iwx_mac_ctx_cmd submitted;
 static bool controlWantedFlag=false,awdlCoexControlRxRestorePending=false;
 static uint64_t controlDeadline=0;

@@ -6808,6 +6808,8 @@ static bool awdlCoexPromiscLive;      // Applied: the firmware accepted a MAC co
 static bool awdlCoexPromiscUncertain; // A MAC command failed: the firmware may hold either filter.
 static uint32_t awdlCoexPromiscAmbiguous, awdlCoexMacMaskSeen[4];
 static ItlAWDL::SameChannelProbe awdlCoexSameChannelProbe;
+static bool awdlCoexEdca;             // -itlawdledca: the listener's MAC context carries the station's EDCA parameters (off: all zero, as before)
+static uint32_t awdlCoexEdcaSent;     // listener MAC contexts sent with the station's EDCA set
 static bool awdlCoexSameChannelProbeWanted(struct iwx_softc *sc, uint64_t now)
 {
     if (awdlCoexFilter != 3 || !awdlCoexBaTxEnabled) return false;
@@ -6866,6 +6868,8 @@ static void awdlCoexPublish()
     auto *root = IORegistryEntry::getRegistryRoot();
     root->setProperty("ITLAWDLCoexAdded", awdlCoexAdded);
     root->setProperty("ITLAWDLCoexSameChannelProbeEnabled", awdlCoexSameChannelProbe.enabled);
+    root->setProperty("ITLAWDLCoexEdca", awdlCoexEdca);
+    root->setProperty("ITLAWDLCoexEdcaSent", awdlCoexEdcaSent, 32);
     root->setProperty("ITLAWDLCoexSameChannelProbeLive", awdlCoexSameChannelProbe.applied);
     root->setProperty("ITLAWDLCoexSameChannelProbeOpens", awdlCoexSameChannelProbe.opens, 32);
     root->setProperty("ITLAWDLCoexSameChannelProbeCloses", awdlCoexSameChannelProbe.closes, 32);
@@ -16431,6 +16435,23 @@ iwx_run(struct iwx_softc *sc)
     return 0;
 }
 
+// The station's EDCA set into a listener MAC context command (see awdlCoexMacSend).
+static void awdlCoexFillEdca(struct ieee80211com *ic, struct iwx_mac_ctx_cmd *mac)
+{
+    for (int i = 0; i < EDCA_NUM_AC; i++) {
+        const struct ieee80211_edca_ac_params *edca = &ic->ic_edca_ac[i];
+        const int txf = iwx_ac_to_tx_fifo[i];
+        const uint8_t ucodeAc = iwx_mvm_mac80211_ac_to_ucode_ac((enum ieee80211_edca_ac)i);
+        mac->ac[ucodeAc].cw_min = htole16((1 << edca->ac_ecwmin) - 1);
+        mac->ac[ucodeAc].cw_max = htole16((1 << edca->ac_ecwmax) - 1);
+        mac->ac[ucodeAc].aifsn = edca->ac_aifsn;
+        mac->ac[ucodeAc].fifos_mask = (1 << txf);
+        mac->ac[ucodeAc].edca_txop = htole16(edca->ac_txoplimit * 32);
+    }
+    mac->qos_flags |= htole32(IWX_MAC_QOS_FLG_UPDATE_EDCA | IWX_MAC_QOS_FLG_TGN);
+    ++awdlCoexEdcaSent;
+}
+
 // Sends the listener's MAC context command: add, modify or remove. Its address is our AWDL address
 // once macOS's first frame shows it, before that a locally administered one, never the station's.
 int ItlIwx::
@@ -16470,6 +16491,13 @@ awdlCoexMacSend(struct iwx_softc *sc, uint32_t action)
         }
         mac.cck_rates = htole32(cck);
         mac.ofdm_rates = htole32(ofdm);
+        // The contention parameters every other MAC context carries. Linux iwlwifi sets them for every context type
+        // (iwl_mvm_set_fw_qos_params, in iwl_mvm_mac_ctxt_cmd_common), and so does our station context
+        // (iwx_mac_ctxt_cmd_common); this one left all four access categories at zero: CW 0, AIFSN 0, no TX FIFO mask,
+        // no EDCA update flag. Frames sent from this context then contend with no backoff, which the sniffer saw as 25.5 % of
+        // large data frames carrying the retry flag. The station's own EDCA set is used with -itlawdledca (off by default until measured).
+        if (awdlCoexEdca)
+            awdlCoexFillEdca(ic, &mac);
         // Filter 3 (the default with -itlawdlcoexdata): AWDL's BSSID and group frames, plus promiscuous
         // receive while the listener is on its own channel, different from the station's. A LISTENER
         // context without it passes AWDL's broadcast action frames but no data (iface130: AwdlData 0 on
@@ -21897,6 +21925,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         // flag -itlawdlcoexsamechprobe is still accepted and changes nothing; -itlawdlnosamechprobe turns it off.
         awdlCoexSameChannelProbe.enabled = awdlCoexBaTxEnabled &&
             !PE_parse_boot_argn("-itlawdlnosamechprobe", &dummy, sizeof(dummy));
+        awdlCoexEdca = PE_parse_boot_argn("-itlawdledca", &dummy, sizeof(dummy));
         awdlCoexBaPeerPauseEnabled = awdlCoexBaTxEnabled &&
             PE_parse_boot_argn("-itlawdlcoexpeerpause", &dummy, sizeof(dummy));
         awdlCoexBaTraceEnabled = awdlCoexBaTxEnabled &&
