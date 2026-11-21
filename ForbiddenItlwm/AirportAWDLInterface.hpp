@@ -233,6 +233,8 @@ private:
     // One start every 64 TU slot (AwNumber +4), the end 16 TU later, timed from the host clock. Layouts: AWDL_PEERMANAGER_DRIVER_ABI.md
     // 2.2/2.5, handler of 24H232 read with REA. Also records the UMI requests the family then makes (ioctl 149 = AWDL_OOB_REQUEST).
     bool awEventsWanted = false, awSyncEnabled = false, awInWindow = false;
+    bool llwQosTid7 = false;     // -itlawdlllwqos: llw0 frames as QoS data on TID 7, like the iPad's llw0
+    bool awEndSkipped = false;   // -itlawdlnoawend: starts only, no event 43
     IOTimerEventSource *awEventTimer = nullptr;
     static void awEventTick(OSObject *, IOTimerEventSource *);
     void postAwEvent();

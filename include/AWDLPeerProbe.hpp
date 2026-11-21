@@ -118,18 +118,21 @@ inline bool buildMasterIndicationTLVs(const uint8_t *source, size_t length, cons
 // output must be disjoint and remain caller-owned.
 // plain: the low latency (llw0) form, a bare RFC 1042 header 'aa aa 03 00 00 00 86 dd' and no AWDL header or
 // sequence, which is what Broadcom's firmware sends for llw0 (its host code adds the Apple SNAP for awdl0 only).
+// qosTid7 (with plain): QoS data with TID 7 (voice) in a 26-byte header, as an iPad's llw0 sends it (35 samples in
+// Bitboss2/ForbiddenItlwm c351dc2); the default is the non-QoS header above.
 inline BuildResult buildDataFrameFromEthernet(const uint8_t *eth, size_t length, const uint8_t *own,
                                               uint16_t sequence, uint8_t *output, size_t available, size_t *written,
-                                              bool plain = false) {
+                                              bool plain = false, bool qosTid7 = false) {
     if (!eth || !own || !output || !written || length < 14 + 40 || eth[12] != 0x86 || eth[13] != 0xdd)
         return BuildResult::Invalid;
     bool destination = false, sameSource = true;
     for (unsigned i = 0; i < 6; ++i) { destination |= eth[i] != 0; sameSource &= eth[6 + i] == own[i]; }
     if (!destination || !sameSource || (*own & 1) || !validIPv6Payload(eth + 14, length - 14))
         return BuildResult::Invalid;
-    if (available < 24 + (plain ? 8 : 16) + (length - 14)) return BuildResult::NoSpace;
-    for (unsigned i = 0; i < 24; ++i) output[i] = 0;
-    output[0] = 0x08;
+    const unsigned header = plain && qosTid7 ? 26 : 24;
+    if (available < header + (plain ? 8 : 16) + (length - 14)) return BuildResult::NoSpace;
+    for (unsigned i = 0; i < header; ++i) output[i] = 0;
+    output[0] = header == 26 ? 0x88 : 0x08;
     const uint8_t bssid[6] = {0, 0x25, 0, 0xff, 0x94, 0x73};
     for (unsigned i = 0; i < 6; ++i) {
         output[4 + i] = eth[i];
@@ -139,9 +142,10 @@ inline BuildResult buildDataFrameFromEthernet(const uint8_t *eth, size_t length,
     write16(output + 22, uint16_t((sequence & 4095) << 4));
     if (plain) {
         const uint8_t snap[8] = {0xaa, 0xaa, 3, 0, 0, 0, 0x86, 0xdd};
-        for (unsigned i = 0; i < 8; ++i) output[24 + i] = snap[i];
-        for (size_t i = 0; i < length - 14; ++i) output[32 + i] = eth[14 + i];
-        *written = 32 + (length - 14);
+        if (header == 26) output[24] = 7;   // QoS control: TID 7, normal ack, not an A-MSDU
+        for (unsigned i = 0; i < 8; ++i) output[header + i] = snap[i];
+        for (size_t i = 0; i < length - 14; ++i) output[header + 8 + i] = eth[14 + i];
+        *written = header + 8 + (length - 14);
         return BuildResult::Ready;
     }
     size_t payload = 0;

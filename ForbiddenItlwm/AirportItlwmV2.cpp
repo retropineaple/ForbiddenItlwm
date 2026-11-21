@@ -477,14 +477,20 @@ void ItlAWDLInterface::postAwEvent()
         memcpy(event + 0x1c, &channel, sizeof(channel));
         memcpy(event + 0x20, &flags, sizeof(flags));
         postMessage(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_START, event, sizeof(event), false);
-        awInWindow = true;
+        awInWindow = !awEndSkipped;
         ++awStarts;
         if (awStarts == 1 || !(awStarts % 64)) {
             setProperty("ItlwmAWDLAwStarts", awStarts, 32);
             setProperty("ItlwmAWDLAwNumber", uint32_t(awNumber), 32);
             setProperty("ItlwmAWDLAwChannel", channel, 32);
         }
-        awEventTimer->setTimeoutUS(kWindowUS);
+        if (!awEndSkipped) {
+            awEventTimer->setTimeoutUS(kWindowUS);
+            return;
+        }
+        // -itlawdlnoawend: no end event. With them the family re-ran its election about every 2 s on an AX201 (programChipWithNewMaster
+        // 450-634 per test against 2) and AirDrop fell from 111-126 to 16-38 Mbit/s (Bitboss2/ForbiddenItlwm c351dc2). The next start
+        // is scheduled as after an end, without posting 43.
     } else {
         uint8_t event[40] = {};   // the CCA block stays zero: its flag at +0x10 must be 1 to be read
         postMessage(APPLE80211_M_AWDL_AVAILABILITY_WINDOW_END, event, sizeof(event), false);
@@ -492,6 +498,8 @@ void ItlAWDLInterface::postAwEvent()
         ++awEnds;
         if (awEnds == 1 || !(awEnds % 64))
             setProperty("ItlwmAWDLAwEnds", awEnds, 32);
+    }
+    {
         if (aligned) {   // the next start is the next boundary of the iPhone's window clock
             const uint64_t after = itlAwUptimeUS();
             const uint64_t next = awSlotStartUS + kSlotUS;
@@ -1433,13 +1441,13 @@ bool ItlAWDLInterface::popTransmit(uint8_t *output, size_t available, size_t *wr
     while (transmitQueued) {
         const auto &frame = transmitFrames[transmitHead];
         const auto result = ItlAWDL::buildDataFrameFromEthernet(frame.bytes, frame.length, localFrameAddress,
-                                                                transmitSequence, output, available, written, frame.llw);
+                                                                transmitSequence, output, available, written, frame.llw, frame.llw && llwQosTid7);
         // Hold what is for the capped peer. Leave the FIFO head and sequence intact. With holdEverySize
         // (iface160) that is every unicast data frame for it: a short frame let past would overtake the
         // held packets of the same QUIC connection on the listener's unpaused queue, and QUIC counts
         // overtaken packets as lost. Without it, only payload-sized frames, as on iface157 to iface159.
         if (result == ItlAWDL::BuildResult::Ready && holdPayloadFor && (holdEverySize || *written >= 1200) &&
-            output[0] == 0x08 && ItlAWDL::sameAddress(output + 4, holdPayloadFor)) {
+            (output[0] == 0x08 || output[0] == 0x88) && ItlAWDL::sameAddress(output + 4, holdPayloadFor)) {
             // Once per frame, not once per attempt: the pump asks again every millisecond.
             if (*written < 1200 && transmitHeldMark != transmitPopped + 1) {
                 transmitHeldMark = transmitPopped + 1;
@@ -1770,6 +1778,12 @@ IOReturn ItlAWDLInterface::initializeNetwork(IO80211Controller *controller,
         awEventsWanted = awEventTimer != nullptr;
     }
     setProperty("ItlwmAWDLAwEventsEnabled", awEventsWanted);
+    int noAwEnd = 0;
+    awEndSkipped = awEventsWanted && PE_parse_boot_argn("-itlawdlnoawend", &noAwEnd, sizeof(noAwEnd));
+    setProperty("ItlwmAWDLAwEndsSkipped", awEndSkipped);
+    int llwQos = 0;
+    llwQosTid7 = PE_parse_boot_argn("-itlawdlllwqos", &llwQos, sizeof(llwQos));
+    setProperty("ItlwmLLWQosTid7", llwQosTid7);
     int umiTx = 0;
     umiTxWanted = awEventsWanted && PE_parse_boot_argn("-itlawdlumitx", &umiTx, sizeof(umiTx));
     setProperty("ItlwmAWDLUmiTxEnabled", umiTxWanted);

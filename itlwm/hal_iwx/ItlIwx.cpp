@@ -8391,7 +8391,7 @@ awdlCoexDataPump(struct iwx_softc *sc, unsigned budget)
         awdlCoexSendingData = true;
         {
             unsigned tid = 0xff;
-            if ((nextBytes[0] & 0x0c) == 0x08 && (nextBytes[1] & 0x80) && mbuf_len(next) >= 26)
+            if ((nextBytes[0] & 0x8c) == 0x88 && mbuf_len(next) >= 26)   // QoS data (llw0 with -itlawdlllwqos): its TID picks the AC
                 tid = nextBytes[24] & IEEE80211_QOS_TID;
             const int ac = awdlCoexDataAc(tid);
             if (ac == EDCA_AC_VO)
