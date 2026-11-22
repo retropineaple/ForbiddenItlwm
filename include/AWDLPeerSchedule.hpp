@@ -99,6 +99,14 @@ struct PeerSchedule {
     }
     // Calibration: the peer's frames by eaw % 16, since the sequence last changed.
     uint32_t bins[kPeerSeqEntries], binFrames;
+    // Hop mode: the same counts per hop channel, by the channel the radio was on when the frame was heard. A frame heard on 161 says the
+    // phone's entry names 161; it says nothing about the entries on 149, which a radio that is on 149 then hears. Judging a
+    // calibration against the whole set (as presence is) leaves it only the entries on 6 to tell offsets apart.
+    uint32_t hopBins[4][kPeerSeqEntries];
+    unsigned hopIndex() const {
+        for (unsigned k = 0; k < hopCount && k < 4; ++k) if (hopSet[k] == ourChannel) return k;
+        return 4;
+    }
     bool calibrated;
     uint8_t offset;
     uint32_t sequenceChanges, calibrations, decalibrations;
@@ -128,6 +136,7 @@ struct PeerSchedule {
     }
     void clearEvidence() {
         memset(bins, 0, sizeof(bins));
+        memset(hopBins, 0, sizeof(hopBins));
         binFrames = checkedFrames = awayFrames = 0;
         multipleAwayEntries = false;
     }
@@ -188,7 +197,8 @@ struct PeerSchedule {
         if (into < kPeerEdgeUS || eawUS - into < kPeerEdgeUS) return;
         if (known()) {
             ++checkedFrames;
-            if (!presentInEntry(eaw)) {
+            // A frame heard here comes from an entry that names the channel the radio is on (not merely one of the set).
+            if (channels[(eaw + entryOffset()) % kPeerSeqEntries] != ourChannel) {
                 multipleAwayEntries |= awayFrames && lastAwayEntry != eaw;
                 lastAwayEntry = eaw;
                 ++awayFrames;
@@ -209,23 +219,40 @@ struct PeerSchedule {
         if (!calibrated) {
             if (binFrames >= 4096) clearEvidence();
             ++bins[eaw % kPeerSeqEntries];
+            if (hopCount && hopIndex() < 4) ++hopBins[hopIndex()][eaw % kPeerSeqEntries];
             if (++binFrames >= kPeerCalibrateFrames) calibrate();
         }
     }
     // Picks the offset where the fewest of the peer's frames fall in entries that say it's away.
     // Only when there is an away entry to tell offsets apart, and the best one is nearly clean.
     void calibrate() {
-        unsigned away = 0;
-        for (unsigned k = 0; k < kPeerSeqEntries; ++k) away += !onHopSide(channels[k]);
-        if (!away || away == kPeerSeqEntries) return;
         uint32_t best = 0xffffffff, second = 0xffffffff;
         uint8_t bestOffset = 0;
-        for (unsigned r = 0; r < kPeerSeqEntries; ++r) {
-            uint32_t inAway = 0;
-            for (unsigned s = 0; s < kPeerSeqEntries; ++s)
-                if (!onHopSide(channels[(s + r) % kPeerSeqEntries])) inAway += bins[s];
-            if (inAway < best) { second = best; best = inAway; bestOffset = uint8_t(r); }
-            else if (inAway < second) second = inAway;
+        if (hopCount) {
+            // Per hop channel: frames heard on it in entries that name another channel contradict the offset.
+            unsigned seen = 0, differing = 0;
+            for (unsigned c = 0; c < hopCount && c < 4; ++c) for (unsigned s = 0; s < kPeerSeqEntries; ++s) seen += hopBins[c][s] != 0;
+            for (unsigned k = 0; k < kPeerSeqEntries; ++k) differing += channels[k] != channels[0];
+            if (!seen || !differing) return;
+            for (unsigned r = 0; r < kPeerSeqEntries; ++r) {
+                uint32_t inAway = 0;
+                for (unsigned c = 0; c < hopCount && c < 4; ++c)
+                    for (unsigned s = 0; s < kPeerSeqEntries; ++s)
+                        if (channels[(s + r) % kPeerSeqEntries] != hopSet[c]) inAway += hopBins[c][s];
+                if (inAway < best) { second = best; best = inAway; bestOffset = uint8_t(r); }
+                else if (inAway < second) second = inAway;
+            }
+        } else {
+            unsigned away = 0;
+            for (unsigned k = 0; k < kPeerSeqEntries; ++k) away += channels[k] != ourChannel;
+            if (!away || away == kPeerSeqEntries) return;
+            for (unsigned r = 0; r < kPeerSeqEntries; ++r) {
+                uint32_t inAway = 0;
+                for (unsigned s = 0; s < kPeerSeqEntries; ++s)
+                    if (channels[(s + r) % kPeerSeqEntries] != ourChannel) inAway += bins[s];
+                if (inAway < best) { second = best; best = inAway; bestOffset = uint8_t(r); }
+                else if (inAway < second) second = inAway;
+            }
         }
         if (best * 100 > binFrames * kPeerCalibrateMaxAwayPercent || second <= best) return;
         offset = bestOffset;

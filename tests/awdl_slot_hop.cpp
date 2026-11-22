@@ -110,6 +110,34 @@ int main()
         assert(h.shouldPause(mid(8)));                        // entry 8 is channel 6
         assert(h.usUntilPresentAw(mid(8), true) > 0);         // and the next AW to send in is the first one after it
     }
+    // Calibration in hop mode: the radio follows the plan (hops at each boundary) and hears the phone every entry it shares; the offset
+    // the phone really uses (here 5) must come out. Judged against the whole set it could only use the single entry on 6.
+    {
+        PeerSchedule c{};
+        const uint64_t eaw = 65536, base = 1000 + 65536;
+        c.valid = true; c.heardUS = base; c.eawUS = eaw; c.anchorEaw = 15; c.anchorEndUS = base;
+        memcpy(c.channels, plan, 16);
+        c.hopSet[0] = 149; c.hopSet[1] = 161; c.hopCount = 2;
+        const unsigned trueOffset = 5;
+        for (unsigned n = 0; n < 1600 && !c.calibrated; ++n) {
+            const uint64_t t = base + uint64_t(n) * eaw + 20000;                       // mid-entry
+            c.heardUS = t;
+            const unsigned eawNo = 16 + n;
+            const uint8_t phoneOn = plan[(eawNo + trueOffset) % 16];
+            if (phoneOn == 6) continue;                                                // the radio is not on 6: nothing heard
+            c.ourChannel = phoneOn;                                                    // it hopped there
+            c.notePeerFrame(t);
+        }
+        assert(c.calibrated && c.offset == trueOffset);
+        // And a frame heard on 161 in an entry that names 149 refutes it (strict check), while one on 149 in a 149 entry does not.
+        const uint32_t before = c.awayFrames;
+        const uint64_t t = base + 40ULL * eaw + 20000;
+        c.heardUS = t;
+        const uint8_t on = plan[(16 + 40 + trueOffset) % 16];
+        c.ourChannel = on == 149 ? 161 : 149;
+        c.notePeerFrame(t);
+        assert(c.awayFrames == before + 1);
+    }
     puts("slot hop planner: passed");
     return 0;
 }

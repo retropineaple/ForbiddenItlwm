@@ -17033,6 +17033,11 @@ awdlCoexSlotHopStep(struct iwx_softc *sc)
         ic->ic_state == IEEE80211_S_RUN && staNode->in_ni.ni_chw == IEEE80211_CHAN_WIDTH_80 && staCtx->channel &&
         ItlAWDL::block80Of(ieee80211_chan2ieee(ic, staNode->in_ni.ni_chan)) == 149 &&
         awdlCoexSlotHopInSet(ieee80211_chan2ieee(ic, staNode->in_ni.ni_chan));
+    // The hop set is policy for the time the feature runs: once it has stopped the schedule is judged by the one channel again, from scratch.
+    if (awdlCoexSlotHop && awdlCoexSlotHopStats.disabled && awdlCoexPeerSchedule.hopCount) {
+        awdlCoexPeerSchedule.hopCount = 0;
+        awdlCoexPeerSchedule.reset();
+    }
     // Stopped (slow hops or a failure) with the station left off the AP's channel: bring it back.
     if (awdlCoexSlotHop && awdlCoexSlotHopStats.disabled && !awdlCoexMultiActive && staCtx && staCtx->channel &&
         ic->ic_state == IEEE80211_S_RUN && staCtx->channel != staNode->in_ni.ni_chan && awdlCoexGeneration == gen) {
