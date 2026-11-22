@@ -260,9 +260,16 @@ def analyze(samples, reg0, reg1, log_text, opts):
     res["registry"] = d
     if d:
         ok, bad = d.get("ITLAWDLCoexUcastOK", 0), d.get("ITLAWDLCoexUcastFailed", 0)
-        if ok + bad:
+        if ok + bad >= 200:
             ratio = 100.0 * bad / (ok + bad)
             add("FAIL" if ratio > opts["max_fail_pct"] else "PASS", "unicast data: %d acknowledged, %d failed (%.1f %%)" % (ok, bad, ratio))
+        elif ok + bad:
+            # With a Block Ack agreement most frames go out aggregated and are counted below, not here: a handful says nothing.
+            add("INFO", "single unicast frames: %d acknowledged, %d failed (too few to judge)" % (ok, bad))
+        sent, acked = d.get("ITLAWDLCoexBaTxFrames", 0), d.get("ITLAWDLCoexBaTxAcked", 0)
+        if sent >= 1000:
+            pct = 100.0 * acked / sent
+            add("FAIL" if pct < 95.0 else "PASS", "aggregated frames: %d sent, %d acknowledged (%.2f %%)" % (sent, acked, pct))
         for key, what in (("ItlwmAWDLTxDropped", "frames dropped by awdl0's ring"), ("ItlwmLLWRingDropped", "llw0 frames the ring refused"),
                           ("ITLAWDLCmdTimeouts", "firmware command timeouts"), ("ITLAWDLCmdEnospcRing", "command ring ENOSPC"),
                           ("ITLAWDLCmdEnospcSlot", "command slot ENOSPC")):

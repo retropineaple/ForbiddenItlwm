@@ -121,6 +121,16 @@ res = am.analyze(run_samples([100] * 10), reg0, reg1b, "", OPTS)
 fails = [x for l, x in res["lines"] if l == "FAIL"]
 assert any("unicast" in x for x in fails) and any("dropped" in x for x in fails) and any("ring filled" in x for x in fails), fails
 
+# A few single frames next to a big aggregated run say nothing (the 2026-11-22 run: 22 acknowledged, 3 failed, 1.23 million aggregated),
+# and the aggregated delivery ratio is what gets judged.
+agg0 = {"ITLAWDLCoexUcastOK": 0, "ITLAWDLCoexUcastFailed": 0, "ITLAWDLCoexBaTxFrames": 0, "ITLAWDLCoexBaTxAcked": 0}
+agg1 = {"ITLAWDLCoexUcastOK": 22, "ITLAWDLCoexUcastFailed": 3, "ITLAWDLCoexBaTxFrames": 1233435, "ITLAWDLCoexBaTxAcked": 1225777}
+res = am.analyze(run_samples([100] * 10), agg0, agg1, "", OPTS)
+txt_ = "\n".join(x for _, x in res["lines"])
+assert not res["failed"] and "too few to judge" in txt_ and "aggregated frames: 1233435 sent, 1225777 acknowledged (99.38 %)" in txt_, txt_
+res = am.analyze(run_samples([100] * 10), agg0, dict(agg1, ITLAWDLCoexBaTxAcked=900000), "", OPTS)
+assert res["failed"] and any(l == "FAIL" and "aggregated frames" in x for l, x in res["lines"])
+
 # The log's verdicts count: a failed send and an EMSGSIZE fail the run, a good send does not.
 res = am.analyze(run_samples([100] * 10), {}, {}, LOG, OPTS)
 assert res["failed"] and any("send: result=0" in x and l == "PASS" for l, x in res["lines"]) and any("emsgsize" in x for _, x in res["lines"])

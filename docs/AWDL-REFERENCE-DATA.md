@@ -103,3 +103,22 @@ A capture of a Mac to iPhone send on channel 161 (second Mac, 80 s; `tools/diag/
   1 on 6, 3 on 149 and 4 on 161.
 - The phone answers every ADDBA request of ours (93 answers, status 0, window 64) and our hardware acknowledges each; the AX200 firmware
   does not hand them to the host (`ITLAWDLRawMgmtRing`).
+
+## Result: Block Ack agrees on a shared binding (AX200, 2026-11-22)
+
+Router and listener both on 161, `-itlawdlcoexdata -itlawdlcoexbatx -itlawdlht2ss`, no `-itlawdlcoexmulti`, `en0` down. Mac to iPhone, two
+files of about 125 MB (both `result=0`, `transport=awdl`):
+
+| Build | `SameChannelProbeOpens` | Block Ack | Mean while sending | Whole run |
+| --- | --- | --- | --- | --- |
+| 0.6.0 as merged, HT MCS 7 | 0 | asking | 16.6 Mbit/s | 9.2 Mbit/s |
+| plus `-itlawdlht2ss` effective (671ad81) | 0 | asking | 23.5 Mbit/s | 14.0 Mbit/s |
+| plus the window for a shared listener (de53b3f) | 1 | agreed | 164 Mbit/s (peak 195) | 164 Mbit/s over 90 s of 120 |
+
+With the window open the iPhone's ADDBA answer reached the host (`ITLAWDLRawBaAction` `[6, 1, 0]`, window 64) and 1,233,435 aggregated
+frames went out with 1,225,777 acknowledged (99.38 %). The window stayed open for 2,162 µs. The cause was that the window took the
+listener's channel from `awdlCoexOwnChan`, which is null without `-itlawdlcoexmulti`; see the commit message of de53b3f and GitHub issues
+#24, #22 and PR #47 of the upstream repository.
+
+Two stalls of 10 s and 16 s remain: the gate counted the phone away and its channel sequence changed twice. The airtime ceiling of 8 of
+16 slots on 161 still applies.
