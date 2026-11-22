@@ -6734,6 +6734,11 @@ static uint32_t awdlCoexSlotHopEvaluations;
 // the channel asked for, and how long the command ran.
 static uint32_t awdlCoexSlotHopLastErr, awdlCoexSlotHopLastWhy, awdlCoexSlotHopFailedAfter, awdlCoexSlotHopFailedChan;
 static uint64_t awdlCoexSlotHopFailedTookUS;
+// Why the station leaves RUN while hopping (2026-11-22: "link down indication" every one to two minutes during an iPhone to Mac send).
+// The firmware's missed-beacon notifications, and every RUN to other transition with the hop state at that moment.
+static uint32_t awdlBmissNotifs, awdlBmissOver, awdlBmissOverOffHome, awdlBmissMax, awdlBmissLast, awdlBmissThreshold;
+static uint64_t awdlBmissLastOverUS;
+static uint32_t awdlStaLeaves, awdlStaLeavesHopping, awdlStaLeavesOffHome, awdlStaLeavesAfterBmiss, awdlStaLeaveLastTo, awdlStaLeaveSinceBmissMs;
 static const uint8_t kAwdlSlotHopSet[2] = {149, 161};
 constexpr uint64_t kAwdlSlotHopMinRunUS = 30000;
 constexpr uint64_t kAwdlSlotHopDefaultLeadUS = 3000;
@@ -7381,6 +7386,18 @@ static void awdlCoexPublish()
         root->setProperty("ITLAWDLSlotHopMaxUS", uint32_t(awdlCoexSlotHopStats.latencyMaxUS), 32);
         root->setProperty("ITLAWDLSlotHopStopped", uint32_t(awdlCoexSlotHopStats.reason), 32);
         root->setProperty("ITLAWDLSlotHopEvaluations", awdlCoexSlotHopEvaluations, 32);
+        root->setProperty("ITLAWDLBmissNotifs", awdlBmissNotifs, 32);
+        root->setProperty("ITLAWDLBmissOverThreshold", awdlBmissOver, 32);
+        root->setProperty("ITLAWDLBmissOverOffHome", awdlBmissOverOffHome, 32);
+        root->setProperty("ITLAWDLBmissMax", awdlBmissMax, 32);
+        root->setProperty("ITLAWDLBmissLast", awdlBmissLast, 32);
+        root->setProperty("ITLAWDLBmissThreshold", awdlBmissThreshold, 32);
+        root->setProperty("ITLAWDLStaLeaves", awdlStaLeaves, 32);
+        root->setProperty("ITLAWDLStaLeavesWhileHopping", awdlStaLeavesHopping, 32);
+        root->setProperty("ITLAWDLStaLeavesOffHome", awdlStaLeavesOffHome, 32);
+        root->setProperty("ITLAWDLStaLeavesAfterBmiss", awdlStaLeavesAfterBmiss, 32);
+        root->setProperty("ITLAWDLStaLeaveLastTo", awdlStaLeaveLastTo, 32);
+        root->setProperty("ITLAWDLStaLeaveSinceBmissMs", awdlStaLeaveSinceBmissMs, 32);
         root->setProperty("ITLAWDLSlotHopLastErr", awdlCoexSlotHopLastErr, 32);
         root->setProperty("ITLAWDLSlotHopLastWhy", awdlCoexSlotHopLastWhy, 32);
         root->setProperty("ITLAWDLSlotHopFailedAfter", awdlCoexSlotHopFailedAfter, 32);
@@ -11754,6 +11771,22 @@ iwx_rx_bmiss(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
     //        sizeof(*mbn), BUS_DMASYNC_POSTREAD);
     
     missed = le32toh(mbn->consec_missed_beacons_since_last_rx);
+    {
+        // Whether the station is off the AP's channel at this moment (slot hopping), and how bad the miss is.
+        const struct iwx_node *bin = (const struct iwx_node *)ic->ic_bss;
+        const bool offHome = awdlCoexSlotHop && bin && bin->in_phyctxt && bin->in_phyctxt->channel != ic->ic_bss->ni_chan;
+        ++awdlBmissNotifs;
+        awdlBmissLast = missed;
+        awdlBmissThreshold = uint32_t(ic->ic_bmissthres);
+        if (missed > awdlBmissMax)
+            awdlBmissMax = missed;
+        if (missed > uint32_t(ic->ic_bmissthres)) {
+            ++awdlBmissOver;
+            awdlBmissLastOverUS = awdlUptimeUS();
+            if (offHome)
+                ++awdlBmissOverOffHome;
+        }
+    }
     if (missed > ic->ic_bmissthres && ic->ic_mgt_timer == 0) {
         if (ic->ic_if.if_flags & IFF_DEBUG) {
             XYLog("%s: receiving no beacons from %s; checking if "
@@ -18169,6 +18202,19 @@ iwx_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
         nstate != IEEE80211_S_AUTH)
         return 0;
     
+    if (ic->ic_state == IEEE80211_S_RUN && nstate != IEEE80211_S_RUN) {
+        const struct iwx_node *lin = (const struct iwx_node *)ic->ic_bss;
+        const uint64_t leaveNow = awdlUptimeUS();
+        ++awdlStaLeaves;
+        awdlStaLeaveLastTo = uint32_t(nstate);
+        if (awdlCoexSlotHop && !awdlCoexSlotHopStats.disabled)
+            ++awdlStaLeavesHopping;
+        if (awdlCoexSlotHop && lin && lin->in_phyctxt && lin->in_phyctxt->channel != ic->ic_bss->ni_chan)
+            ++awdlStaLeavesOffHome;
+        awdlStaLeaveSinceBmissMs = awdlBmissLastOverUS ? uint32_t((leaveNow - awdlBmissLastOverUS) / 1000) : 0xffffffffU;
+        if (awdlBmissLastOverUS && leaveNow - awdlBmissLastOverUS < 3000000ULL)
+            ++awdlStaLeavesAfterBmiss;
+    }
     if (ic->ic_state == IEEE80211_S_RUN) {
         if (nstate == IEEE80211_S_SCAN) {
             /*
