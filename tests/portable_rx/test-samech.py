@@ -39,6 +39,7 @@ static bool awdlCoexAddrKnown=true,awdlCoexBaFilterOff=false,awdlCoexBaTxEnabled
 static uint32_t awdlCoexToken=1;static unsigned awdlCoexFilter=3;static uint8_t awdlCoexBaTids=1;static int awdlCoexBaTxState=kCoexBaTxAsking;
 static uint8_t awdlCoexAddr[6]={2,1,2,3,4,6},etherbroadcastaddr[6]={255,255,255,255,255,255};
 static ieee80211_channel own;static ieee80211_channel *awdlCoexOwnChan=&own;
+static bool awdlCoexMultiActive=true;
 static ItlAWDL::SameChannelProbe awdlCoexSameChannelProbe;
 static uint64_t nowUS=1000000,awdlCoexBaProbeUntilUS=1250000;
 static uint64_t awdlUptimeUS(){return nowUS;}
@@ -80,6 +81,13 @@ int main(){
  reset();assert(!driver.awdlCoexMacSend(&sc,2));nowUS+=2000;awdlCoexBaTxState=2;injected=1;assert(driver.awdlCoexMacSend(&sc,2)==5);assert(awdlCoexSameChannelProbe.applied&&awdlCoexSameChannelProbe.restoreFailures==1&&!awdlCoexSameChannelProbe.closes);assert(!awdlCoexSameChannelProbeWanted(&sc,nowUS));injected=0;assert(!driver.awdlCoexMacSend(&sc,2));assert(!awdlCoexSameChannelProbe.applied&&awdlCoexSameChannelProbe.lastUS==2000);
  for(int failure:{1,2,3}){reset();injected=failure;int err=driver.awdlCoexMacSend(&sc,2);assert(err==(failure==1?5:0));assert(!awdlCoexSameChannelProbe.applied&&!awdlCoexSameChannelProbe.opens);++cases;}
  reset();assert(!driver.awdlCoexMacSend(&sc,2));assert(!driver.awdlCoexMacSend(&sc,3));assert(!awdlCoexSameChannelProbe.applied&&!submitted.filter_flags);
+ // Shared binding (no own context, -itlawdlcoexmulti off): the listener is on the station's channel, so the window opens for it and
+ // nothing else does. An own context that is not live (multi on, no own channel) has no window.
+ reset();awdlCoexOwnChan=nullptr;awdlCoexMultiActive=false;assert(awdlCoexSameChannelProbeWanted(&sc,nowUS));assert(!driver.awdlCoexMacSend(&sc,2));assert(awdlCoexSameChannelProbe.applied&&awdlCoexSameChannelProbe.opens==1&&(submitted.filter_flags&3)==3);
+ awdlCoexMultiActive=true;assert(!awdlCoexSameChannelProbeWanted(&sc,nowUS));
+ reset();awdlCoexOwnChan=nullptr;awdlCoexMultiActive=false;awdlCoexSameChannelProbe.enabled=false;assert(!awdlCoexSameChannelProbeWanted(&sc,nowUS));assert(!driver.awdlCoexMacSend(&sc,2));assert(!(submitted.filter_flags&3));
+ reset();awdlCoexOwnChan=nullptr;awdlCoexMultiActive=false;awdlCoexBaTxState=2;assert(!awdlCoexSameChannelProbeWanted(&sc,nowUS));assert(!driver.awdlCoexMacSend(&sc,2));assert(!(submitted.filter_flags&3));
+ awdlCoexOwnChan=&own;awdlCoexMultiActive=true;
  // Boundary checks on the production lease, including wrap/absent channels.
  ItlAWDL::SameChannelProbe lease;lease.enabled=true;
  assert(!lease.wants(0,0,true,true,false,1,0));assert(!lease.wants(149,149,true,true,false,250001,0));assert(lease.wants(149,149,true,true,false,250000,0));assert(!lease.wants(149,149,true,true,false,100,100));assert(lease.wants(149,149,true,true,false,UINT64_MAX,UINT64_MAX-1));assert(!lease.wants(149,149,true,true,false,0,UINT64_MAX-1));

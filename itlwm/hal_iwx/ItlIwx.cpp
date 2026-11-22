@@ -6815,8 +6815,13 @@ static bool awdlCoexSameChannelProbeWanted(struct iwx_softc *sc, uint64_t now)
     if (awdlCoexFilter != 3 || !awdlCoexBaTxEnabled) return false;
     auto *node = reinterpret_cast<struct iwx_node *>(sc->sc_ic.ic_bss);
     const auto *station = node && node->in_phyctxt ? node->in_phyctxt->channel : nullptr;
-    const unsigned ownNumber = awdlCoexOwnChan ? ieee80211_chan2ieee(&sc->sc_ic, awdlCoexOwnChan) : 0;
     const unsigned stationNumber = station ? ieee80211_chan2ieee(&sc->sc_ic, station) : 0;
+    // With the listener bound to its own context (-itlawdlcoexmulti) its channel is awdlCoexOwnChan. Without it the listener shares
+    // the station's binding, so its channel is the station's, always: the very case this window exists for. Before, awdlCoexOwnChan
+    // is null there, own came out 0 and the window never opened (2026-11-22, AX200: SameChannelProbeOpens 0, ADDBA answers
+    // acknowledged on air and never delivered, BaTxState asking, 13.5 Mbit/s). #24 and #47 were all measured with own == station.
+    const unsigned ownNumber = awdlCoexOwnChan ? ieee80211_chan2ieee(&sc->sc_ic, awdlCoexOwnChan) :
+        (!awdlCoexMultiActive ? stationNumber : 0);
     return awdlCoexSameChannelProbe.wants(ownNumber, stationNumber,
         awdlCoexBaPeerAdded && awdlCoexBaTids, awdlCoexBaTxState == kCoexBaTxAsking,
         awdlCoexBaFilterOff, awdlCoexBaProbeUntilUS, now);
@@ -16504,9 +16509,9 @@ awdlCoexMacSend(struct iwx_softc *sc, uint32_t action)
         // both channels), and dedicated mode, where data arrives, is always promiscuous. On the station's
         // own channel it would take the station's frames from it (iface108), so not there.
         struct ieee80211_channel *stationChan = in && in->in_phyctxt ? in->in_phyctxt->channel : nullptr;
-        promiscWanted = awdlCoexFilter == 3 && !awdlCoexBaFilterOff && awdlCoexOwnChan && stationChan &&
-            (ieee80211_chan2ieee(ic, awdlCoexOwnChan) != ieee80211_chan2ieee(ic, stationChan) ||
-             sameChannelProbe);
+        promiscWanted = awdlCoexFilter == 3 && !awdlCoexBaFilterOff && stationChan &&
+            (awdlCoexOwnChan ? (ieee80211_chan2ieee(ic, awdlCoexOwnChan) != ieee80211_chan2ieee(ic, stationChan) || sameChannelProbe) :
+             sameChannelProbe);   // shared binding: the listener is on the station's channel, so only the window opens it
         mac.filter_flags = htole32(awdlCoexFilter == 0 ?
             IWX_MAC_FILTER_IN_PROMISC | IWX_MAC_FILTER_IN_CONTROL_AND_MGMT | IWX_MAC_FILTER_ACCEPT_GRP |
             IWX_MAC_FILTER_IN_BEACON | IWX_MAC_FILTER_IN_PROBE_REQUEST :
