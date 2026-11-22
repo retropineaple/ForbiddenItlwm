@@ -33,6 +33,7 @@ tools added for the 2026-11-20 investigation. The measurements they produced are
 | `trace_rtg_tlv.d` | `dtrace` script that follows the family building and parsing the RTG TLV |
 | `airdrop_measure.py` | measures a transfer: per-interface throughput (mean, median, p95, peak, stalls), the driver's counters before and after (unicast failures, drops, parked frames, command ring errors, block ack, availability windows), the MTUs against Apple's 1500, and sharingd's send and receive results with the failure signatures. `--seconds 120 --json run.json --min-mbit 60` while a file is sent; `--replay run.json` judges it again. Exits 1 on any FAIL. Tests: `tests/airdrop_measure_test.py` |
 | `rawmgmt_ring.py` | decodes the driver's raw management-frame ring: does the iPhone's ADDBA answer ever reach the host, and in what shape (plain, or with an HT Control field). Tests: `tests/rawmgmt_ring_test.py` |
+| `awdl_sniff.py` | reads a monitor-mode capture (classic pcap, radiotap, one channel) of a send: the phone's announced channel plan and its share of slots on the capture channel, our distinct data frames, rate, retransmissions and PHY rate, how much of the time frames flow, the idle gaps and whether the phone transmitted anything in them, and the Block Ack exchange. Exits 1 when the plan alone caps the send. Tests: `tests/awdl_sniff_test.py` |
 | `trace_emsgsize_size.d` | sizes of IPv6 packets `sharingd` has refused with EMSGSIZE (the header comment still mentions an old awdl0 MTU of 1484) |
 
 Typical sequence for a camera run:

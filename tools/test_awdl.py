@@ -80,6 +80,7 @@ subprocess.run(["python3", "-I", str(root / "tests/cc_analyze_test.py")], check=
 subprocess.run(["python3", "-I", str(root / "tests/airdrop_check_test.py")], check=True)
 subprocess.run(["python3", "-I", str(root / "tests/airdrop_measure_test.py")], check=True)
 subprocess.run(["python3", "-I", str(root / "tests/rawmgmt_ring_test.py")], check=True)
+subprocess.run(["python3", "-I", str(root / "tests/awdl_sniff_test.py")], check=True)
 subprocess.run(["python3", "-I", str(root / "tests/awdl_ctl_test.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_bridge.py")], check=True)
 subprocess.run(["python3", str(root / "tests/awdl_pool_lease.py")], check=True)

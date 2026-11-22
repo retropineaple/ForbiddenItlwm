@@ -86,3 +86,20 @@ station's frames.
 - Whether a listener that visits 149 and 6 as the family's plans ask would find the iPhone faster. It is not implemented; the PHY retune latency
   is unmeasured and the multi-channel mode earlier collapsed throughput.
 - The TLV 4 flags, remaining-AW field and TLV 18 width differences listed in the Continuity Camera note.
+
+## What caps a send: the phone's channel plan (sniffer, 2026-11-22)
+
+A capture of a Mac to iPhone send on channel 161 (second Mac, 80 s; `tools/diag/awdl_sniff.py`):
+
+- During the send the phone announces the plan `149 149 149 149 161 161 161 161 6 149 149 149 161 161 161 161` (526 announcements from
+  4 s to 83 s): channel 161 in 8 of 16 slots, 149 in 7, 6 in 1. It is the plan a real Mac runs in its `Data + Infra Data` state.
+- Our listener is parked on 161 and advertises 161 in all 16 slots. Frames to the phone flow in 55 % of the 10 ms bins; of the 795 idle
+  gaps over 10 ms, the phone transmitted nothing in 701. It was on 149 or 6.
+- While frames flow the rate is about 17 Mbit/s (HT MCS7, 20 MHz, single frames, about 5 % retransmitted); over the whole send it is
+  9.2 Mbit/s. 8 of 16 slots is 50 % airtime: the cap is the phone's schedule times single-frame efficiency.
+- 149 and 161 lie in the same 80 MHz block (149 153 157 161, centre 155). Following the plan to 149 is a change of primary 20 MHz
+  subchannel, not a retune of the radio; the AWDLLab note on time sharing (`AWDL_MCC_TIEMPO_COMPARTIDO.md`) estimates 10 to 15 ms per
+  switch on an RTL8814 and a slot of 65.5 ms (4 AWs) as the shortest unit that pays. The plan's runs are 4 slots (262 ms) on 149, 4 on 161,
+  1 on 6, 3 on 149 and 4 on 161.
+- The phone answers every ADDBA request of ours (93 answers, status 0, window 64) and our hardware acknowledges each; the AX200 firmware
+  does not hand them to the host (`ITLAWDLRawMgmtRing`).
