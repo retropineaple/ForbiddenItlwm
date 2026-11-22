@@ -122,3 +122,21 @@ listener's channel from `awdlCoexOwnChan`, which is null without `-itlawdlcoexmu
 
 Two stalls of 10 s and 16 s remain: the gate counted the phone away and its channel sequence changed twice. The airtime ceiling of 8 of
 16 slots on 161 still applies.
+
+## Result: slot hopping on the shared binding (2026-11-22)
+
+AX200, Sequoia 15.8.2, `-itlawdlslothop` without `-itlawdlcoexmulti`, 28ae35e. The station's PHY context moved its primary
+channel between 149 and 161 at the iPhone's entry boundaries (plan `149 x4, 161 x4, 6, 149 x3, 161 x4`).
+
+| | plain shared (de53b3f) | slot hop (28ae35e) | multi + hop (f6d71b4) |
+|---|---|---|---|
+| mean Mbit/s | 164 | 166.6 (median 178.1, p95 216.1, peak 229.6) | 10.0 |
+| stalls of 3 s or more | 2 | 0 | 5 |
+| aggregated frames | 1.23 M, 99.4 % acked | 1.47 M, 99.4 % acked | 0 |
+| hops, failures, mean latency | - | 1,290, 0, 1.6 ms (max 8.7 ms) | 821, 0, 1.55 ms |
+
+Three faults in the Block Ack path hid the aggregation until they were found from `ITLAWDLCoexBaEvents` (A ask, X 1 peer expired,
+S state change): the schedule calibrated against the whole hop set; the hop set outlived the feature; and the peer cache needed the
+exact channel, so each hop expired the peer (93 peer adds in a run, no agreement). The gain over the plain shared binding is small:
+the radio is present in about 15 of 16 slots instead of 8, yet the mean moved 2 %, so the iPhone's own rate or time on channel
+is the limit. The peak and the stalls improved.
