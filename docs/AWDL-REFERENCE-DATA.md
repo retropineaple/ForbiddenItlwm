@@ -140,3 +140,18 @@ S state change): the schedule calibrated against the whole hop set; the hop set 
 exact channel, so each hop expired the peer (93 peer adds in a run, no agreement). The gain over the plain shared binding is small:
 the radio is present in about 15 of 16 slots instead of 8, yet the mean moved 2 %, so the iPhone's own rate or time on channel
 is the limit. The peak and the stalls improved.
+
+### Slot hopping and the access point (2026-11-22)
+
+Same iPhone to Mac AirDrop, same build (e7c3eb7 to cc50379), counters `ITLAWDLRxDisassoc`, `RxDeauth`, `StaLeaves`:
+
+| | mean Mbit/s | stalls of 3 s or more | AP disassociations / deauths (reason) | station left RUN |
+|---|---|---|---|---|
+| no hopping (control) | 59.1 | 5 | 0 / 0 | 0 |
+| hopping | 36.0 | 4 | 10 / 2 (7) | 3 |
+| hopping + PM null frames (cc50379) | 19.4 | 3 | 8 / 0 (7) | 2 |
+
+No missed-beacon notification was ever reported (`BmissNotifs` 0), and no leave happened while the station was off the AP's channel:
+the AP ends the association (the leave is RUN to ASSOC, what a received disassociation does). 500 sleep and 499 awake null frames
+went out with no TX error and did not stop it. For iPhone to Mac the hop gave no gain; for Mac to iPhone it gave +2 % mean
+(166.6 against 164 Mbit/s) on a run whose AP counters were not recorded.
