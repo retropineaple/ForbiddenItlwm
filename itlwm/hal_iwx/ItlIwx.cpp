@@ -6861,6 +6861,15 @@ static bool awdlCoexSameChannelProbeWanted(struct iwx_softc *sc, uint64_t now)
 // (not frames released later from a reorder buffer).
 static bool awdlRxMacMaskValid;
 static uint8_t awdlRxMacMask;
+// Whether a peer heard on channel `heard` is one we may deal with from the channel we are on now. Normally the same channel. While
+// slot hopping, 149 and 161 are one place (one 80 MHz block, followed on purpose): a phone heard on 161 is no stranger on 149. Judged
+// by the exact channel, the Block Ack peer "expired" (event X 1) every time the radio hopped away from where it was last heard:
+// 93 peer adds in one run, an ask each time, and never an agreement (2026-11-22).
+static bool awdlCoexSameListenChannel(uint32_t heard, uint32_t now)
+{
+    return heard == now || (awdlCoexSlotHop && !awdlCoexSlotHopStats.disabled && awdlCoexSlotHopInSet(int(heard)) &&
+                            awdlCoexSlotHopInSet(int(now)));
+}
 static void awdlCoexPeerHeard(const uint8_t *addr, uint64_t nowUS)
 {
     AwdlCoexPeer *slot = &awdlCoexPeers[0];
@@ -6879,7 +6888,7 @@ static void awdlCoexNoteRejectReason(const uint8_t *addr, uint64_t nowUS)
     for (const auto &p : awdlCoexPeers) {
         if (!p.heardUS || memcmp(p.addr, addr, 6))
             continue;
-        reason = nowUS - p.heardUS >= 60000000ULL ? 1 : p.channel != awdlCoexChannel ? 2 : 3;
+        reason = nowUS - p.heardUS >= 60000000ULL ? 1 : !awdlCoexSameListenChannel(p.channel, awdlCoexChannel) ? 2 : 3;
         break;
     }
     ++awdlCoexRejectReasons[reason];
@@ -6890,7 +6899,7 @@ static bool awdlCoexPeerKnown(const uint8_t *addr, uint64_t nowUS, bool refresh 
         // Previously discovered on this channel by this listener. Valid directed
         // traffic from the established BA peer can renew an existing entry.
         if (p.heardUS && !memcmp(p.addr, addr, 6) && nowUS - p.heardUS < 60000000ULL &&
-            p.channel == awdlCoexChannel && p.token == awdlCoexToken) {
+            awdlCoexSameListenChannel(p.channel, awdlCoexChannel) && p.token == awdlCoexToken) {
             if (refresh)
                 p.heardUS = nowUS;
             return true;
