@@ -6730,6 +6730,10 @@ static bool awdlCoexScheduleCurrent()
 static bool awdlCoexSlotHop;
 static ItlAWDL::SlotHopStats awdlCoexSlotHopStats;
 static uint32_t awdlCoexSlotHopEvaluations;
+// The last failed hop: the command's error, why it counted (1 error, 2 the listener changed while waiting), the hops done before it,
+// the channel asked for, and how long the command ran.
+static uint32_t awdlCoexSlotHopLastErr, awdlCoexSlotHopLastWhy, awdlCoexSlotHopFailedAfter, awdlCoexSlotHopFailedChan;
+static uint64_t awdlCoexSlotHopFailedTookUS;
 static const uint8_t kAwdlSlotHopSet[2] = {149, 161};
 constexpr uint64_t kAwdlSlotHopMinRunUS = 30000;
 constexpr uint64_t kAwdlSlotHopDefaultLeadUS = 3000;
@@ -7368,6 +7372,11 @@ static void awdlCoexPublish()
         root->setProperty("ITLAWDLSlotHopMaxUS", uint32_t(awdlCoexSlotHopStats.latencyMaxUS), 32);
         root->setProperty("ITLAWDLSlotHopStopped", uint32_t(awdlCoexSlotHopStats.reason), 32);
         root->setProperty("ITLAWDLSlotHopEvaluations", awdlCoexSlotHopEvaluations, 32);
+        root->setProperty("ITLAWDLSlotHopLastErr", awdlCoexSlotHopLastErr, 32);
+        root->setProperty("ITLAWDLSlotHopLastWhy", awdlCoexSlotHopLastWhy, 32);
+        root->setProperty("ITLAWDLSlotHopFailedAfter", awdlCoexSlotHopFailedAfter, 32);
+        root->setProperty("ITLAWDLSlotHopFailedChan", awdlCoexSlotHopFailedChan, 32);
+        root->setProperty("ITLAWDLSlotHopFailedTookUS", uint32_t(awdlCoexSlotHopFailedTookUS), 32);
         root->setProperty("ITLAWDLCoexMoveFailures", awdlCoexMoveFailures, 32);
         root->setProperty("ITLAWDLCoexMovesSettleDropped", awdlCoexMovesSettleDropped, 32);
         root->setProperty("ITLAWDLCoexSearch6", awdlCoexSearch6Active);
@@ -17077,14 +17086,18 @@ awdlCoexSlotHopStep(struct iwx_softc *sc)
     const uint64_t took = awdlUptimeUS() - now;
     if (err || tok != awdlCoexToken) {
         own->channel = before;
+        awdlCoexSlotHopLastErr = uint32_t(err);
+        awdlCoexSlotHopLastWhy = err ? 1 : 2;
+        awdlCoexSlotHopFailedAfter = awdlCoexSlotHopStats.hops;
+        awdlCoexSlotHopFailedChan = target;
+        awdlCoexSlotHopFailedTookUS = took;
         if (!awdlCoexMultiActive) {
             // The station's context may be on either channel: put it back on the AP's and stop hopping for good.
             own->channel = staNode->in_ni.ni_chan;
             (void)iwx_phy_ctxt_cmd(sc, own, 1, 1, IWX_FW_CTXT_ACTION_MODIFY, 0);
             awdlCoexChannel = ieee80211_chan2ieee(ic, staNode->in_ni.ni_chan);
             awdlCoexPeerSchedule.ourChannel = uint8_t(awdlCoexChannel);
-            awdlCoexSlotHopStats.noteFailure();
-            awdlCoexSlotHopStats.noteFailure();
+            awdlCoexSlotHopStats.noteFailure();   // the second one stops it
             awdlCoexMultiState = "slothop-sta-failed";
             awdlCoexPublish();
             return;
