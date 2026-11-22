@@ -119,6 +119,7 @@
 #include <AWDLObservation.hpp>
 #include <AWDLPeerProbe.hpp>
 #include <AWDLPeerSchedule.hpp>
+#include <AWDLSlotHop.hpp>
 #include <AWDLDataFrame.hpp>
 #include <AWDLRegulatory.hpp>
 #include <AWDLBlockAck.hpp>
@@ -6718,6 +6719,26 @@ static bool awdlCoexScheduleCurrent()
         awdlCoexPeerSchedule.ourChannel == awdlCoexChannel &&
         (!awdlCoexBaPeerAdded || ItlAWDL::sameAddress(awdlCoexSchedPeer, awdlCoexBaPeer));
 }
+
+// -itlawdlslothop (needs -itlawdlcoexmulti; -itlawdloverlap80 keeps the listener at 80 MHz): the listener's own context follows the
+// phone's channel sequence between 149 and 161, which share one 80 MHz block (centre 155), so a hop moves the primary 20 MHz
+// channel and is not a retune. The phone's plan (2026-11-22, Mac to iPhone AirDrop) puts 161 in 8 of 16 entries and 149 in 7.
+// A hop that proves slow or fails stops the feature (ItlAWDL::SlotHopStats); the registry shows the latencies.
+static bool awdlCoexSlotHop;
+static ItlAWDL::SlotHopStats awdlCoexSlotHopStats;
+static uint32_t awdlCoexSlotHopEvaluations;
+static const uint8_t kAwdlSlotHopSet[2] = {149, 161};
+constexpr uint64_t kAwdlSlotHopMinRunUS = 30000;
+constexpr uint64_t kAwdlSlotHopDefaultLeadUS = 3000;
+static bool awdlCoexSlotHopInSet(int ch)
+{
+    return ch == kAwdlSlotHopSet[0] || ch == kAwdlSlotHopSet[1];
+}
+static bool awdlCoexSlotHopActive()
+{
+    return awdlCoexSlotHop && !awdlCoexSlotHopStats.disabled && awdlCoexMultiActive && awdlCoexAdded && awdlCoexOwnWidth == 80 &&
+        awdlCoexSlotHopInSet(int(awdlCoexChannel));
+}
 // The denominator for the gap slots: TID 7 frames heard, and frames missing (attributed to the cell where the gap began), in each
 // of the iPhone's 16 slots and each 8th of the slot (8.2 ms). Without it a cluster of gap starts could just be where the iPhone sends.
 static uint32_t awdlCellHeard[16 * 8], awdlCellMissing[16 * 8];
@@ -7332,6 +7353,16 @@ static void awdlCoexPublish()
         root->setProperty("ITLAWDLCoexMultiBindResult", awdlCoexMultiBindResult, 32);
         root->setProperty("ITLAWDLCoexOwnWidth", uint32_t(awdlCoexOwnWidth), 32);
         root->setProperty("ITLAWDLCoexMoves", awdlCoexMoves, 32);
+        root->setProperty("ITLAWDLSlotHop", awdlCoexSlotHop);
+        root->setProperty("ITLAWDLSlotHopOn", awdlCoexSlotHopActive());
+        root->setProperty("ITLAWDLSlotHopHops", awdlCoexSlotHopStats.hops, 32);
+        root->setProperty("ITLAWDLSlotHopFailures", awdlCoexSlotHopStats.failures, 32);
+        root->setProperty("ITLAWDLSlotHopSlow", awdlCoexSlotHopStats.slow, 32);
+        root->setProperty("ITLAWDLSlotHopAvgUS", uint32_t(awdlCoexSlotHopStats.averageUS()), 32);
+        root->setProperty("ITLAWDLSlotHopMinUS", uint32_t(awdlCoexSlotHopStats.hops ? awdlCoexSlotHopStats.latencyMinUS : 0), 32);
+        root->setProperty("ITLAWDLSlotHopMaxUS", uint32_t(awdlCoexSlotHopStats.latencyMaxUS), 32);
+        root->setProperty("ITLAWDLSlotHopStopped", uint32_t(awdlCoexSlotHopStats.reason), 32);
+        root->setProperty("ITLAWDLSlotHopEvaluations", awdlCoexSlotHopEvaluations, 32);
         root->setProperty("ITLAWDLCoexMoveFailures", awdlCoexMoveFailures, 32);
         root->setProperty("ITLAWDLCoexMovesSettleDropped", awdlCoexMovesSettleDropped, 32);
         root->setProperty("ITLAWDLCoexSearch6", awdlCoexSearch6Active);
@@ -7578,6 +7609,23 @@ static uint64_t awdlUptimeUS()
     clock_get_uptime(&uptime);
     absolutetime_to_nanoseconds(uptime, &ns);
     return ns / 1000;
+}
+
+// The channel sequence to announce while hopping: the phone's entries the radio follows, 0 where it does not (kept as built).
+bool itlAWDLSlotPlan(uint8_t channels[16], uint8_t classes[16])
+{
+    if (!awdlCoexSlotHopActive() || !awdlCoexScheduleCurrent() || !awdlCoexPeerSchedule.known() ||
+        !awdlCoexPeerSchedule.fresh(awdlUptimeUS()))
+        return false;
+    bool any = false;
+    for (unsigned k = 0; k < 16; ++k) {
+        const uint8_t ch = awdlCoexPeerSchedule.channels[(k + awdlCoexPeerSchedule.entryOffset()) % 16];
+        const bool follow = awdlCoexSlotHopInSet(ch);
+        channels[k] = follow ? ch : 0;
+        classes[k] = 128;
+        any |= follow;
+    }
+    return any;
 }
 
 static bool awdlPeerAudible()
@@ -8090,6 +8138,8 @@ awdlCoexTxTask(void *arg)
         that->awdlCoexCountryAnswer(sc);
     if (running && !awdlStopping && awdlCoexAdded && awdlCoexGeneration == sc->sc_generation)
         that->awdlCoexRetarget(sc);
+    if (running && !awdlStopping && awdlCoexAdded && awdlCoexGeneration == sc->sc_generation)
+        that->awdlCoexSlotHopStep(sc);
     if (running && awdlCoexAdded && awdlCoexGeneration == sc->sc_generation) {
         if (!awdlCoexTxStaAdded && awdlCoexTxSetupTried < kAwdlCoexTxSetupTries &&
             awdlCoexBrokenGeneration != sc->sc_generation) {
@@ -8264,6 +8314,15 @@ awdlCoexTxTask(void *arg)
             const uint64_t untilAW = awdlCoexPeerSchedule.usUntilPresentAw(timerNowUS, awdlCoexAwSyncAssume);
             if (untilAW)
                 nextMS = MIN(nextMS, MAX(1U, unsigned(untilAW / 1000)));
+        }
+        if (running && awdlCoexGeneration == sc->sc_generation && awdlCoexSlotHopActive() && awdlCoexScheduleCurrent() &&
+            awdlCoexPeerSchedule.known() && awdlCoexPeerSchedule.fresh(timerNowUS) && awdlCoexPeerSchedule.eawUS) {
+            // Look again when the next entry of the phone's plan is about to begin: that is where the radio may have to move.
+            uint64_t into = 0;
+            (void)awdlCoexPeerSchedule.eawAt(timerNowUS, &into);
+            const uint64_t left = awdlCoexPeerSchedule.eawUS > into ? awdlCoexPeerSchedule.eawUS - into : 0;
+            const uint64_t lead = awdlCoexSlotHopStats.hops ? awdlCoexSlotHopStats.averageUS() : kAwdlSlotHopDefaultLeadUS;
+            nextMS = MIN(nextMS, MAX(1U, unsigned(left > lead ? (left - lead) / 1000 : 1)));
         }
         timeout_add_msec(&awdlCoexTxTimer, nextMS);
     }
@@ -16780,6 +16839,12 @@ awdlCoexRetarget(struct iwx_softc *sc)
     const int want = awdlCoexPickOwn(sc, &width);
     const int have = own->channel ? ieee80211_chan2ieee(ic, own->channel) : 0;
     const int haveWidth = awdlCoexOwnWidth;
+    // While hopping, 149 and 161 at 80 MHz are the same choice: the hop step decides which one the radio is on.
+    if (awdlCoexSlotHop && !awdlCoexSlotHopStats.disabled && haveWidth == 80 && width == IWX_PHY_VHT_CHANNEL_MODE80 &&
+        awdlCoexSlotHopInSet(have) && awdlCoexSlotHopInSet(want)) {
+        awdlCoexMovePending = false;
+        return;
+    }
     // Same channel and the same width: nothing to do. 20 MHz and 80 MHz on one channel are different choices.
     const uint64_t now = awdlUptimeUS();
     if (!want || (want == have && (width == IWX_PHY_VHT_CHANNEL_MODE80) == (haveWidth == 80))) {
@@ -16928,6 +16993,59 @@ awdlCoexRetarget(struct iwx_softc *sc)
         awdlCoexMultiState = "move-mac-failed";
     }
     awdlCoexPublish();
+}
+
+// -itlawdlslothop: puts the listener's own context on the channel the phone's plan names for the time the switch lands. Called from the
+// TX task, never while a move is pending. The PHY context modify is timed; a failure leaves TX halted like a failed move does.
+void ItlIwx::
+awdlCoexSlotHopStep(struct iwx_softc *sc)
+{
+    const int gen = sc->sc_generation;
+    if (!awdlCoexSlotHopActive() || awdlCoexMovePending || awdlCoexGeneration != gen || awdlCoexAddingGen == gen ||
+        awdlCoexRemovingGen == gen || awdlCoexPhyUncertainGen == gen || awdlCoexBrokenGeneration == gen || awdlStopping ||
+        !awdlCoexOwnChan)
+        return;
+    struct ieee80211com *ic = &sc->sc_ic;
+    struct iwx_phy_ctxt *own = &sc->sc_phyctxt[kAwdlCoexPhyId];
+    const int have = own->channel ? ieee80211_chan2ieee(ic, own->channel) : 0;
+    if (!awdlCoexSlotHopInSet(have) || !awdlCoexScheduleCurrent())
+        return;
+    if (!awdlCoexPeerSchedule.hopCount) {
+        memcpy(awdlCoexPeerSchedule.hopSet, kAwdlSlotHopSet, sizeof(kAwdlSlotHopSet));
+        awdlCoexPeerSchedule.hopCount = uint8_t(sizeof(kAwdlSlotHopSet));
+    }
+    const uint64_t now = awdlUptimeUS();
+    const uint64_t lead = awdlCoexSlotHopStats.hops ? awdlCoexSlotHopStats.averageUS() : kAwdlSlotHopDefaultLeadUS;
+    const ItlAWDL::SlotHopChoice pick = ItlAWDL::chooseSlotHop(awdlCoexPeerSchedule, now, kAwdlSlotHopSet,
+        unsigned(sizeof(kAwdlSlotHopSet)), uint8_t(have), lead, kAwdlSlotHopMinRunUS);
+    ++awdlCoexSlotHopEvaluations;
+    if (pick.channel == have)
+        return;
+    const uint32_t tok = awdlCoexToken;
+    struct ieee80211_channel *before = own->channel;
+    own->channel = &ic->ic_channels[pick.channel];
+    awdlCoexPhyWidth = IWX_PHY_VHT_CHANNEL_MODE80;
+    const int err = iwx_phy_ctxt_cmd(sc, own, 1, 1, IWX_FW_CTXT_ACTION_MODIFY, 0);
+    awdlCoexPhyWidth = -1;
+    if (gen != sc->sc_generation)
+        return;
+    const uint64_t took = awdlUptimeUS() - now;
+    if (err || tok != awdlCoexToken) {
+        own->channel = before;
+        awdlCoexSlotHopStats.noteFailure();
+        ++awdlCoexMoveFailures;
+        awdlCoexPhyUncertainGen = gen;
+        awdlCoexTxHalted = true;
+        awdlCoexMultiState = "slothop-failed";
+        awdlCoexPublish();
+        return;
+    }
+    awdlCoexSlotHopStats.noteHop(took);
+    awdlCoexOwnChan = own->channel;
+    awdlCoexChannel = pick.channel;
+    awdlCoexPeerSchedule.ourChannel = pick.channel;
+    if (awdlCoexTx)
+        awdlFixedChannel = pick.channel;
 }
 
 // Adds or removes the probe's listener. The binding always keeps the station first, so removing the
@@ -21925,6 +22043,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         awdlCoexTx = awdlCoexRx && PE_parse_boot_argn("-itlawdlcoextx", &dummy, sizeof(dummy));
         awdlCoexMulti = awdlCoexTx && PE_parse_boot_argn("-itlawdlcoexmulti", &dummy, sizeof(dummy));
         awdlCoexData = awdlCoexTx && PE_parse_boot_argn("-itlawdlcoexdata", &dummy, sizeof(dummy));
+        awdlCoexSlotHop = awdlCoexMulti && PE_parse_boot_argn("-itlawdlslothop", &dummy, sizeof(dummy));
         awdlCoexBaTxEnabled = awdlCoexData && PE_parse_boot_argn("-itlawdlcoexbatx", &dummy, sizeof(dummy));
         // On by default since 0.6.0 (PR #47; A/B on 149/149 and 44/44 by three testers). The old opt-in
         // flag -itlawdlcoexsamechprobe is still accepted and changes nothing; -itlawdlnosamechprobe turns it off.

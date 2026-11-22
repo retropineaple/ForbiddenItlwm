@@ -57,3 +57,15 @@ Radiotap, 802.11 action frames (category 127, OUI `00:17:f2`, type 8) and Block 
 per-transmitter frame rates and gaps, TLV order and contents of a master indication, rates and retry flags of data frames, ADDBA requests
 and answers by dialog token. Note that 802.11 sequence numbers are 12 bits, so counting repeats of a number across a long capture counts
 wraparound, not retransmissions; use the retry flag.
+
+## Slot hopping (`-itlawdlslothop`, experimental)
+
+Needs `-itlawdlcoexmulti`; add `-itlawdloverlap80` to keep the listener at 80 MHz. It cannot work on the shared binding
+(no `-itlawdlcoexmulti`), whose listener has no PHY context of its own to move.
+
+The iPhone's plan during Mac to iPhone AirDrop is `149 149 149 149 161 161 161 161 6 149 149 149 161 161 161 161`. A radio
+parked on one channel meets it in 7 or 8 of 16 entries. 149 and 161 sit in one 80 MHz block, so the listener's own context
+moves its primary channel between them to follow the plan (no retune), and the sequence it announces (TLV 18) is the plan it
+really follows. Registry (`ioreg -l | grep ITLAWDLSlotHop`): `Hops`, `Failures`, `Slow`, `AvgUS`, `MinUS`, `MaxUS`,
+`Evaluations`, `Stopped` (0 running, 1 a hop failed twice, 2 more than half of at least 20 hops took over 25 ms).
+The feature stops itself on either; the hop latency is the open question, nothing in the firmware documents it.

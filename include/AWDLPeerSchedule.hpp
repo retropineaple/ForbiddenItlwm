@@ -87,6 +87,16 @@ struct PeerSchedule {
     uint32_t anchorEaw;
     uint8_t channels[kPeerSeqEntries];
     uint8_t ourChannel;
+    // -itlawdlslothop: the listener follows the phone between these channels (all inside one 80 MHz block), so an entry on any of
+    // them is one the listener can be on. Empty (hopCount 0) is the fixed-channel behaviour. `ourChannel` is the channel it is on
+    // now; the calibration judges entries against the set, the pauses against `ourChannel`.
+    uint8_t hopSet[4];
+    uint8_t hopCount;
+    bool onHopSide(uint8_t channel) const {
+        if (!hopCount) return channel == ourChannel;
+        for (unsigned k = 0; k < hopCount && k < 4; ++k) if (hopSet[k] == channel) return true;
+        return false;
+    }
     // Calibration: the peer's frames by eaw % 16, since the sequence last changed.
     uint32_t bins[kPeerSeqEntries], binFrames;
     bool calibrated;
@@ -104,13 +114,16 @@ struct PeerSchedule {
     bool refuted;
     uint32_t refutations;
 
-    void reset() { const bool a = assumeZero; memset(this, 0, sizeof(*this)); assumeZero = a; }
+    void reset() {
+        const bool a = assumeZero; uint8_t set[4], count = hopCount; memcpy(set, hopSet, sizeof(set));
+        memset(this, 0, sizeof(*this)); assumeZero = a; hopCount = count; memcpy(hopSet, set, sizeof(set));   // The hop set is policy too.
+    }
     // Whether the entry for a time is known: calibrated, or assumed at offset 0 and not refuted.
     bool known() const { return calibrated || (assumeZero && !refuted); }
     uint8_t entryOffset() const { return calibrated ? offset : 0; }
     unsigned presentEntries() const {
         unsigned n = 0;
-        for (unsigned k = 0; k < kPeerSeqEntries; ++k) n += channels[k] == ourChannel;
+        for (unsigned k = 0; k < kPeerSeqEntries; ++k) n += hopCount ? onHopSide(channels[k]) : channels[k] == ourChannel;
         return n;
     }
     void clearEvidence() {
@@ -133,7 +146,7 @@ struct PeerSchedule {
             ++sequenceChanges;
             clearEvidence();
         }
-        if (valid && (!fresh(nowUS) || channel != ourChannel || newPeriod != eawUS)) {
+        if (valid && (!fresh(nowUS) || (!hopCount && channel != ourChannel) || newPeriod != eawUS)) {
             invalidate();
         } else if (valid && eawUS) {
             uint64_t into = 0;
@@ -201,14 +214,14 @@ struct PeerSchedule {
     // Only when there is an away entry to tell offsets apart, and the best one is nearly clean.
     void calibrate() {
         unsigned away = 0;
-        for (unsigned k = 0; k < kPeerSeqEntries; ++k) away += channels[k] != ourChannel;
+        for (unsigned k = 0; k < kPeerSeqEntries; ++k) away += !onHopSide(channels[k]);
         if (!away || away == kPeerSeqEntries) return;
         uint32_t best = 0xffffffff, second = 0xffffffff;
         uint8_t bestOffset = 0;
         for (unsigned r = 0; r < kPeerSeqEntries; ++r) {
             uint32_t inAway = 0;
             for (unsigned s = 0; s < kPeerSeqEntries; ++s)
-                if (channels[(s + r) % kPeerSeqEntries] != ourChannel) inAway += bins[s];
+                if (!onHopSide(channels[(s + r) % kPeerSeqEntries])) inAway += bins[s];
             if (inAway < best) { second = best; best = inAway; bestOffset = uint8_t(r); }
             else if (inAway < second) second = inAway;
         }

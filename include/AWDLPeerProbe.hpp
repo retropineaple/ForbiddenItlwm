@@ -71,6 +71,27 @@ inline bool extendWithPeerTLVs(uint8_t *tlvs, size_t *length, size_t capacity, c
     *length = old + peerTLVPrefixBytes + peerTLVSuffixBytes;
     return true;
 }
+// -itlawdlslothop: rewrites the sixteen entries of the channel sequence TLV (18) in a run of TLVs to `channels` (0 keeps the entry as it is)
+// with `classes`, so the sequence we announce is the plan the radio really follows. A TLV 18 of any other shape is left alone.
+// Returns true when entries were written.
+inline bool applySlotChannels(uint8_t *tlvs, size_t length, const uint8_t *channels, const uint8_t *classes) {
+    if (!tlvs || !channels || !classes) return false;
+    for (size_t offset = 0; offset + 3 <= length;) {
+        const size_t count = read16(tlvs + offset + 1);
+        if (count > length - offset - 3) return false;
+        uint8_t *v = tlvs + offset + 3;
+        if (tlvs[offset] == 18 && count == 41 && v[0] == 15 && v[1] == 3 && v[2] == 0 && v[3] == 3) {
+            for (unsigned i = 0; i < 16; ++i) {
+                if (!channels[i]) continue;
+                v[6 + 2 * i] = channels[i];
+                v[7 + 2 * i] = classes[i];
+            }
+            return true;
+        }
+        offset += 3 + count;
+    }
+    return false;
+}
 // Prepares the peer manager's master indication TLVs for our frame builder. Native
 // sync (4) goes, since the builder supplies it. Native channel sequence (18) goes
 // because it advertises hopping this radio doesn't do; extendWithPeerTLVs adds a

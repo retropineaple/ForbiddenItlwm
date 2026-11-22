@@ -16,6 +16,7 @@ program=r'''
 #include <cstdio>
 static unsigned itlAWDLFixedChannel() { return 6; }
 static unsigned itlAWDLChannelClass() { return 0; }
+static bool itlAWDLSlotPlan(uint8_t *, uint8_t *) { return false; }
 static bool itlAWDLTwoStreams() { return false; }
 // The driver's itlBuildSync (aligned to the iPhone's clock only with -itlawdlsyncalign) is a file-level helper like the three above;
 // the host model uses its default, the fixed local schedule with this node as master.

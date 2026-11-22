@@ -856,6 +856,8 @@ void ItlAWDLInterface::storeMasterIndication(const apple80211_awdl_oob_request *
 
 extern unsigned itlAWDLFixedChannel();
 extern unsigned itlAWDLChannelClass();
+// -itlawdlslothop: the channel sequence the radio follows, one entry per extended AW (0: keep what was announced). False when off.
+extern bool itlAWDLSlotPlan(uint8_t channels[16], uint8_t classes[16]);
 extern bool itlAWDLBuildAllowed();
 extern const char *itlAWDLBuildStatus();
 // The card's own spatial streams, from the HAL's MCS set: MCS 8-15 exists only with MIMO enabled and
@@ -2220,6 +2222,12 @@ IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
     {
         setProperty("ItlwmAWDLPeerTLVs", "not-added");
         ++awdlSyncPeerTLVsRefused;
+    }
+    {
+        // With slot hopping, what the sequence announces is where the radio really is in each slot.
+        uint8_t slotChannels[16], slotClasses[16];
+        if (valid && !isMI && awdlExtendFrames && itlAWDLSlotPlan(slotChannels, slotClasses))
+            (void)ItlAWDL::applySlotChannels(snapshot->staticTLVs, snapshot->templateLength, slotChannels, slotClasses);
     }
     uint8_t sync[73]; size_t syncLength = 0;
     const auto schedule = itlBuildSync(snapshot->address, snapshot->staticTLVs, snapshot->templateLength, nowUS,
