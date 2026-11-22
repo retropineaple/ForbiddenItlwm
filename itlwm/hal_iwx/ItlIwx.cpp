@@ -21926,6 +21926,9 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         awdlCoexSameChannelProbe.enabled = awdlCoexBaTxEnabled &&
             !PE_parse_boot_argn("-itlawdlnosamechprobe", &dummy, sizeof(dummy));
         awdlCoexEdca = PE_parse_boot_argn("-itlawdledca", &dummy, sizeof(dummy));
+        // Read here for the coexistence listener too: the other read of this flag sits in the -itlawdlrx branch only, so with
+        // -itlawdlcoexdata it never took effect (2026-11-22: boot-args had it, ITLAWDLCoexHt2ss stayed No).
+        awdlCoexHt2ss = awdlCoexData && PE_parse_boot_argn("-itlawdlht2ss", &dummy, sizeof(dummy));
         awdlCoexBaPeerPauseEnabled = awdlCoexBaTxEnabled &&
             PE_parse_boot_argn("-itlawdlcoexpeerpause", &dummy, sizeof(dummy));
         awdlCoexBaTraceEnabled = awdlCoexBaTxEnabled &&
