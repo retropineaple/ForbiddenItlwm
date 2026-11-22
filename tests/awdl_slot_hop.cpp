@@ -93,6 +93,23 @@ int main()
     slow.noteHop(40000);
     assert(slow.disabled && slow.reason == 2 && slow.slow == 20);
     SlotHopStats bad; bad.noteFailure(); assert(!bad.disabled); bad.noteFailure(); assert(bad.disabled && bad.reason == 1);
+    // Hop mode judges presence by the set, not by the channel the radio is on right now: a phone on the other hop channel is not "away"
+    // (no pause, no gate, no skipped ask), a phone on 6 still is, and without a hop set the old fixed-channel rule stands.
+    {
+        PeerSchedule h{};
+        h.valid = true; h.heardUS = 1000; h.eawUS = 65536; h.anchorEaw = 15; h.anchorEndUS = 1000 + 65536;
+        memcpy(h.channels, plan, 16);
+        h.ourChannel = 149; h.assumeZero = true;
+        const uint64_t base = 1000 + 65536;
+        auto mid = [&](unsigned entry) { return base + uint64_t(entry) * 65536 + 32768; };
+        assert(h.shouldPause(mid(4)));                        // fixed channel: the phone is on 161, we are on 149
+        assert(h.sendGate(mid(4), false, 8000) == PeerSchedule::SendGate::Away);
+        h.hopSet[0] = 149; h.hopSet[1] = 161; h.hopCount = 2;
+        assert(!h.shouldPause(mid(4)) && !h.shouldPause(mid(0)));
+        assert(h.sendGate(mid(4), false, 8000) == PeerSchedule::SendGate::Open);
+        assert(h.shouldPause(mid(8)));                        // entry 8 is channel 6
+        assert(h.usUntilPresentAw(mid(8), true) > 0);         // and the next AW to send in is the first one after it
+    }
     puts("slot hop planner: passed");
     return 0;
 }

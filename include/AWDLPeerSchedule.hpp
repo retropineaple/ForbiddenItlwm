@@ -175,8 +175,10 @@ struct PeerSchedule {
         if (intoUS) *intoUS = uint64_t(d - k * int64_t(eawUS));
         return uint32_t(int64_t(anchorEaw) + 1 + k);
     }
+    // Present: the entry names our channel, or (hop mode) any channel the radio follows the phone to. A pause, gate or ask that
+    // judged "away" by the channel the radio happens to be on would hold everything every time the phone is on the other hop channel.
     bool presentInEntry(uint32_t eaw) const {
-        return channels[(eaw + entryOffset()) % kPeerSeqEntries] == ourChannel;
+        return onHopSide(channels[(eaw + entryOffset()) % kPeerSeqEntries]);
     }
     // Every frame heard from the peer. Feeds calibration, then checks it.
     void notePeerFrame(uint64_t t) {
@@ -243,7 +245,7 @@ struct PeerSchedule {
         return fresh(t) && eawUS && (known() || assumeOffsetZero);
     }
     bool presentForTiming(uint32_t eaw) const {
-        return channels[(eaw + entryOffset()) % kPeerSeqEntries] == ourChannel;
+        return onHopSide(channels[(eaw + entryOffset()) % kPeerSeqEntries]);
     }
     // Whether `t` is within `windowUS` of the start of an AW in an entry where the peer is on our channel.
     bool inPresentAwStart(uint64_t t, uint64_t windowUS, bool assumeOffsetZero = false) const {

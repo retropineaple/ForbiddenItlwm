@@ -17042,7 +17042,8 @@ awdlCoexSlotHopStep(struct iwx_softc *sc)
         return;
     struct iwx_phy_ctxt *own = ctx;
     const int have = own->channel ? ieee80211_chan2ieee(ic, own->channel) : 0;
-    if (!awdlCoexSlotHopInSet(have) || !awdlCoexScheduleCurrent())
+    const bool schedOK = awdlCoexScheduleCurrent();
+    if (!awdlCoexSlotHopInSet(have) || (!schedOK && awdlCoexMultiActive))
         return;
     if (!awdlCoexPeerSchedule.hopCount) {
         memcpy(awdlCoexPeerSchedule.hopSet, kAwdlSlotHopSet, sizeof(kAwdlSlotHopSet));
@@ -17050,18 +17051,24 @@ awdlCoexSlotHopStep(struct iwx_softc *sc)
     }
     const uint64_t now = awdlUptimeUS();
     const uint64_t lead = awdlCoexSlotHopStats.hops ? awdlCoexSlotHopStats.averageUS() : kAwdlSlotHopDefaultLeadUS;
-    const ItlAWDL::SlotHopChoice pick = ItlAWDL::chooseSlotHop(awdlCoexPeerSchedule, now, kAwdlSlotHopSet,
-        unsigned(sizeof(kAwdlSlotHopSet)), uint8_t(have), lead, kAwdlSlotHopMinRunUS);
+    const ItlAWDL::SlotHopChoice pick = schedOK ? ItlAWDL::chooseSlotHop(awdlCoexPeerSchedule, now, kAwdlSlotHopSet,
+        unsigned(sizeof(kAwdlSlotHopSet)), uint8_t(have), lead, kAwdlSlotHopMinRunUS) :
+        ItlAWDL::SlotHopChoice{uint8_t(have), 0, false};
     ++awdlCoexSlotHopEvaluations;
-    if (pick.channel == have)
+    // Shared binding: when the phone's plan names neither channel (its time on 6) or is unknown, the station goes home to the AP's
+    // channel, so Wi-Fi works in those gaps and a long absence of the phone doesn't leave the station parked off the AP.
+    uint8_t target = pick.channel;
+    if (!awdlCoexMultiActive && !pick.follows)
+        target = uint8_t(ieee80211_chan2ieee(ic, staNode->in_ni.ni_chan));
+    if (target == have)
         return;
     const uint32_t tok = awdlCoexToken;
     struct ieee80211_channel *before = own->channel;
-    own->channel = &ic->ic_channels[pick.channel];
+    own->channel = &ic->ic_channels[target];
     if (awdlCoexMultiActive)
         awdlCoexPhyWidth = IWX_PHY_VHT_CHANNEL_MODE80;
     else
-        awdlHopStaPrimary = pick.channel;
+        awdlHopStaPrimary = target;
     const int err = iwx_phy_ctxt_cmd(sc, own, 1, 1, IWX_FW_CTXT_ACTION_MODIFY, 0);
     awdlCoexPhyWidth = -1;
     awdlHopStaPrimary = 0;
@@ -17093,10 +17100,10 @@ awdlCoexSlotHopStep(struct iwx_softc *sc)
     awdlCoexSlotHopStats.noteHop(took);
     if (awdlCoexMultiActive)
         awdlCoexOwnChan = own->channel;
-    awdlCoexChannel = pick.channel;
-    awdlCoexPeerSchedule.ourChannel = pick.channel;
+    awdlCoexChannel = target;
+    awdlCoexPeerSchedule.ourChannel = target;
     if (awdlCoexTx)
-        awdlFixedChannel = pick.channel;
+        awdlFixedChannel = target;
 }
 
 // Adds or removes the probe's listener. The binding always keeps the station first, so removing the
