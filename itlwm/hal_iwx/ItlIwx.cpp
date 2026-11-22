@@ -6740,6 +6740,14 @@ static uint32_t awdlBmissNotifs, awdlBmissOver, awdlBmissOverOffHome, awdlBmissM
 static uint64_t awdlBmissLastOverUS;
 static struct ieee80211com *awdlStaIc;   // for the registry: what the AP itself sent us
 static uint32_t awdlStaLeaves, awdlStaLeavesHopping, awdlStaLeavesOffHome, awdlStaLeavesAfterBmiss, awdlStaLeaveLastTo, awdlStaLeaveSinceBmissMs;
+// Slot hopping on the shared binding: the AP must be told the station is asleep before it leaves the AP's channel, as mac80211 does for
+// off-channel work (a null data frame with the power-management bit, then one without on return). 2026-11-22, control run: with hopping
+// the AP sent 10 disassociations and 2 deauthentications (reason 7) and the station left RUN 3 times; without it 0 and 0.
+static bool awdlHopNoPm;                 // -itlawdlhopnopm: no null frames (for comparison)
+static bool awdlHopAsleep;               // the AP has been told we are asleep
+static uint64_t awdlHopAsleepAtUS;
+static uint32_t awdlHopNullSleepSent, awdlHopNullAwakeSent, awdlHopNullErrors;
+constexpr uint64_t kAwdlHopSleepWaitUS = 3000;   // for the null frame to go out before the radio leaves
 static const uint8_t kAwdlSlotHopSet[2] = {149, 161};
 constexpr uint64_t kAwdlSlotHopMinRunUS = 30000;
 constexpr uint64_t kAwdlSlotHopDefaultLeadUS = 3000;
@@ -7405,6 +7413,11 @@ static void awdlCoexPublish()
         root->setProperty("ITLAWDLStaLeavesAfterBmiss", awdlStaLeavesAfterBmiss, 32);
         root->setProperty("ITLAWDLStaLeaveLastTo", awdlStaLeaveLastTo, 32);
         root->setProperty("ITLAWDLStaLeaveSinceBmissMs", awdlStaLeaveSinceBmissMs, 32);
+        root->setProperty("ITLAWDLHopNoPm", awdlHopNoPm);
+        root->setProperty("ITLAWDLHopAsleep", awdlHopAsleep);
+        root->setProperty("ITLAWDLHopNullSleepSent", awdlHopNullSleepSent, 32);
+        root->setProperty("ITLAWDLHopNullAwakeSent", awdlHopNullAwakeSent, 32);
+        root->setProperty("ITLAWDLHopNullErrors", awdlHopNullErrors, 32);
         root->setProperty("ITLAWDLSlotHopLastErr", awdlCoexSlotHopLastErr, 32);
         root->setProperty("ITLAWDLSlotHopLastWhy", awdlCoexSlotHopLastWhy, 32);
         root->setProperty("ITLAWDLSlotHopFailedAfter", awdlCoexSlotHopFailedAfter, 32);
@@ -13436,8 +13449,10 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac, int mo
     /* Trim 802.11 header. */
     mbuf_adj(m, hdrlen);
     
-    nsegs = bus_dmamap_packet(data->map, m, &segs[0], IWX_TFH_NUM_TBS - 2, false);
-    if (nsegs == 0) {
+    // A null data frame has a header and no payload: only the two first transfer buffers describe it (as iwlwifi does).
+    const bool headerOnly = mbuf_len(m) == 0 && mbuf_pkthdr_len(m) == 0;
+    nsegs = headerOnly ? 0 : bus_dmamap_packet(data->map, m, &segs[0], IWX_TFH_NUM_TBS - 2, false);
+    if (nsegs == 0 && !headerOnly) {
         XYLog("%s: can't map mbuf (error %d)\n", DEVNAME(sc),
               nsegs);
         mbuf_freem(m);
@@ -17088,6 +17103,8 @@ awdlCoexSlotHopStep(struct iwx_softc *sc)
         awdlCoexPeerSchedule.reset();
     }
     // Stopped (slow hops or a failure) with the station left off the AP's channel: bring it back.
+    if (awdlCoexSlotHopStats.disabled)
+        awdlHopAsleep = false;   // our next frame to the AP carries PM = 0 anyway
     if (awdlCoexSlotHop && awdlCoexSlotHopStats.disabled && !awdlCoexMultiActive && staCtx && staCtx->channel &&
         ic->ic_state == IEEE80211_S_RUN && staCtx->channel != staNode->in_ni.ni_chan && awdlCoexGeneration == gen) {
         staCtx->channel = staNode->in_ni.ni_chan;
@@ -17123,8 +17140,50 @@ awdlCoexSlotHopStep(struct iwx_softc *sc)
     uint8_t target = pick.channel;
     if (!awdlCoexMultiActive && !pick.follows)
         target = uint8_t(ieee80211_chan2ieee(ic, staNode->in_ni.ni_chan));
+    // Shared binding: tell the AP we are asleep before leaving its channel, and awake on return (null data frame, PM bit).
+    const bool pmDuty = !awdlCoexMultiActive && !awdlHopNoPm && staNode;
+    const uint8_t homeChan = pmDuty ? uint8_t(ieee80211_chan2ieee(ic, staNode->in_ni.ni_chan)) : 0;
+    auto sendNull = [&](bool sleep) -> bool {
+        mbuf_t nm = nullptr;
+        if (mbuf_getpacket(MBUF_DONTWAIT, &nm) || !nm) {
+            ++awdlHopNullErrors;
+            return false;
+        }
+        uint8_t hdr[24] = {};
+        hdr[0] = IEEE80211_FC0_VERSION_0 | IEEE80211_FC0_TYPE_DATA | IEEE80211_FC0_SUBTYPE_NODATA;
+        hdr[1] = IEEE80211_FC1_DIR_TODS | (sleep ? IEEE80211_FC1_PWR_MGT : 0);
+        memcpy(hdr + 4, staNode->in_ni.ni_bssid, 6);
+        memcpy(hdr + 10, ic->ic_myaddr, 6);
+        memcpy(hdr + 16, staNode->in_ni.ni_bssid, 6);
+        memcpy(mbuf_data(nm), hdr, sizeof(hdr));
+        mbuf_setlen(nm, sizeof(hdr));
+        mbuf_pkthdr_setlen(nm, sizeof(hdr));
+        if (iwx_tx(sc, nm, ic->ic_bss, EDCA_AC_BE, -1)) {   // frees the mbuf on failure
+            ++awdlHopNullErrors;
+            return false;
+        }
+        ++(sleep ? awdlHopNullSleepSent : awdlHopNullAwakeSent);
+        return true;
+    };
+    if (pmDuty && awdlHopAsleep && have == homeChan && target == homeChan) {
+        // The plan changed before we left: wake the AP's queue again.
+        (void)sendNull(false);
+        awdlHopAsleep = false;
+        return;
+    }
     if (target == have)
         return;
+    if (pmDuty && have == homeChan && target != homeChan) {
+        if (!awdlHopAsleep) {
+            if (sendNull(true)) {
+                awdlHopAsleep = true;
+                awdlHopAsleepAtUS = now;
+            }
+            return;     // leave on a later pass, once the frame has gone out
+        }
+        if (now - awdlHopAsleepAtUS < kAwdlHopSleepWaitUS)
+            return;
+    }
     const uint32_t tok = awdlCoexToken;
     struct ieee80211_channel *before = own->channel;
     own->channel = &ic->ic_channels[target];
@@ -17165,6 +17224,10 @@ awdlCoexSlotHopStep(struct iwx_softc *sc)
         return;
     }
     awdlCoexSlotHopStats.noteHop(took);
+    if (pmDuty && awdlHopAsleep && target == homeChan) {
+        (void)sendNull(false);      // back on the AP's channel: awake
+        awdlHopAsleep = false;
+    }
     if (awdlCoexMultiActive)
         awdlCoexOwnChan = own->channel;
     awdlCoexChannel = target;
@@ -22183,6 +22246,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         awdlCoexMulti = awdlCoexTx && PE_parse_boot_argn("-itlawdlcoexmulti", &dummy, sizeof(dummy));
         awdlCoexData = awdlCoexTx && PE_parse_boot_argn("-itlawdlcoexdata", &dummy, sizeof(dummy));
         awdlCoexSlotHop = awdlCoexTx && PE_parse_boot_argn("-itlawdlslothop", &dummy, sizeof(dummy));
+        awdlHopNoPm = PE_parse_boot_argn("-itlawdlhopnopm", &dummy, sizeof(dummy));
         awdlCoexBaTxEnabled = awdlCoexData && PE_parse_boot_argn("-itlawdlcoexbatx", &dummy, sizeof(dummy));
         // On by default since 0.6.0 (PR #47; A/B on 149/149 and 44/44 by three testers). The old opt-in
         // flag -itlawdlcoexsamechprobe is still accepted and changes nothing; -itlawdlnosamechprobe turns it off.
