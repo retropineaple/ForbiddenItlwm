@@ -69,3 +69,12 @@ moves its primary channel between them to follow the plan (no retune), and the s
 really follows. Registry (`ioreg -l | grep ITLAWDLSlotHop`): `Hops`, `Failures`, `Slow`, `AvgUS`, `MinUS`, `MaxUS`,
 `Evaluations`, `Stopped` (0 running, 1 a hop failed twice, 2 more than half of at least 20 hops took over 25 ms).
 The feature stops itself on either; the hop latency is the open question, nothing in the firmware documents it.
+
+### Slot hopping on the shared binding
+
+2026-11-22: with `-itlawdlcoexmulti -itlawdloverlap80 -itlawdlslothop` the hop worked (821 hops, none failed, 0.5 to 8.5 ms,
+1.55 ms on average) but throughput fell to 10 Mbit/s: that mode never aggregates (BaTx off, 0 aggregated frames).
+Without `-itlawdlcoexmulti` the same flag now hops the station's own context between 149 and 161 (primary channel only, the
+BSS stays 80 MHz wide), which keeps the shared binding's aggregation. It needs an AP on 149 or 161 at 80 MHz. While the station
+is away from the AP's channel it hears the AP only through retries, so Wi-Fi on en1 slows; if a hop fails, or too many are
+slow, the station goes back to the AP's channel and the feature stops (`ITLAWDLSlotHopStopped`).

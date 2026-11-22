@@ -208,6 +208,9 @@ static uint32_t awdlCoexAdvertise80Frames;
 static uint64_t awdlCoexMovePendingUS, awdlCoexCountryRetryUS;
 static uint32_t awdlCoexMoveDrainTimeouts, awdlCoexCountryFailures;
 static int awdlPhyBuildingId = -1;
+// -itlawdlslothop on the shared binding: the primary channel (149 to 161) the station's own context is being moved to, only while that
+// PHY command is built; 0 otherwise. The channel stays 80 MHz wide, centred on 155.
+static int awdlHopStaPrimary;
 // A PHY command for the listener's context that failed without a readable answer leaves it uncertain;
 // the own channel isn't used again until the firmware restarts.
 static int awdlCoexPhyUncertainGen = -1;
@@ -6734,10 +6737,12 @@ static bool awdlCoexSlotHopInSet(int ch)
 {
     return ch == kAwdlSlotHopSet[0] || ch == kAwdlSlotHopSet[1];
 }
+// On the shared binding the station's own context is what moves; the step decides each time whether that is allowed (80 MHz BSS in 149-161).
+static bool awdlCoexSlotHopShared;
 static bool awdlCoexSlotHopActive()
 {
-    return awdlCoexSlotHop && !awdlCoexSlotHopStats.disabled && awdlCoexMultiActive && awdlCoexAdded && awdlCoexOwnWidth == 80 &&
-        awdlCoexSlotHopInSet(int(awdlCoexChannel));
+    return awdlCoexSlotHop && !awdlCoexSlotHopStats.disabled && awdlCoexAdded && awdlCoexSlotHopInSet(int(awdlCoexChannel)) &&
+        (awdlCoexMultiActive ? awdlCoexOwnWidth == 80 : awdlCoexSlotHopShared);
 }
 // The denominator for the gap slots: TID 7 frames heard, and frames missing (attributed to the cell where the gap began), in each
 // of the iPhone's 16 slots and each 8th of the slot (8.2 ms). Without it a cluster of gap starts could just be where the iPhone sends.
@@ -11840,6 +11845,15 @@ iwx_get_ctrl_pos(struct ieee80211com *ic, struct ieee80211_channel *c)
     // Control channel 149 is 30 MHz below the centre, 155.
     if (awdlWide80Applies(ic, c))
         return IWX_PHY_VHT_CTRL_POS_2_BELOW;
+    if (awdlHopStaPrimary) {
+        switch (awdlHopStaPrimary) {
+            case 149: return IWX_PHY_VHT_CTRL_POS_2_BELOW;
+            case 153: return IWX_PHY_VHT_CTRL_POS_1_BELOW;
+            case 157: return IWX_PHY_VHT_CTRL_POS_1_ABOVE;
+            case 161: return IWX_PHY_VHT_CTRL_POS_2_ABOVE;
+            default: break;
+        }
+    }
     // The listener's own context at 80 MHz is only ever in 149-161, centred on 155.
     if (awdlCoexPhyWidth == IWX_PHY_VHT_CHANNEL_MODE80 && awdlCoexMulti && awdlPhyBuildingId == kAwdlCoexPhyId) {
         switch (ieee80211_chan2ieee(ic, c)) {
@@ -17001,12 +17015,32 @@ void ItlIwx::
 awdlCoexSlotHopStep(struct iwx_softc *sc)
 {
     const int gen = sc->sc_generation;
-    if (!awdlCoexSlotHopActive() || awdlCoexMovePending || awdlCoexGeneration != gen || awdlCoexAddingGen == gen ||
-        awdlCoexRemovingGen == gen || awdlCoexPhyUncertainGen == gen || awdlCoexBrokenGeneration == gen || awdlStopping ||
-        !awdlCoexOwnChan)
-        return;
     struct ieee80211com *ic = &sc->sc_ic;
-    struct iwx_phy_ctxt *own = &sc->sc_phyctxt[kAwdlCoexPhyId];
+    // Shared binding: the listener has no context of its own, so the station's moves (its primary only, the BSS stays 80 MHz wide in
+    // 149-161). While away from the AP's channel the station hears the AP only by retries; that is the price of the slots.
+    struct iwx_node *staNode = (struct iwx_node *)ic->ic_bss;
+    struct iwx_phy_ctxt *staCtx = (!awdlCoexMultiActive && staNode) ? staNode->in_phyctxt : nullptr;
+    awdlCoexSlotHopShared = awdlCoexSlotHop && !awdlCoexMultiActive && awdlCoexAdded && !awdlCoexSlotHopStats.disabled && staCtx &&
+        ic->ic_state == IEEE80211_S_RUN && staNode->in_ni.ni_chw == IEEE80211_CHAN_WIDTH_80 && staCtx->channel &&
+        ItlAWDL::block80Of(ieee80211_chan2ieee(ic, staNode->in_ni.ni_chan)) == 149 &&
+        awdlCoexSlotHopInSet(ieee80211_chan2ieee(ic, staNode->in_ni.ni_chan));
+    // Stopped (slow hops or a failure) with the station left off the AP's channel: bring it back.
+    if (awdlCoexSlotHop && awdlCoexSlotHopStats.disabled && !awdlCoexMultiActive && staCtx && staCtx->channel &&
+        ic->ic_state == IEEE80211_S_RUN && staCtx->channel != staNode->in_ni.ni_chan && awdlCoexGeneration == gen) {
+        staCtx->channel = staNode->in_ni.ni_chan;
+        (void)iwx_phy_ctxt_cmd(sc, staCtx, 1, 1, IWX_FW_CTXT_ACTION_MODIFY, 0);
+        awdlCoexChannel = ieee80211_chan2ieee(ic, staNode->in_ni.ni_chan);
+        awdlCoexPeerSchedule.ourChannel = uint8_t(awdlCoexChannel);
+        awdlFixedChannel = awdlCoexChannel;
+        return;
+    }
+    if (!awdlCoexSlotHopActive() || awdlCoexMovePending || awdlCoexGeneration != gen || awdlCoexAddingGen == gen ||
+        awdlCoexRemovingGen == gen || awdlCoexPhyUncertainGen == gen || awdlCoexBrokenGeneration == gen || awdlStopping)
+        return;
+    struct iwx_phy_ctxt *ctx = awdlCoexMultiActive ? &sc->sc_phyctxt[kAwdlCoexPhyId] : staCtx;
+    if (!ctx || (awdlCoexMultiActive && !awdlCoexOwnChan))
+        return;
+    struct iwx_phy_ctxt *own = ctx;
     const int have = own->channel ? ieee80211_chan2ieee(ic, own->channel) : 0;
     if (!awdlCoexSlotHopInSet(have) || !awdlCoexScheduleCurrent())
         return;
@@ -17024,14 +17058,30 @@ awdlCoexSlotHopStep(struct iwx_softc *sc)
     const uint32_t tok = awdlCoexToken;
     struct ieee80211_channel *before = own->channel;
     own->channel = &ic->ic_channels[pick.channel];
-    awdlCoexPhyWidth = IWX_PHY_VHT_CHANNEL_MODE80;
+    if (awdlCoexMultiActive)
+        awdlCoexPhyWidth = IWX_PHY_VHT_CHANNEL_MODE80;
+    else
+        awdlHopStaPrimary = pick.channel;
     const int err = iwx_phy_ctxt_cmd(sc, own, 1, 1, IWX_FW_CTXT_ACTION_MODIFY, 0);
     awdlCoexPhyWidth = -1;
+    awdlHopStaPrimary = 0;
     if (gen != sc->sc_generation)
         return;
     const uint64_t took = awdlUptimeUS() - now;
     if (err || tok != awdlCoexToken) {
         own->channel = before;
+        if (!awdlCoexMultiActive) {
+            // The station's context may be on either channel: put it back on the AP's and stop hopping for good.
+            own->channel = staNode->in_ni.ni_chan;
+            (void)iwx_phy_ctxt_cmd(sc, own, 1, 1, IWX_FW_CTXT_ACTION_MODIFY, 0);
+            awdlCoexChannel = ieee80211_chan2ieee(ic, staNode->in_ni.ni_chan);
+            awdlCoexPeerSchedule.ourChannel = uint8_t(awdlCoexChannel);
+            awdlCoexSlotHopStats.noteFailure();
+            awdlCoexSlotHopStats.noteFailure();
+            awdlCoexMultiState = "slothop-sta-failed";
+            awdlCoexPublish();
+            return;
+        }
         awdlCoexSlotHopStats.noteFailure();
         ++awdlCoexMoveFailures;
         awdlCoexPhyUncertainGen = gen;
@@ -17041,7 +17091,8 @@ awdlCoexSlotHopStep(struct iwx_softc *sc)
         return;
     }
     awdlCoexSlotHopStats.noteHop(took);
-    awdlCoexOwnChan = own->channel;
+    if (awdlCoexMultiActive)
+        awdlCoexOwnChan = own->channel;
     awdlCoexChannel = pick.channel;
     awdlCoexPeerSchedule.ourChannel = pick.channel;
     if (awdlCoexTx)
@@ -22043,7 +22094,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         awdlCoexTx = awdlCoexRx && PE_parse_boot_argn("-itlawdlcoextx", &dummy, sizeof(dummy));
         awdlCoexMulti = awdlCoexTx && PE_parse_boot_argn("-itlawdlcoexmulti", &dummy, sizeof(dummy));
         awdlCoexData = awdlCoexTx && PE_parse_boot_argn("-itlawdlcoexdata", &dummy, sizeof(dummy));
-        awdlCoexSlotHop = awdlCoexMulti && PE_parse_boot_argn("-itlawdlslothop", &dummy, sizeof(dummy));
+        awdlCoexSlotHop = awdlCoexTx && PE_parse_boot_argn("-itlawdlslothop", &dummy, sizeof(dummy));
         awdlCoexBaTxEnabled = awdlCoexData && PE_parse_boot_argn("-itlawdlcoexbatx", &dummy, sizeof(dummy));
         // On by default since 0.6.0 (PR #47; A/B on 149/149 and 44/44 by three testers). The old opt-in
         // flag -itlawdlcoexsamechprobe is still accepted and changes nothing; -itlawdlnosamechprobe turns it off.
