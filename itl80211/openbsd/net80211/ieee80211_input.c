@@ -2994,6 +2994,7 @@ ieee80211_recv_deauth(struct ieee80211com *ic, mbuf_t m,
     reason = LE_READ_2(frm);
 
     XYLog("Deauth received, reason %d\n", reason);
+    ic->ic_last_deauth_rx_reason = reason;
     ic->ic_deauth_reason = reason;
     if (ic->ic_event_handler) {
         (*ic->ic_event_handler)(ic, IEEE80211_EVT_STA_DEAUTH, NULL);
@@ -3060,6 +3061,7 @@ ieee80211_recv_disassoc(struct ieee80211com *ic, mbuf_t m,
     reason = LE_READ_2(frm);
     
     XYLog("Disassoc received, reason %d\n", reason);
+    ic->ic_last_disassoc_rx_reason = reason;
     
     ic->ic_stats.is_rx_disassoc++;
     switch (ic->ic_opmode) {

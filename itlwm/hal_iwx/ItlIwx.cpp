@@ -6738,6 +6738,7 @@ static uint64_t awdlCoexSlotHopFailedTookUS;
 // The firmware's missed-beacon notifications, and every RUN to other transition with the hop state at that moment.
 static uint32_t awdlBmissNotifs, awdlBmissOver, awdlBmissOverOffHome, awdlBmissMax, awdlBmissLast, awdlBmissThreshold;
 static uint64_t awdlBmissLastOverUS;
+static struct ieee80211com *awdlStaIc;   // for the registry: what the AP itself sent us
 static uint32_t awdlStaLeaves, awdlStaLeavesHopping, awdlStaLeavesOffHome, awdlStaLeavesAfterBmiss, awdlStaLeaveLastTo, awdlStaLeaveSinceBmissMs;
 static const uint8_t kAwdlSlotHopSet[2] = {149, 161};
 constexpr uint64_t kAwdlSlotHopMinRunUS = 30000;
@@ -7392,6 +7393,12 @@ static void awdlCoexPublish()
         root->setProperty("ITLAWDLBmissMax", awdlBmissMax, 32);
         root->setProperty("ITLAWDLBmissLast", awdlBmissLast, 32);
         root->setProperty("ITLAWDLBmissThreshold", awdlBmissThreshold, 32);
+        if (awdlStaIc) {
+            root->setProperty("ITLAWDLRxDisassoc", uint32_t(awdlStaIc->ic_stats.is_rx_disassoc), 32);
+            root->setProperty("ITLAWDLRxDeauth", uint32_t(awdlStaIc->ic_stats.is_rx_deauth), 32);
+            root->setProperty("ITLAWDLLastDisassocReason", uint32_t(awdlStaIc->ic_last_disassoc_rx_reason), 32);
+            root->setProperty("ITLAWDLLastDeauthReason", uint32_t(awdlStaIc->ic_last_deauth_rx_reason), 32);
+        }
         root->setProperty("ITLAWDLStaLeaves", awdlStaLeaves, 32);
         root->setProperty("ITLAWDLStaLeavesWhileHopping", awdlStaLeavesHopping, 32);
         root->setProperty("ITLAWDLStaLeavesOffHome", awdlStaLeavesOffHome, 32);
@@ -18202,6 +18209,7 @@ iwx_newstate(struct ieee80211com *ic, enum ieee80211_state nstate, int arg)
         nstate != IEEE80211_S_AUTH)
         return 0;
     
+    awdlStaIc = ic;
     if (ic->ic_state == IEEE80211_S_RUN && nstate != IEEE80211_S_RUN) {
         const struct iwx_node *lin = (const struct iwx_node *)ic->ic_bss;
         const uint64_t leaveNow = awdlUptimeUS();
