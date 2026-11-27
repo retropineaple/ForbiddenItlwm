@@ -73,6 +73,14 @@ __attribute__((visibility("hidden"))) int _kext_apple_cc=__APPLE_CC__;
     kext=out/(NAME+'.kext')/'Contents';(kext/'MacOS').mkdir(parents=True,exist_ok=True)
     exe=kext/'MacOS'/NAME
     subprocess.run(['xcrun','clang++','-arch','x86_64','-mmacosx-version-min=10.15','-nostdlib','-Xlinker','-kext','-Xlinker','-no_fixup_chains','-lkmodc++','-lkmod','-lcc_kext','-L'+str(sdk/'Library/x86_64'),'-o',exe,*objs],check=True)
+    # A kext links with undefined symbols (the kernel binds them at load), so a method declared and never defined
+    # in this target links too and leaves its vtable slot pointing nowhere (#114: Sonoma 0.7.0-alpha.4 panicked
+    # at boot). Fail on any undefined symbol of a class this kext defines.
+    defined=subprocess.run(['nm','-m',exe],capture_output=True,text=True,check=True).stdout
+    own={m.group(1) for m in re.finditer(r'\(__DATA,__const\) (?:non-)?external __ZTV(\d+[A-Za-z_]\w*)$',defined,re.M)}
+    undefined=subprocess.run(['nm','-u',exe],capture_output=True,text=True,check=True).stdout.split()
+    missing=[u for u in undefined if any(u.startswith(('__ZN'+c,'__ZNK'+c)) for c in own)]
+    if missing:print('--- undefined methods of this kext\'s own classes:\n'+'\n'.join(missing));raise SystemExit(1)
     p=plistlib.loads((R/'ForbiddenItlwm/WCL/Info.plist').read_bytes())
     def sub(v):
         if isinstance(v,dict):return {k:sub(x) for k,x in v.items()}

@@ -28,6 +28,14 @@ bool itlWCLTraceText(char *out, size_t size, uint32_t *version);
 #else
 #define AIRPORT_SKYWALK_OVERRIDE override
 #endif
+// Methods whose bodies live in WCL/WCL.cpp, which only the WCL builds (Tahoe, Sequoia) compile. The Sonoma build
+// keeps the stub it had before 0.7.0-alpha.4: declaring them without a body there left the vtable pointing at
+// undefined symbols, and airportd's first power request panicked the Mac at boot (#114).
+#ifdef AIRPORT_WCL
+#define AIRPORT_SKYWALK_WCL_ONLY
+#else
+#define AIRPORT_SKYWALK_WCL_ONLY override { return kIOReturnUnsupported; }
+#endif
 
 // Power save mode.
 //
@@ -268,7 +276,7 @@ public:
     virtual IOReturn getTIMESYNC_INFO(apple80211_timesync_info *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
     virtual IOReturn getSENSING_DATA(apple80211_sensing_data_t *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
     virtual IOReturn getCOUNTRY_BAND_SUPPORT(apple80211_country_band_support *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
-    virtual IOReturn getWCL_FW_HOT_CHANNELS(apple80211_fw_hot_channels *) AIRPORT_SKYWALK_OVERRIDE;
+    virtual IOReturn getWCL_FW_HOT_CHANNELS(apple80211_fw_hot_channels *) AIRPORT_SKYWALK_WCL_ONLY;
 #ifdef AIRPORT_WCL
     virtual IOReturn getWCL_LOW_LATENCY_INFO(apple80211_low_latency_info *) override;
 #else
@@ -316,7 +324,7 @@ public:
     virtual IOReturn setAUTH_TYPE(apple80211_authtype_data *) AIRPORT_SKYWALK_OVERRIDE;
     virtual IOReturn setCIPHER_KEY(apple80211_key *) AIRPORT_SKYWALK_OVERRIDE;
     virtual IOReturn setCHANNEL(apple80211_channel_data *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
-    virtual IOReturn setPOWERSAVE(apple80211_powersave_data *) AIRPORT_SKYWALK_OVERRIDE;
+    virtual IOReturn setPOWERSAVE(apple80211_powersave_data *) AIRPORT_SKYWALK_WCL_ONLY;
     virtual IOReturn setTXPOWER(apple80211_txpower_data *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
     virtual IOReturn setRATE(apple80211_rate_data *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
     virtual IOReturn setSCAN_REQ(apple80211_scan_data *) AIRPORT_SKYWALK_OVERRIDE;
@@ -383,7 +391,7 @@ public:
     virtual IOReturn setABORT_SCAN(apple80211_abort_scan *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
     virtual IOReturn setSET_PROPERTY(apple80211_set_property_unserialized_data *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
     virtual IOReturn setROAM_CACHE_UPDATE(apple80211_roam_cache_data *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
-    virtual IOReturn setPM_MODE(apple80211_pm_mode *) AIRPORT_SKYWALK_OVERRIDE;
+    virtual IOReturn setPM_MODE(apple80211_pm_mode *) AIRPORT_SKYWALK_WCL_ONLY;
     virtual IOReturn setSET_WIFI_ASSERTION_STATE(apple80211_wifi_assertion_data *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
     virtual IOReturn setREASSOCIATE_WITH_CORECAPTURE(apple80211_capture_debug_info_t *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
     virtual IOReturn setLINKDOWN_DEBOUNCE_STATUS(apple80211_linkdown_debounce_status *) AIRPORT_SKYWALK_OVERRIDE { return kIOReturnUnsupported; }
