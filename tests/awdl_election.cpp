@@ -375,8 +375,96 @@ int main() {
         assert(electionVersionFromTLVs(tl, sizeof(tl), &ver) && ver == 0x3e);
     }
 
+    // macOS's own election (ELECTION_PARAMS 155, ADVERTISERS 229; layouts from IO80211 programChipWithNewMaster).
+    {
+        uint8_t params[0x38] = {};
+        put32(params + 0x08, 1);
+        params[0x12] = 0x34; params[0x13] = 0x12;     // election id 0x1234
+        params[0x14] = 1;                              // hop count
+        memcpy(params + 0x16, phone, 6);               // root
+        put32(params + 0x1c, 524);
+        put32(params + 0x20, 515);
+        uint8_t adv[0x2c] = {};
+        memcpy(adv + 0x26, phone, 6);
+        MacOSElectionChoice c{};
+        const uint64_t tm = t0 + 2000000;
+        // parsing, and refusals: short buffer, wrong version, no or group parent address
+        assert(!parseMacOSElectionParams(params, kMacOSElectionParamsLength - 1, &c, tm) && !c.valid);
+        params[0x08] = 2;
+        assert(!parseMacOSElectionParams(params, sizeof(params), &c, tm) && !c.valid);
+        params[0x08] = 1;
+        assert(parseMacOSAdvertisers(adv, sizeof(adv), &c, tm - 1000) && c.haveParent && !memcmp(c.parent, phone, 6));
+        assert(parseMacOSElectionParams(params, sizeof(params), &c, tm));
+        assert(c.valid && c.hopCount == 1 && c.electionId == 0x1234 && !memcmp(c.root, phone, 6) &&
+               c.rootMetric == 524 && c.selfMetric == 515 && c.atUS == tm);
+        MacOSElectionChoice bad{};
+        uint8_t noAddr[0x2c] = {};
+        assert(!parseMacOSAdvertisers(noAddr, sizeof(noAddr), &bad, tm) && !bad.haveParent);
+        noAddr[0x26] = 0x01; noAddr[0x2b] = 5;
+        assert(!parseMacOSAdvertisers(noAddr, sizeof(noAddr), &bad, tm) && !bad.haveParent);
+        assert(!parseMacOSAdvertisers(adv, kMacOSAdvertisersLength - 1, &bad, tm));
+
+        // macOS follows the phone (one hop): we sync to the phone's clock even where our own rules wouldn't.
+        Election m{};
+        PeerSyncInfo ms{};
+        ms.awCounter = 8000; ms.downCounterTU = 20; ms.awPeriodTU = 16;
+        ElectionView mv = view(phone, phone, 0, 0, 524, 524);
+        m.note(phone, &mv, &ms, tm - 500000, -66);   // below IO80211's -65: runApple wouldn't follow
+        AppleElectionInputs in{};
+        in.selfMetric = 515; in.minRssi5Dbm = -65; in.hostEdgeDbm = -45;
+        assert(!m.runApple(self, in, tm + 1000).following);
+        bool ok = false;
+        ElectionResult mr = m.runMacOS(self, c, tm + 1000, &ok);
+        assert(ok && mr.following && !memcmp(mr.sync, phone, 6) && !memcmp(mr.master, phone, 6) && mr.height == 1 &&
+               mr.masterMetric == 524 && mr.clockValid && mr.clock.anchorEaw == 2000);
+        // the parent from ADVERTISERS wins over the root (two hops: root far away, parent the phone)
+        MacOSElectionChoice two = c;
+        two.hopCount = 2;
+        memcpy(two.root, pad, 6);
+        mr = m.runMacOS(self, two, tm + 1000, &ok);
+        assert(ok && mr.following && !memcmp(mr.sync, phone, 6) && !memcmp(mr.master, pad, 6) && mr.height == 2);
+        // two hops without a fresh parent: unresolved (the root isn't whom to sync to)
+        two.haveParent = false;
+        mr = m.runMacOS(self, two, tm + 1000, &ok);
+        assert(!ok && !mr.following);
+        two.haveParent = true; two.parentAtUS = two.atUS - kMacOSParentMatchUS;   // too old for this programming
+        mr = m.runMacOS(self, two, tm + 1000, &ok);
+        assert(!ok);
+        // macOS is master (hop count 0): our own clock, resolved
+        MacOSElectionChoice own = c;
+        own.hopCount = 0;
+        mr = m.runMacOS(self, own, tm + 1000, &ok);
+        assert(ok && !mr.following && !memcmp(mr.master, self, 6) && !mr.clockValid &&
+               mr.clock.anchorEndUS == ownClock().anchorEndUS);
+        // stale choice, or before it arrived: unresolved
+        mr = m.runMacOS(self, c, tm + kMacOSChoiceStaleUS, &ok);
+        assert(!ok);
+        mr = m.runMacOS(self, c, tm - 1, &ok);
+        assert(!ok);
+        // the parent isn't a peer heard here (or not recently): unresolved
+        mr = m.runMacOS(self, c, tm - 500000 + kElectionPeerStaleUS, &ok);
+        assert(!ok);
+        MacOSElectionChoice other = c;
+        memcpy(other.parent, pad, 6); memcpy(other.root, pad, 6);
+        mr = m.runMacOS(self, other, tm + 1000, &ok);
+        assert(!ok);
+        // a parent that is us: unresolved, never a loop
+        MacOSElectionChoice loop = c;
+        memcpy(loop.parent, self, 6);
+        mr = m.runMacOS(self, loop, tm + 1000, &ok);
+        assert(!ok && !mr.following);
+        // followed but the clock is old: following, own clock until a fresh sync TLV
+        mr = m.runMacOS(self, c, tm - 500000 + kElectionClockStaleUS + 1, &ok);
+        assert(ok && mr.following && !mr.clockValid);
+        // no choice at all
+        MacOSElectionChoice none{};
+        mr = m.runMacOS(self, none, tm, &ok);
+        assert(!ok);
+    }
+
     printf("election: TLV 24 parsing, OWL rules, cycles, depth, staleness, table, clocks, sync TLV, frames: passed\n");
     printf("Apple election rules (root metric across trees, RLFC/HC in a tree, self root, all refusals): passed\n");
     printf("election RSSI rule (skip below the minimum, smoothing, unknown RSSI eligible): passed\n");
+    printf("macOS's election (ELECTION_PARAMS/ADVERTISERS parsing, follow parent or root, own, stale, unknown, loop): passed\n");
     return 0;
 }

@@ -8,6 +8,7 @@
 
 #include "ItlCountedCopy.hpp"
 #include "AirportItlwmV2.hpp"
+#include <AWDLElection.hpp>
 
 // Build marker shown as ItlwmAWDLInterfaceBuild; tools/build.py sets it per macOS target.
 #ifndef ITL_FORBIDDEN_BUILD
@@ -34,6 +35,27 @@ volatile uint32_t itlAWDLRxMetaOther, itlAWDLRxMetaLast;
 // ItlIwx.cpp: itlawdlsched=<bits>; 0x1 scheduler set (on by default with the tested set), 0x2 diagnostics.
 extern bool itlResFlag(const char *name, uint32_t bit);
 volatile uint32_t itlAWDLPlanVersion;
+// read by ItlIwx's follower: macOS's election result from setAWDL_ELECTION_PARAMS and setAWDL_AWDL_ADVERTISERS
+// (ItlAWDL::MacOSElectionChoice). itlAWDLMacChoiceVersion is odd while the copy is written, as the plan's.
+ItlAWDL::MacOSElectionChoice itlAWDLMacChoice;
+volatile uint32_t itlAWDLMacChoiceVersion;
+volatile uint32_t itlAWDLMacChoiceParams, itlAWDLMacChoiceAdvertisers, itlAWDLMacChoiceRejected;
+static ItlAWDL::MacOSElectionChoice itlAWDLMacChoiceWork;   // the writer's copy (IO80211's ioctls are serialised)
+static uint64_t itlAWDLMacChoiceNowUS()
+{
+    uint64_t uptime, ns;
+    clock_get_uptime(&uptime);
+    absolutetime_to_nanoseconds(uptime, &ns);
+    return ns / 1000;
+}
+static void itlAWDLMacChoicePublish()
+{
+    ++itlAWDLMacChoiceVersion;
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    memcpy(&itlAWDLMacChoice, &itlAWDLMacChoiceWork, sizeof(itlAWDLMacChoice));
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+    ++itlAWDLMacChoiceVersion;
+}
 // ItlIwx.cpp -itlschedmacchan: macOS's AWDL secondary master channel (0 = not set yet).
 volatile uint32_t itlAWDLReqSecondaryMaster;
 // -itlawdlumi, ItlIwx.cpp: 1 while a unicast MI from macOS waits to be sent; the peer manager asks for one
@@ -287,12 +309,39 @@ IOReturn ItlAWDLInterface::getAWDL_AF_SECONDARY_PAYLOAD_CAPABILITIES(apple80211_
     return kIOReturnSuccess;
 }
 
+// macOS's election result after each election (programChipWithNewMaster): hop count, root and metrics. The
+// follower syncs to what macOS chose, as a real Mac's firmware does, instead of to its own election's pick.
 IOReturn ItlAWDLInterface::setAWDL_ELECTION_PARAMS(apple80211_awdl_election_params *data)
 {
     if (!nativeState.accept)
         return unsupported("setAWDL_ELECTION_PARAMS");
-    // Acknowledged only: there is no firmware election, and the contents aren't read.
-    return data ? kIOReturnSuccess : kIOReturnBadArgument;
+    if (!data)
+        return kIOReturnBadArgument;
+    ++itlAWDLMacChoiceParams;
+    if (ItlAWDL::parseMacOSElectionParams(reinterpret_cast<const uint8_t *>(data), ItlAWDL::kMacOSElectionParamsLength,
+                                          &itlAWDLMacChoiceWork, itlAWDLMacChoiceNowUS()))
+        itlAWDLMacChoicePublish();
+    else
+        ++itlAWDLMacChoiceRejected;
+    return kIOReturnSuccess;
+}
+
+// The parent macOS elected, when it is another device, with its sync and election fields; sent just before
+// ELECTION_PARAMS. Refused before, which IO80211 logged as "AWDL can't send AWDL_ADVERTISERS for parent" and
+// otherwise carried on.
+IOReturn ItlAWDLInterface::setAWDL_AWDL_ADVERTISERS(awdl_peer_advert_add *data)
+{
+    if (!nativeState.accept)
+        return unsupported("setAWDL_AWDL_ADVERTISERS");
+    if (!data)
+        return kIOReturnBadArgument;
+    ++itlAWDLMacChoiceAdvertisers;
+    if (ItlAWDL::parseMacOSAdvertisers(reinterpret_cast<const uint8_t *>(data), ItlAWDL::kMacOSAdvertisersLength,
+                                       &itlAWDLMacChoiceWork, itlAWDLMacChoiceNowUS()))
+        itlAWDLMacChoicePublish();
+    else
+        ++itlAWDLMacChoiceRejected;
+    return kIOReturnSuccess;
 }
 
 // IO80211's determineAndSetEdgeRssiThreshold (26.7.2) sends this with the threshold at +0x10 of a

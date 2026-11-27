@@ -60,6 +60,12 @@ struct PeerSlot {
     // A further slot's own count of payload-sized frames to the peer (the bulk detector's input) and of our
     // ADDBA requests in the current round. Slot 0 uses the listener-wide awdlCoexTxDestFrames and BaTxAsks.
     uint32_t txFrames = 0, txAsks = 0;
+    // Diagnostic only (ITLAWDLPeerTraffic, read by airdrop_measure.sh): bulk frames (1200 bytes or more) sent to
+    // and received from the peer since its station was added, and the channel and width (MHz) its last bulk
+    // frame came in on. Nothing in the driver reads them.
+    uint32_t diagTxBulk = 0, diagRxBulk = 0;
+    uint16_t diagRxWidth = 0;
+    uint8_t diagRxChannel = 0;
     // A further slot's own view of its peer's schedule, from the peer's sync frames and data (slot 0 uses the
     // listener-wide awdlCoexPeerSchedule): its aggregate queue pauses while the peer is away, and frames sent singly
     // wait for the peer's availability window, as for slot 0.

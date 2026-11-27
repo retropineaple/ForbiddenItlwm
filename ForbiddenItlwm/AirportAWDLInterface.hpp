@@ -123,7 +123,7 @@ public:
     IOReturn setAWDL_ENCRYPTION_TYPE(apple80211_encrypt*) override { return unsupported("setAWDL_ENCRYPTION_TYPE"); }
     IOReturn setAWDL_OOB_AUTO_REQUEST(apple80211_awdl_oob_request *) override;
     IOReturn setAWDL_TXCAL_PERIOD(apple80211_awdl_txcal_period*) override { return unsupported("setAWDL_TXCAL_PERIOD"); }
-    IOReturn setAWDL_AWDL_ADVERTISERS(awdl_peer_advert_add*) override { return unsupported("setAWDL_AWDL_ADVERTISERS"); }
+    IOReturn setAWDL_AWDL_ADVERTISERS(awdl_peer_advert_add*) override;   // the parent macOS elected, +0x26
     IOReturn setAWDL_DFSP_CONFIG(apple80211_awdl_dfsp_config*) override { return unsupported("setAWDL_DFSP_CONFIG"); }
     IOReturn setAWDL_DFSP_UCSA_CONFIG(apple80211_awdl_dfsp_ucsa_config*) override { return unsupported("setAWDL_DFSP_UCSA_CONFIG"); }
     IOReturn setCOMPANION_SKYWALK_IF_CREATE(apple80211_companion_skywalk_if_create*) override { return unsupported("setCOMPANION_SKYWALK_IF_CREATE"); }

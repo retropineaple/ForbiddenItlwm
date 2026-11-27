@@ -524,6 +524,10 @@ static uint32_t awdlSchedElectionWeakSkips;   // election runs that left a weak 
 extern volatile uint32_t itlAWDLSelfMetric, itlAWDLSelfCounter, itlAWDLSelfKnown;
 extern volatile uint32_t itlAWDLSelfElectionId, itlAWDLSelfElectionIdKnown;
 extern volatile int32_t itlAWDLElectionRssiFromMacOS;
+// AirportItlwmV2.cpp: macOS's election result (ELECTION_PARAMS, ADVERTISERS); the version is odd while written.
+extern ItlAWDL::MacOSElectionChoice itlAWDLMacChoice;
+extern volatile uint32_t itlAWDLMacChoiceVersion;
+extern volatile uint32_t itlAWDLMacChoiceParams, itlAWDLMacChoiceAdvertisers, itlAWDLMacChoiceRejected;
 // -itlsvctiming, AirportItlwmV2.cpp: peers' service responses not seen in the last 10 s, in the log.
 extern bool itlSvcTimingOn();
 extern volatile uint32_t itlSvcUpdates;
@@ -572,6 +576,14 @@ static void awdlSvcNoteResponses(const uint8_t *frame, size_t length, uint64_t n
 // -itlschedelecapple: IO80211's own election rules (AWDLElection.hpp runApple) in place of OWL's.
 static bool awdlSchedElectionApple;
 static ItlAWDL::ElectionResult awdlSchedElectionLastApple;   // per-rule skip counts of the last run
+// The follower syncs to the parent macOS elected (ELECTION_PARAMS and ADVERTISERS after each of macOS's
+// elections), as a real Mac's firmware does; its own election only fills in while macOS's choice can't be used
+// (not sent yet, stale, or a parent not heard here). On with the scheduler; -itlschedownelect keeps the
+// driver's own election in charge. With two deciders, the driver's clock and macOS's choice flipped at
+// different moments when the iPhone's RSSI sat at IO80211's -65 dBm edge (2026-11-27).
+static bool awdlSchedFollowMacOS;
+static uint32_t awdlSchedMacOSUsed, awdlSchedMacOSFallback, awdlSchedMacOSDisagree;
+static ItlAWDL::MacOSElectionChoice awdlSchedMacOSLast;
 // -itlschedch6, with -itlschedhandle: macOS's slots on channel 6 too. PHY 2
 // (unused by the station, which stays on PHY 0) is tuned to 6, and MAC 3, a second P2P Device handle with its
 // own address, promiscuous so it hears AWDL's broadcast frames, never transmitting, is bound to it alone. The
@@ -6993,6 +7005,18 @@ static uint32_t awdlPeerBaAsksSent, awdlPeerBaAsksSkippedAway, awdlPeerBaAskRoun
 // Block Ack reports, completion refills, and pump passes that left a full slot's frames parked in awdl0.
 static uint32_t awdlPeerBaTxSentAir, awdlPeerBaTxAcked, awdlPeerBaRefillKicks, awdlPeerBaRefillFrames,
     awdlPeerTxParkedFull;
+// The Wi-Fi network's channel and width (MHz) for ITLAWDLPeerTraffic, refreshed by the coex timer (0 = not joined).
+static uint32_t awdlDiagWifiChannel, awdlDiagWifiWidth;
+static uint32_t awdlChwMHz(uint8_t chw)
+{
+    switch (chw) {
+    case IEEE80211_CHAN_WIDTH_40: return 40;
+    case IEEE80211_CHAN_WIDTH_80: return 80;
+    case IEEE80211_CHAN_WIDTH_80P80:
+    case IEEE80211_CHAN_WIDTH_160: return 160;
+    default: return 20;
+    }
+}
 // Asking stops once nothing has gone to or come from the peer for this long and no bulk send runs: after a
 // transfer the rounds went on for minutes (#24). Data to or from it starts a fresh round.
 constexpr uint64_t kAwdlCoexBaIdleAskUS = 30000000;
@@ -7646,6 +7670,21 @@ static void awdlCoexPublish()
                                          (unsigned long long)((nowUS - ps.lastUS) / 1000000ULL) : 0ULL));
                 }
                 root->setProperty("ITLAWDLCoexPeers", t);
+                // Per added slot: bulk frames each way, the channel and width the peer's last bulk frame came in
+                // on, and the width its station was added with; the Wi-Fi network's channel and width first.
+                // airdrop_measure.sh compares two readings to find the slot a transfer used.
+                char tr[768];
+                size_t v = awdlDiagWifiChannel ?
+                    size_t(snprintf(tr, sizeof(tr), "wifi %u/%u", awdlDiagWifiChannel, awdlDiagWifiWidth)) :
+                    size_t(snprintf(tr, sizeof(tr), "wifi -"));
+                for (unsigned i = 0; i < awdlPeerSlotsUsable && v < sizeof(tr); ++i) {
+                    const ItlAWDL::PeerSlot &ps = awdlPeers[i];
+                    if (ps.added)
+                        v += size_t(snprintf(tr + v, sizeof(tr) - v, "; slot %u: tx %u rx %u, rx on %u/%u, station %u",
+                                             i, ps.diagTxBulk, ps.diagRxBulk, unsigned(ps.diagRxChannel),
+                                             unsigned(ps.diagRxWidth), ps.width));
+                }
+                root->setProperty("ITLAWDLPeerTraffic", tr);
             }
             if (awdlCoexStationTestResult[0])
                 root->setProperty("ITLAWDLStationTest", awdlCoexStationTestResult);
@@ -9030,6 +9069,12 @@ awdlCoexTxTask(void *arg)
     if (awdlSchedSp && awdlSchedSpOff && awdlSchedResumeAtUS && running && !awdlStopping && awdlCoexAdded &&
         awdlCoexGeneration == sc->sc_generation)
         awdlSchedResumeCheck(sc->sc_generation);
+    {   // the Wi-Fi network's channel and width for ITLAWDLPeerTraffic
+        const struct ieee80211_node *bss = ic->ic_bss;
+        const bool joined = running && bss && bss->ni_chan && bss->ni_chan != IEEE80211_CHAN_ANYC;
+        awdlDiagWifiChannel = joined ? ieee80211_chan2ieee(ic, bss->ni_chan) : 0;
+        awdlDiagWifiWidth = joined ? awdlChwMHz(bss->ni_chw) : 0;
+    }
     if (awdlSchedSp && !awdlSchedSpOff && running && !awdlStopping && awdlCoexAdded &&
         awdlCoexGeneration == sc->sc_generation)
         that->awdlSchedSpTick(sc);
@@ -9578,6 +9623,10 @@ awdlCoexDataPump(struct iwx_softc *sc, unsigned budget)
         // A further slot's peer (-itlawdlmultipeer) keeps its own count; slot 0's and the rest as before.
         ItlAWDL::PeerSlot *own = unicast && awdlPeerSlotsUsable > 1 ?
             ItlAWDL::addedSlotFor(awdlPeers + 1, awdlPeerSlotsUsable - 1, nextBytes + 4) : nullptr;
+        if (unicast && mbuf_len(next) >= 1200) {   // ITLAWDLPeerTraffic, any slot
+            if (ItlAWDL::PeerSlot *diag = own ? own : ItlAWDL::addedSlotFor(awdlPeers, 1, nextBytes + 4))
+                ++diag->diagTxBulk;
+        }
         if (own) {
             if (mbuf_len(next) >= 1200)
                 ++own->txFrames;
@@ -10000,6 +10049,9 @@ awdlCoexBaAddPeer(struct iwx_softc *sc, ItlAWDL::PeerSlot &awdlPeer, const uint8
     }
     awdlPeer.added = true;
     ++awdlPeerSlotAdds;
+    awdlPeer.diagTxBulk = awdlPeer.diagRxBulk = 0;
+    awdlPeer.diagRxWidth = 0;
+    awdlPeer.diagRxChannel = 0;
     if (awdlSlotDiag)
         awdlSlotDiagState.noteEvent(awdlUptimeUS(), 'S', uint8_t(&awdlPeer - awdlPeers));
     awdlPeer.txAsks = 0;
@@ -12269,8 +12321,14 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                         awdlPeer.lastUS = awdlUptimeUS();
                         if (awdlCoexAddrKnown && ItlAWDL::sameAddress(view.destination, awdlCoexAddr))
                             (void)awdlCoexPeerKnown(cf + 10, awdlPeer.lastUS, true);
-                        if (!(cf[4] & 1) && dataLen >= 1200)
+                        if (!(cf[4] & 1) && dataLen >= 1200) {
                             awdlPeer.lastRxPayloadUS = awdlPeer.lastUS;
+                            ++awdlPeer.diagRxBulk;   // ITLAWDLPeerTraffic
+                            awdlPeer.diagRxChannel = uint8_t(chanidx);
+                            static const uint16_t kRxWidthMHz[] = {20, 40, 80, 160, 320, 0, 0, 0};
+                            awdlPeer.diagRxWidth = kRxWidthMHz[(uint32_t(rate_n_flags) & IWX_RATE_MCS_CHAN_WIDTH_MSK) >>
+                                                               IWX_RATE_MCS_CHAN_WIDTH_POS];
+                        }
                         // QoS data to us: TID in the QoS control field. Group data and TIDs 8-15 can't belong to
                         // a receive session, so they don't keep one alive.
                         if ((cf[0] & 0xf0) == 0x80 && dataLen >= 26 && !(cf[4] & 1) && (cf[24] & 0x0f) < 8 &&
@@ -19369,6 +19427,21 @@ static void awdlSchedSpPublish()
                          int(itlAWDLElectionRssiFromMacOS), itlAWDLSelfElectionId, itlAWDLSelfElectionIdKnown);
                 IORegistryEntry::getRegistryRoot()->setProperty("ITLAWDLSchedElectionApple", apple);
             }
+            {
+                // macOS's choice as the follower uses it: on/off, how often it was used or our own election filled
+                // in, how often our own rules would have picked differently, and the last choice.
+                const ItlAWDL::MacOSElectionChoice &c = awdlSchedMacOSLast;
+                const uint64_t ageMs = c.valid && awdlUptimeUS() >= c.atUS ? (awdlUptimeUS() - c.atUS) / 1000 : 0;
+                char mac[240];
+                snprintf(mac, sizeof(mac), "%s; used %u, own election filled in %u, differed %u; from macOS: params %u, "
+                         "advertisers %u, rejected %u; last: hop count %u root ..:%02x:%02x metric %u (own %u) "
+                         "parent ..:%02x:%02x, %llu ms ago",
+                         awdlSchedFollowMacOS ? "on" : "off", awdlSchedMacOSUsed, awdlSchedMacOSFallback,
+                         awdlSchedMacOSDisagree, itlAWDLMacChoiceParams, itlAWDLMacChoiceAdvertisers,
+                         itlAWDLMacChoiceRejected, c.hopCount, c.root[4], c.root[5], c.rootMetric, c.selfMetric,
+                         c.haveParent ? c.parent[4] : 0, c.haveParent ? c.parent[5] : 0, (unsigned long long)ageMs);
+                IORegistryEntry::getRegistryRoot()->setProperty("ITLAWDLSchedElectionMacOS", mac);
+            }
         }
         snprintf(plan, sizeof(plan), "plan version %u torn %u; slots listener %u station %u other %u; "
                  "%u %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u", awdlSchedPlanVersionSeen,
@@ -20291,6 +20364,36 @@ awdlSchedFollowPlan(struct iwx_softc *sc, uint64_t nowUS)
                                           awdlSchedElectionMinRssi);
             }
             awdlSchedElectionWeakSkips += r.weakSkipped ? 1 : 0;
+            if (awdlSchedFollowMacOS) {
+                // macOS's choice, copied without tearing; used when it names us or a peer heard here.
+                ItlAWDL::MacOSElectionChoice choice{};
+                const uint32_t v = itlAWDLMacChoiceVersion;
+                __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                memcpy(&choice, &itlAWDLMacChoice, sizeof(choice));
+                __atomic_thread_fence(__ATOMIC_SEQ_CST);
+                if (v && !(v & 1) && v == itlAWDLMacChoiceVersion) {
+                    awdlSchedMacOSLast = choice;
+                    bool resolved = false;
+                    const ItlAWDL::ElectionResult m = awdlSchedElection.runMacOS(awdlCoexAddr, choice, nowUS, &resolved);
+                    if (resolved) {
+                        if (m.following != r.following || memcmp(m.sync, r.sync, 6))
+                            ++awdlSchedMacOSDisagree;   // where our own rules would have chosen differently
+                        ItlAWDL::ElectionResult kept = m;
+                        kept.weakSkipped = r.weakSkipped;   // the diagnostics of our own run stay visible
+                        kept.legacySkipped = r.legacySkipped;
+                        kept.idSkipped = r.idSkipped;
+                        kept.badAwSkipped = r.badAwSkipped;
+                        kept.olderSkipped = r.olderSkipped;
+                        kept.loopSkipped = r.loopSkipped;
+                        r = kept;
+                        ++awdlSchedMacOSUsed;
+                    } else {
+                        ++awdlSchedMacOSFallback;
+                    }
+                } else {
+                    ++awdlSchedMacOSFallback;
+                }
+            }
             if (memcmp(r.master, awdlSchedElectionNow.master, 6) || memcmp(r.sync, awdlSchedElectionNow.sync, 6))
                 ++awdlSchedElectionChanges;
             awdlSchedElectionNow = r;
@@ -26079,6 +26182,8 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
                     awdlSchedElectionMinRssi = ItlAWDL::kElectionDefaultMinRssi;
                 // With IO80211's election rules, -itlschedelecrssi alone means "use macOS's thresholds".
                 awdlSchedElectionApple = awdlSchedClock && itlResFlag("-itlschedelecapple", kItlResWork);
+                awdlSchedFollowMacOS = awdlSchedClock && itlResFlag("-itlschedelecapple", kItlResWork) &&
+                    !PE_parse_boot_argn("-itlschedownelect", &dummy, sizeof(dummy));
                 if (awdlSchedElectionApple && awdlSchedElectionMinRssi == ItlAWDL::kElectionDefaultMinRssi &&
                     !PE_parse_boot_argn("itlschedelecrssi", &minRssi, sizeof(minRssi)))
                     awdlSchedElectionMinRssi = 0;

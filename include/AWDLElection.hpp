@@ -192,6 +192,55 @@ struct ElectionResult {
     unsigned legacySkipped, idSkipped, badAwSkipped, olderSkipped, loopSkipped;
 };
 
+// macOS's own election result, as IO80211 hands it to the chip after each election (decoded from 26.7.3
+// IO80211AWDLPeerManager::programChipWithNewMaster). A real Mac's firmware syncs to the parent macOS names; the
+// follower does the same instead of running an election of its own, so its clock and macOS's choice agree.
+//  APPLE80211_IOC_AWDL_ELECTION_PARAMS (155), sent on every programming: a 0x38-byte buffer, +0x08 u32 1,
+//   +0x12 u16 election id, +0x14 u8 hop count (0: macOS is master), +0x16 root address, +0x1c u32 root metric,
+//   +0x20 u32 own metric.
+//  APPLE80211_IOC_AWDL_AWDL_ADVERTISERS (229), sent first when the parent is another device: the parent peer's
+//   sync and election fields, with its address (IO80211Peer::getMacAddress) at +0x26.
+constexpr size_t kMacOSElectionParamsLength = 0x24;   // the bytes read (the buffer is 0x38)
+constexpr size_t kMacOSAdvertisersLength = 0x2c;
+constexpr uint64_t kMacOSChoiceStaleUS = 10000000;     // macOS re-programs every few seconds while AWDL runs
+constexpr uint64_t kMacOSParentMatchUS = 2000000;      // ADVERTISERS comes just before ELECTION_PARAMS
+
+struct MacOSElectionChoice {
+    bool valid;
+    uint64_t atUS;           // when ELECTION_PARAMS arrived
+    uint32_t hopCount, rootMetric, selfMetric;
+    uint16_t electionId;
+    uint8_t root[6];
+    bool haveParent;
+    uint64_t parentAtUS;     // when ADVERTISERS arrived
+    uint8_t parent[6];
+};
+
+inline bool parseMacOSElectionParams(const uint8_t *b, size_t n, MacOSElectionChoice *c, uint64_t nowUS) {
+    if (!b || !c || n < kMacOSElectionParamsLength) return false;
+    uint32_t version;
+    memcpy(&version, b + 0x08, 4);
+    if (version != 1) return false;
+    c->hopCount = b[0x14];
+    memcpy(&c->electionId, b + 0x12, 2);
+    memcpy(c->root, b + 0x16, 6);
+    memcpy(&c->rootMetric, b + 0x1c, 4);
+    memcpy(&c->selfMetric, b + 0x20, 4);
+    c->atUS = nowUS;
+    c->valid = true;
+    return true;
+}
+
+inline bool parseMacOSAdvertisers(const uint8_t *b, size_t n, MacOSElectionChoice *c, uint64_t nowUS) {
+    if (!b || !c || n < kMacOSAdvertisersLength) return false;
+    static const uint8_t zero[6] = {};
+    if (!memcmp(b + 0x26, zero, 6) || (b[0x26] & 1)) return false;   // no address, or a group address
+    memcpy(c->parent, b + 0x26, 6);
+    c->parentAtUS = nowUS;
+    c->haveParent = true;
+    return true;
+}
+
 struct Election {
     ElectionPeer peers[kElectionPeers];
 
@@ -362,6 +411,48 @@ struct Election {
             r.clock = clockFromSync(p.sync, p.syncHeardUS);
             r.clockValid = true;
         }
+        return r;
+    }
+
+    // macOS's choice as the follower's result. *resolved is false when it can't be followed (stale, or the
+    // parent isn't a peer heard here recently); the caller then keeps its own election's result.
+    ElectionResult runMacOS(const uint8_t *self, const MacOSElectionChoice &c, uint64_t nowUS,
+                            bool *resolved) const {
+        ElectionResult r{};
+        r.peer = -1;
+        memcpy(r.master, self, 6);
+        memcpy(r.sync, self, 6);
+        r.clock = ownClock();
+        if (resolved) *resolved = false;
+        if (!c.valid || nowUS < c.atUS || nowUS - c.atUS >= kMacOSChoiceStaleUS) return r;
+        r.masterMetric = c.selfMetric;
+        if (!c.hopCount) {   // macOS is master: our own clock
+            if (resolved) *resolved = true;
+            return r;
+        }
+        // the parent ADVERTISERS named for this programming, else (one hop) the root itself.
+        const bool parentFresh = c.haveParent && c.parentAtUS <= c.atUS && c.atUS - c.parentAtUS < kMacOSParentMatchUS;
+        const uint8_t *syncAddr = parentFresh ? c.parent : c.hopCount == 1 ? c.root : nullptr;
+        if (!syncAddr || !memcmp(syncAddr, self, 6)) return r;
+        int found = -1;
+        for (unsigned i = 0; i < kElectionPeers; ++i) {
+            const ElectionPeer &p = peers[i];
+            if (p.used && nowUS - p.heardUS < kElectionPeerStaleUS && !memcmp(p.addr, syncAddr, 6)) { found = int(i); break; }
+        }
+        if (found < 0) return r;
+        const ElectionPeer &p = peers[found];
+        r.peer = found;
+        r.following = true;
+        memcpy(r.master, c.root, 6);
+        memcpy(r.sync, p.addr, 6);
+        r.masterMetric = c.rootMetric;
+        r.masterCounter = p.view.masterCounter;
+        r.height = c.hopCount;
+        if (p.haveSync && nowUS - p.syncHeardUS < kElectionClockStaleUS && p.sync.awPeriodTU) {
+            r.clock = clockFromSync(p.sync, p.syncHeardUS);
+            r.clockValid = true;
+        }
+        if (resolved) *resolved = true;
         return r;
     }
 };

@@ -156,4 +156,6 @@ a=s.index('iwx_rx_mpdu_mq(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib
 # (added condition only; AWDL's hand-off and every receive check are unchanged).
 # -itlslotdiag: AWDL action frames and data to us or to a group are counted by plan entry, and unicast to us by the
 # receive filter's state (added lines only; every receive check and the hand-off are unchanged).
-a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='23a8354cd09fbca9fb0eb9735b303aeb7eecbc2379d9aedcfc4f681bada5f74a'
+# ITLAWDLPeerTraffic: a further count, channel and width per slot for bulk data from a known peer (added lines
+# only; every receive check and the hand-off are unchanged).
+a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='189579483251c485855745474e1b0d8b901bd1848640240888da4c1155f4f6a2'
