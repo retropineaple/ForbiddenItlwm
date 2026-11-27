@@ -7,7 +7,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="forbiddenitlwm-tests-") as directory:
-    for name in ("awdl_requested_configuration", "awdl_protocol", "awdl_frame_builder", "awdl_sync_prefix", "awdl_local_schedule", "awdl_probe_policy", "awdl_data_payload", "awdl_data_frame", "awdl_observation", "awdl_regulatory", "awdl_tx_burst", "awdl_peer_schedule", "awdl_peer_slots", "awdl_amsdu", "awdl_channel_mix", "awdl_airtime", "awdl_rx_dup", "awdl_sched_restart", "awdl_slot_diag", "awdl_ba_tx_rules", "awdl_chain_rssi", "awdl_session_follow", "awdl_exec_plan", "awdl_election", "awdl_build_guard", "btleadv_hci", "btleadv_verify", "btleadv_advlog", "eapol_key_length", "ptk_derive", "wcl_transition", "wcl_sae", "wcl_scan_ssid", "wcl_hidden_ssid", "counted_copy", "scan_cursor"):
+    for name in ("awdl_requested_configuration", "awdl_protocol", "awdl_frame_builder", "awdl_sync_prefix", "awdl_local_schedule", "awdl_probe_policy", "awdl_data_payload", "awdl_data_frame", "awdl_observation", "awdl_regulatory", "awdl_tx_burst", "awdl_peer_schedule", "awdl_peer_slots", "awdl_amsdu", "awdl_channel_mix", "awdl_airtime", "awdl_rx_dup", "awdl_sched_restart", "awdl_slot_diag", "awdl_ba_tx_rules", "awdl_listener_width", "awdl_chain_rssi", "awdl_session_follow", "awdl_exec_plan", "awdl_election", "awdl_build_guard", "btleadv_hci", "btleadv_verify", "btleadv_advlog", "eapol_key_length", "ptk_derive", "wcl_transition", "wcl_sae", "wcl_scan_ssid", "wcl_hidden_ssid", "counted_copy", "scan_cursor"):
         output = Path(directory) / name
         subprocess.run([
             "xcrun", "clang++", "-std=c++14",

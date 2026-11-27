@@ -135,6 +135,7 @@ extern bool itlAWDLDefaults();
 #include <AWDLSchedRestart.hpp>
 #include <AWDLSlotDiag.hpp>
 #include <AWDLBaTxRules.hpp>
+#include <AWDLListenerWidth.hpp>
 #include <AWDLChainRssi.hpp>
 #include <AWDLTxPass.hpp>
 #include <AWDLServiceMerge.hpp>
@@ -896,6 +897,17 @@ static void itlFwDiagPublish();
 static uint8_t awdlCoexSettleWidth;
 static uint64_t awdlCoexSettleSinceUS;
 static uint32_t awdlCoexMovesSettleDropped;
+// The listener's last width decision, for ITLAWDLCoexWidth (PR #88: a listener left at 20 MHz). Taken in
+// awdlCoexRetarget: the choice and what decided its width, and what a move to it is waiting for.
+struct AwdlCoexWidthNote {
+    uint8_t want, wantWidth, overlap, blockUsable;   // blockUsable: bit n = block's nth 20 MHz channel usable
+    bool schedReady, sched80, vht80, failed80;
+    const char *wait;
+    uint64_t waitSinceUS;
+};
+static AwdlCoexWidthNote awdlCoexWidthNote = {0, 0, 0, 0, false, false, false, false, "none", 0};
+static uint32_t awdlCoexWidenings;
+static uint64_t awdlCoexLastWidenUS;
 // A move waits for the listener's ring to drain; nothing new is submitted meanwhile (iface129 review, 1).
 static bool awdlCoexMovePending;
 static bool awdlCoexData; // -itlawdlcoexdata
@@ -7833,6 +7845,21 @@ static void awdlCoexPublish()
         root->setProperty("ITLAWDLCoexMoves", awdlCoexMoves, 32);
         root->setProperty("ITLAWDLCoexMoveFailures", awdlCoexMoveFailures, 32);
         root->setProperty("ITLAWDLCoexMovesSettleDropped", awdlCoexMovesSettleDropped, 32);
+        {
+            // PR #88: why the listener has the width it has, and what a move to the current choice waits for.
+            const AwdlCoexWidthNote &n = awdlCoexWidthNote;
+            const uint64_t nowUS = awdlUptimeUS();
+            char wb[320];
+            snprintf(wb, sizeof(wb),
+                     "listener %u/%u, choice %u/%u; overlap %u, scheduler ready %s, same-block 80 %s, "
+                     "block usable 0x%x, VHT80 %s, 80 failed %s; waiting: %s for %llu ms; widenings %u (last %llu ms)",
+                     unsigned(awdlCoexChannel), unsigned(awdlCoexOwnWidth), unsigned(n.want), unsigned(n.wantWidth),
+                     unsigned(n.overlap), n.schedReady ? "yes" : "no", n.sched80 ? "yes" : "no",
+                     unsigned(n.blockUsable), n.vht80 ? "yes" : "no", n.failed80 ? "yes" : "no", n.wait,
+                     (unsigned long long)(n.waitSinceUS && nowUS > n.waitSinceUS ? (nowUS - n.waitSinceUS) / 1000 : 0),
+                     awdlCoexWidenings, (unsigned long long)(awdlCoexLastWidenUS / 1000));
+            root->setProperty("ITLAWDLCoexWidth", wb);
+        }
         root->setProperty("ITLAWDLCoexSearch6", awdlCoexSearch6Active);
         root->setProperty("ITLAWDLCoexSearch6Dwells", awdlCoexSearch6Dwells, 32);
         root->setProperty("ITLAWDLCoexCountryNotices", awdlCoexCountryNotices, 32);
@@ -20499,7 +20526,37 @@ awdlCoexRetarget(struct iwx_softc *sc)
         want == have && haveWidth == 80 && width == IWX_PHY_VHT_CHANNEL_MODE20;
     // Same channel and the same width: nothing to do. 20 MHz and 80 MHz on one channel are different choices.
     const uint64_t now = awdlUptimeUS();
+    {
+        // What decided the choice's width (ITLAWDLCoexWidth): the same inputs awdlCoexWidthFor reads.
+        AwdlCoexWidthNote &n = awdlCoexWidthNote;
+        n.want = uint8_t(want > 0 && want < 256 ? want : 0);
+        n.wantWidth = width == IWX_PHY_VHT_CHANNEL_MODE80 ? 80 : 20;
+        n.overlap = 0;
+        n.blockUsable = 0;
+        n.vht80 = false;
+        if (want > 14 && want < 256) {
+            uint8_t w = 0;
+            (void)awdlCoexWidthFor(sc, unsigned(want), true, &w, &n.overlap);
+            const unsigned f = awdlCoex80BlockFirst(unsigned(want));
+            for (unsigned i = 0; f && i < 4; ++i)
+                if (awdlCoexChannelUsable(ic, f + 4 * i))
+                    n.blockUsable |= uint8_t(1U << i);
+            n.vht80 = ic->ic_channels[want].ic_flags & IEEE80211_CHAN_VHT80;
+        }
+        n.schedReady = awdlSchedOverlapReady(gen);
+        n.sched80 = awdlSched80;
+        n.failed80 = awdlCoexWide80FailedGen == gen;
+    }
+    auto noteWait = [&](const char *why) {
+        if (awdlCoexWidthNote.wait != why) {
+            awdlCoexWidthNote.wait = why;
+            awdlCoexWidthNote.waitSinceUS = now;
+        }
+    };
+    // 20 -> 80 MHz on the channel the listener is already on (AWDLListenerWidth.hpp): a short settle and gap only.
+    const bool widening = want == have && haveWidth == 20 && width == IWX_PHY_VHT_CHANNEL_MODE80;
     if (!want || (want == have && (width == IWX_PHY_VHT_CHANNEL_MODE80) == (haveWidth == 80))) {
+        noteWait("none");
         if (awdlCoexSettleWant) {
             ++awdlCoexMovesSettleDropped;
             awdlCoexSettleWant = 0;
@@ -20530,13 +20587,17 @@ awdlCoexRetarget(struct iwx_softc *sc)
             awdlCoexSettleSinceUS = now;
             awdlCoexSettleGen = gen;
         }
-        const bool dataRecent = awdlCoexLastDataUS && now - awdlCoexLastDataUS < kAwdlCoexMoveQuietUS;
-        if (dataRecent || now - awdlCoexSettleSinceUS < kAwdlCoexMoveSettleUS)
+        const ItlAWDL::MoveWait wait = ItlAWDL::moveWait(widening, now, awdlCoexSettleSinceUS, awdlCoexLastDataUS,
+                                                         kAwdlCoexMoveSettleUS, kAwdlCoexMoveQuietUS);
+        if (wait != ItlAWDL::MoveWait::None) {
+            noteWait(ItlAWDL::moveWaitName(wait));
             return;
+        }
     }
     awdlCoexSettleWant = 0;
     // Up to 5 GHz (149 or 44) at most every 10 s; back to 6 at once.
     if (!safetyNarrowing && want != 6 && awdlCoexLastMoveUS && now - awdlCoexLastMoveUS < 10000000ULL) {
+        noteWait("10 s since the last move");
         awdlCoexMovePending = false;
         return;
     }
@@ -20550,6 +20611,7 @@ awdlCoexRetarget(struct iwx_softc *sc)
     const bool drained = !awdlCoexInFlight && awdlCoexQueue >= 0 && awdlCoexQueue < int(nitems(sc->txq)) &&
         sc->txq[awdlCoexQueue].queued == 0;
     if (!drained) {
+        noteWait("draining sends");
         if (now - awdlCoexMovePendingUS < 2000000ULL)
             return;
         ++awdlCoexMoveDrainTimeouts;
@@ -20625,6 +20687,11 @@ awdlCoexRetarget(struct iwx_softc *sc)
         return;
     }
     ++awdlCoexMoves;
+    if (widening) {
+        ++awdlCoexWidenings;
+        awdlCoexLastWidenUS = now;
+    }
+    noteWait("none");
     awdlCoexRateStep = 0;
     awdlCoexRateWindowOK = awdlCoexRateWindowFailed = 0;
     awdlCoexOwnChan = own->channel;
