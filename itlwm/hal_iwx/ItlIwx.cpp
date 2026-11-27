@@ -378,16 +378,33 @@ static uint32_t awdlSchedExtAdvertised;
 // the restart, since the driver's 512-line log ring is overwritten by then. The last 4 firmware error tables
 // (filled in iwx_nic_error), a count per init_task site, macOS's interface disables, and command waits that
 // ran out (with the command id). Stored only; published from the coex task (ITLFwCrashRecords, ITLFwRestarts).
-// The AWDL scheduler is experimental and off by default (the 0.6.0-beta.4 behaviour). itlawdlsched=<bits> turns it
-// on: 1 = the scheduler set, 3 = the set plus its diagnostics (-itlschedskew, -itlawdlpmdebug, -itlfwcrashrec,
-// -itlrxloss). Each flag on its own still turns its part on.
+// The AWDL scheduler: on by default with the tested set (from 0.7.0-beta.1), so the driver follows macOS's plan as
+// a real Mac does. itlawdlsched=<bits> still sets it: 1 = the scheduler set, 3 = the set plus its diagnostics
+// (-itlschedskew, -itlawdlpmdebug, -itlfwcrashrec, -itlrxloss), 0 = off (the 0.6.0-beta.4 behaviour), as does
+// -itlawdlnosched. -itlawdlnodefaults leaves it off unless itlawdlsched is set. Each flag on its own still turns its
+// part on.
 constexpr uint32_t kItlResWork = 0x1, kItlResDiag = 0x2;
+// How the scheduler was chosen, for ITLAWDLSchedStatus: 0 default, 1 itlawdlsched=N, 2 -itlawdlnosched, 3 no defaults.
+static uint8_t itlAwdlSchedSource;
 uint32_t itlAwdlSchedMask()
 {
     static uint32_t mask = 0xffffffffU;
     if (mask == 0xffffffffU) {
         uint32_t v = 0;
-        mask = PE_parse_boot_argn("itlawdlsched", &v, sizeof(v)) ? v : 0;
+        int dummy = 0;
+        if (PE_parse_boot_argn("itlawdlsched", &v, sizeof(v))) {
+            mask = v;
+            itlAwdlSchedSource = 1;
+        } else if (PE_parse_boot_argn("-itlawdlnosched", &dummy, sizeof(dummy))) {
+            mask = 0;
+            itlAwdlSchedSource = 2;
+        } else if (!itlAWDLDefaults()) {
+            mask = 0;
+            itlAwdlSchedSource = 3;
+        } else {
+            mask = kItlResWork;
+            itlAwdlSchedSource = 0;
+        }
     }
     return mask;
 }
@@ -764,16 +781,21 @@ static uint64_t awdlSchedStartDelayUS = 60000000ULL;
 static uint64_t awdlSchedSpFirstTickUS, awdlSchedFollowStartedUS;
 // -itlschedsafe: (1) after a firmware restart the follower starts again in the
 // new generation instead of stopping for the rest of the boot (an E1 rule; sync-2, 2026-11-22: after one assert at
-// 40.9 s the follower stayed off and the iPhone no longer saw the Mac); it stops for good after kAwdlSchedMaxRestarts
-// restarts in one boot. Only a restart after a fault (itlFwFaultRestarts) counts: a new generation from a join, a
+// 40.9 s the follower stayed off and the iPhone no longer saw the Mac); it stops only after restarts in a crash loop (AWDLSchedRestart.hpp: paused twice, then off for the boot). Only a restart after a
+// fault (itlFwFaultRestarts) counts: a new generation from a join, a
 // Wi-Fi toggle or a wake resumes without using up the limit (2026-11-27: two joins and one crash stopped it for the
 // boot, and AirDrop from the Mac stalled until the next reboot). (2) In each generation the follower starts only once macOS has had AWDL on for
 // kAwdlSchedSettleUS, its plan has arrived and the listener has not moved channel for kAwdlSchedSettleUS (sync-2: the
 // firmware asserted in SESSION_PROTECTION_CMD 2.2 s after AWDL enable, while the plan and listener were changing).
 static bool awdlSchedSafe;
-static constexpr uint32_t kAwdlSchedMaxRestarts = 3;
+static ItlAWDL::SchedFaultPolicy awdlSchedFaultPolicy;   // faults, window, pauses (AWDLSchedRestart.hpp)
+static uint64_t awdlSchedResumeAtUS;   // while paused after a crash loop: when to try again (0 = not paused)
+// Fallback (the scheduler stopped or paused; AirDrop runs on the firmware's own timing, as in 0.6.0-beta.4): when
+// it began (0 = not in fallback), how many times this boot, and a log line each time so it's never silent.
+static uint64_t awdlSchedFallbackSinceUS;
+static uint32_t awdlSchedFallbacks;
 static constexpr uint64_t kAwdlSchedSettleUS = 3000000ULL;
-static uint32_t awdlSchedRestarts, awdlSchedResumes, awdlSchedSettleWaits;
+static uint32_t awdlSchedRestarts, awdlSchedResumes, awdlSchedSettleWaits, awdlSchedPauseResumes;
 static uint32_t awdlSchedReinits;      // new generations without a fault: resumed, not counted toward the limit
 static uint32_t awdlSchedSpGenFaults;  // itlFwFaultRestarts when the follower took its current generation
 static uint64_t awdlSchedSyncOnSinceUS, awdlSchedSettledAtUS;   // with the existing awdlCoexLastMoveUS
@@ -889,6 +911,7 @@ static uint64_t awdlSyncLatEmptySumUS, awdlSyncLatBusySumUS, awdlSyncLatAggBusyS
     awdlSyncLatBusyMaxUS;
 static uint32_t awdlSyncRingAheadSum, awdlSyncRingAheadMax;
 static void awdlSchedSpPublish();
+static void awdlSchedResumeCheck(int gen);
 static int awdlSchedCh6Gen = -1;
 static uint32_t awdlSchedCh6Adds, awdlSchedCh6Err, awdlSchedCh6Sessions, awdlSchedCh6Frames, awdlSchedCh6Dropped;
 static uint32_t awdlSchedSpTargetMac = 1;   // the MAC the next session goes to (kAwdlCoexMacId or a handle)
@@ -9004,6 +9027,9 @@ awdlCoexTxTask(void *arg)
         that->awdlCoexCountryAnswer(sc);
     if (running && !awdlStopping && awdlCoexAdded && awdlCoexGeneration == sc->sc_generation)
         that->awdlCoexRetarget(sc);
+    if (awdlSchedSp && awdlSchedSpOff && awdlSchedResumeAtUS && running && !awdlStopping && awdlCoexAdded &&
+        awdlCoexGeneration == sc->sc_generation)
+        awdlSchedResumeCheck(sc->sc_generation);
     if (awdlSchedSp && !awdlSchedSpOff && running && !awdlStopping && awdlCoexAdded &&
         awdlCoexGeneration == sc->sc_generation)
         that->awdlSchedSpTick(sc);
@@ -18989,8 +19015,70 @@ static void itlFwDiagPublish()
 }
 
 // -itlschedsp: its registry text, shared by the tick, the sender and the follower.
+// After a pause (a crash loop, AWDLSchedRestart.hpp): once its time is up, the scheduler starts over in the current
+// generation as after a restart, with the start delay and the settle rule. Faults during the pause weren't the
+// scheduler's (it was off), so they don't count.
+static void awdlSchedResumeCheck(int gen)
+{
+    if (!awdlSchedResumeAtUS || awdlUptimeUS() < awdlSchedResumeAtUS)
+        return;
+    awdlSchedResumeAtUS = 0;
+    awdlSchedSpActive = false;
+    awdlSchedSpAwaitStart = false;
+    awdlSchedFollowArmed = false;
+    awdlSchedSpRunStartUS = 0;
+    awdlSchedSpPlannedEndUS = 0;
+    awdlSchedSpNextUS = 0;
+    awdlSchedSettledAtUS = 0;
+    awdlSchedSecondTuned = nullptr;
+    awdlSchedSecondSwitching = awdlSchedSecondDraining = false;
+    awdlSchedSpGen = gen;
+    awdlSchedSpGenFaults = itlFwFaultRestarts;
+    ++awdlSchedPauseResumes;
+    awdlSchedSpOff = false;
+    awdlSchedSpState = "running (resumed after a pause)";
+    awdlSchedSpPublish();
+}
+
+// ITLAWDLSchedStatus, always published: whether the scheduler runs, and if not, why and since when. A stop or pause
+// also writes one line to the system log, so a fallback to the firmware's own timing is never silent.
+static void awdlSchedStatusPublish()
+{
+    char st[256];
+    static const char *const kSource[] = {"default", "itlawdlsched set", "-itlawdlnosched", "-itlawdlnodefaults"};
+    const char *source = kSource[itlAwdlSchedSource < 4 ? itlAwdlSchedSource : 0];
+    if (!awdlSchedSp)
+        snprintf(st, sizeof(st), "off (%s): AirDrop uses the firmware's own timing, as in 0.6.0-beta.4", source);
+    else if (!awdlSchedSpOff)
+        snprintf(st, sizeof(st), "on (%s); fallbacks %u, resumed after a pause %u, firmware faults %u", source,
+                 awdlSchedFallbacks, awdlSchedPauseResumes, awdlSchedFaultPolicy.faults);
+    else {
+        // Uptimes rather than durations: the key is only rewritten when the state changes.
+        char next[48];
+        if (awdlSchedResumeAtUS)
+            snprintf(next, sizeof(next), "next try at %llu s uptime",
+                     (unsigned long long)(awdlSchedResumeAtUS / 1000000));
+        else
+            snprintf(next, sizeof(next), "off until the next boot");
+        snprintf(st, sizeof(st), "FALLBACK since %llu s uptime: %s; %s; fallbacks %u, firmware faults %u",
+                 (unsigned long long)(awdlSchedFallbackSinceUS / 1000000), awdlSchedSpState, next,
+                 awdlSchedFallbacks, awdlSchedFaultPolicy.faults);
+    }
+    IORegistryEntry::getRegistryRoot()->setProperty("ITLAWDLSchedStatus", st);
+}
+
 static void awdlSchedSpPublish()
 {
+    if (awdlSchedSp && awdlSchedSpOff && !awdlSchedFallbackSinceUS) {
+        awdlSchedFallbackSinceUS = awdlUptimeUS() ? awdlUptimeUS() : 1;
+        ++awdlSchedFallbacks;
+        IOLog("ForbiddenItlwm: AirDrop scheduler %s. AirDrop keeps working on the firmware's own timing, as in "
+              "0.6.0-beta.4 (ITLAWDLSchedStatus).\n", awdlSchedSpState);
+    } else if (awdlSchedSp && !awdlSchedSpOff && awdlSchedFallbackSinceUS) {
+        awdlSchedFallbackSinceUS = 0;
+        IOLog("ForbiddenItlwm: AirDrop scheduler %s.\n", awdlSchedSpState);
+    }
+    awdlSchedStatusPublish();
     const uint64_t total = awdlSchedSpFirstUS ? awdlUptimeUS() - awdlSchedSpFirstUS : 0;
     const uint64_t out = total > awdlSchedSpInUS ? total - awdlSchedSpInUS : 0;
     char text[380];
@@ -19459,11 +19547,14 @@ awdlSchedSpTick(struct iwx_softc *sc)
     if (newGen)
         awdlSchedSpGenFaults = itlFwFaultRestarts;
     if (awdlSchedSpGen >= 0 && newGen && awdlSchedSpSent) {
+        uint64_t resumeAt = 0;
         const ItlAWDL::SchedGenAction action =
-            ItlAWDL::schedOnNewGeneration(genFault, awdlSchedSafe, awdlSchedRestarts, kAwdlSchedMaxRestarts);
+            awdlSchedFaultPolicy.onNewGeneration(genFault, awdlSchedSafe, awdlUptimeUS(), &resumeAt);
+        if (genFault)
+            awdlSchedRestarts = awdlSchedFaultPolicy.faults;
         if (action == ItlAWDL::SchedGenAction::Resume)
             ++awdlSchedReinits;
-        if (action != ItlAWDL::SchedGenAction::Stop) {
+        if (action == ItlAWDL::SchedGenAction::Resume || action == ItlAWDL::SchedGenAction::ResumeAfterFault) {
             // the new generation has none of the old sessions or contexts; the handle and channel-6 ensure paths
             // add theirs again. Start over, with the start delay and the settle rule.
             awdlSchedSpActive = false;
@@ -19480,10 +19571,21 @@ awdlSchedSpTick(struct iwx_softc *sc)
             awdlSchedSpState = genFault ? "running (resumed after a firmware restart)" :
                                           "running (resumed after Wi-Fi came up again)";
             awdlSchedSpPublish();
+        } else if (action == ItlAWDL::SchedGenAction::Pause) {
+            // A crash loop: off for a while (AirDrop runs without the scheduler), then tried again by
+            // awdlSchedResumeCheck.
+            awdlSchedSpOff = true;
+            awdlSchedSpActive = false;
+            awdlSchedResumeAtUS = resumeAt;
+            awdlSchedSpState = "paused: several firmware faults in 30 min, tries again later";
+            awdlSchedSpPublish();
+            return;
         } else {
             awdlSchedSpOff = true;
             awdlSchedSpActive = false;
-            awdlSchedSpState = awdlSchedSafe ? "stopped: too many firmware restarts" : "stopped: firmware restarted";
+            awdlSchedResumeAtUS = 0;
+            awdlSchedSpState = awdlSchedSafe ? "stopped: firmware faults kept coming back after two pauses" :
+                                               "stopped: firmware restarted";
             awdlSchedSpPublish();
             return;
         }
@@ -25942,6 +26044,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         awdlCoexOverlap80 = PE_parse_boot_argn("-itlawdloverlap80", &dummy, sizeof(dummy));
         awdlCoexNoSearch6 = itlResFlag("-itlawdlnosearch6", kItlResWork);
         awdlSchedSp = itlResFlag("-itlschedsp", kItlResWork);
+        awdlSchedStatusPublish();   // ITLAWDLSchedStatus from the start, "off (...)" included
         itlFwCrashRec = itlResFlag("-itlfwcrashrec", kItlResDiag);
         awdlAirtime = itlResFlag("-itlawdlairtime", kItlResDiag);
         awdlAmsduRx = PE_parse_boot_argn("-itlawdlamsdurx", &dummy, sizeof(dummy));

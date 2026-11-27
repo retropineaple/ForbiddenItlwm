@@ -515,10 +515,17 @@ if [ -n "$MARKER" ]; then
     EXPERIMENTAL=""
     SIMULATION=""
     for t in $ARGS; do
-        case "$t" in itlawdlsched=*|itlsched*|-itlsched*|-btleadvnodupfilter|-itlawdlmultipeer|-itlawdlpeerhandoff|-itlawdlstatest|-itlawdlamsdurx|-itlwmwpa3) EXPERIMENTAL="$EXPERIMENTAL $t";; esac
+        case "$t" in itlsched*|-itlsched*|-btleadvnodupfilter|-itlawdlmultipeer|-itlawdlpeerhandoff|-itlawdlstatest|-itlawdlamsdurx|-itlwmwpa3) EXPERIMENTAL="$EXPERIMENTAL $t";; esac
         case "$t" in itlsim*|-itlsim*) SIMULATION="$SIMULATION $t";; esac
     done
     [ -n "$EXPERIMENTAL" ] && info "Experimental boot flags set:$EXPERIMENTAL. Mention them when you report a result."
+    # From 0.7.0-beta.1 the AirDrop scheduler is on by default (itlawdlsched=0 or -itlawdlnosched turn it off).
+    SCHED=$(ioreg -l -w0 -d 1 2>/dev/null | sed -n 's/.*"ITLAWDLSchedStatus" = "\([^"]*\)".*/\1/p' | head -1)
+    case "$SCHED" in
+        on*) info "AirDrop scheduler: $SCHED";;
+        off*) info "AirDrop scheduler: $SCHED";;
+        FALLBACK*) warn "AirDrop scheduler fell back to the firmware's own timing: $SCHED";;
+    esac
     [ -n "$SIMULATION" ] && warn "Test-only simulation flags set:$SIMULATION. They fake the Wi-Fi width or AirDrop's channel; remove them for normal use."
     # macOS ignores the whole boot-args line when it is 1024 characters or longer.
     [ "${#ARGS}" -ge 1024 ] && fail "boot-args is ${#ARGS} characters long; macOS ignores all of it from 1024. Shorten it."

@@ -40,11 +40,18 @@ driver_state() {
         /"ITLAWDLCoexBaTxStateName"/ {gsub(/"/,"",$2); ba=$2}
         /"ITLAWDLCoexPeerPresentEntries"/ {pe=$2}
         /"ItlwmAWDLTxDropped"/ {dr=$2}
-        END { # Sharing the Wi-Fi channel (no -itlawdlcoexmulti, or its fallback), the listener has no width
+        /"ITLAWDLSchedStatus"/ {ss=$2; gsub(/"/,"",ss)}
+        /"ITLAWDLCoexPeers"/ {cp=$2}
+        END { # Block Ack held by a later peer slot (-itlawdlmultipeer) shows as "agreed (slot N)".
+              if (ba != "agreed" && match(cp, /[0-9]+:[0-9]+ up [0-9a-f]+ A/)) {
+                  slot = substr(cp, RSTART, RLENGTH); sub(/:.*/, "", slot); ba = "agreed (slot " slot ")" }
+              # The scheduler, and loudly when it has fallen back to the firmware timing.
+              sched = (ss == "") ? "" : (ss ~ /^on/ ? ", scheduler on" : (ss ~ /^off/ ? ", scheduler off" : ", SCHEDULER " ss))
+              # Sharing the Wi-Fi channel (no -itlawdlcoexmulti, or its fallback), the listener has no width
               # of its own (OwnWidth reads -1); the width of the peer station is the one that counts there.
               shared = (ms == "off" || ms == "fallback-same" || w + 0 < 0 || w + 0 > 1000)
               if (shared) w = (pw == "" || pw + 0 == 0) ? "?" : pw
-              if (ch != "") printf "listener %s/%s MHz%s, block ack %s, iPhone on our channel %s/16 slots, TX dropped %s\n", ch, w, (shared ? " (shared with Wi-Fi)" : ""), (ba==""?"-":ba), (pe==""?"-":pe), (dr==""?"-":dr) }'
+              if (ch != "") printf "listener %s/%s MHz%s, block ack %s, iPhone on our channel %s/16 slots, TX dropped %s%s\n", ch, w, (shared ? " (shared with Wi-Fi)" : ""), (ba==""?"-":ba), (pe==""?"-":pe), (dr==""?"-":dr), sched }'
 }
 export -f driver_state 2>/dev/null
 

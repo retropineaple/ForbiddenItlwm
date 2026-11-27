@@ -31,7 +31,7 @@ volatile uint32_t itlAWDLRxParseBad, itlAWDLRxNotOurs, itlAWDLRxSelf, itlAWDLRxA
 // Frames whose two per-frame AWDL bytes weren't macOS's defaults (3, 4), and the last such pair. They used to be
 // dropped as unparseable.
 volatile uint32_t itlAWDLRxMetaOther, itlAWDLRxMetaLast;
-// ItlIwx.cpp: itlawdlsched=<bits>; 0x1 scheduler set (experimental, off by default), 0x2 diagnostics.
+// ItlIwx.cpp: itlawdlsched=<bits>; 0x1 scheduler set (on by default with the tested set), 0x2 diagnostics.
 extern bool itlResFlag(const char *name, uint32_t bit);
 volatile uint32_t itlAWDLPlanVersion;
 // ItlIwx.cpp -itlschedmacchan: macOS's AWDL secondary master channel (0 = not set yet).
