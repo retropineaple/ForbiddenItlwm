@@ -18,6 +18,7 @@
 #include "BTLEAdvPatches.hpp"
 #include "BTLEAdvHci.hpp"
 #include "BTLEAdvVerify.hpp"
+#include "BTLEAdvAdvLog.hpp"
 
 // Patches bluetoothd's pages as they're validated, the same way BlueToolFixup does.
 // Lilu's onProcLoad route was tried first and didn't apply to this process.
@@ -132,6 +133,11 @@ static IOReturn patched_device_request(void *that, IOService *provider, Standard
 static uint32_t extraCommands {}, setAddresses {}, extraFailures {}, enableAddresses {};
 static BTLEAdv::PrivacyStats privacyStats {};   // under hciLock
 static bool privacyChanged {};
+// -btleadvlog, or itlawdlsched with bit 2 (ForbiddenItlwm's diagnostics): advertising parameters and enables as
+// bluetoothd sends them (BTLEAdvAdvLog.hpp; BTLEAdvAdvSets, BTLEAdvAdvLog). Read-only; under hciLock.
+static bool advLogOn {};
+static BTLEAdv::AdvLog advLog {};
+static void publishAdvLog();
 static void noteHook(const char *key, uint32_t value) {
     IORegistryEntry::getRegistryRoot()->setProperty(key, value, 32);
 }
@@ -236,6 +242,45 @@ static IOReturn sendExtra(void *that, IOService *provider, const StandardUSB::De
     return result;
 }
 
+// Per set: requested interval range (ms), primary channel map (bits 37/38/39), TX power (dBm, 127 = no preference),
+// primary PHY, enabled now, enable/disable counts. Then the last 16 commands: uptime ms, P (parameters: max interval
+// ms, channels, TX power) or E/D (enable/disable, handle 255 = all sets, duration in 10 ms units).
+static void publishAdvLog() {
+    BTLEAdv::AdvLog copy;
+    IOLockLock(hciLock);
+    copy = advLog;
+    IOLockUnlock(hciLock);
+    char sets[600];
+    size_t used = size_t(snprintf(sets, sizeof(sets), "params %u, enables %u, malformed %u:", copy.paramsSeen,
+                                  copy.enablesSeen, copy.malformed));
+    for (unsigned h = 0; h < BTLEAdv::kAdvLogSets && used < sizeof(sets); ++h) {
+        const BTLEAdv::AdvSetParams &x = copy.sets[h];
+        if (!x.known)
+            continue;
+        used += size_t(snprintf(sets + used, sizeof(sets) - used,
+                                " h%u props 0x%x int %u.%u-%u.%u ms ch 0x%x tx %d phy %u %s (en %u dis %u);", h,
+                                x.properties, x.intervalMin * 625 / 1000, (x.intervalMin * 625 / 100) % 10,
+                                x.intervalMax * 625 / 1000, (x.intervalMax * 625 / 100) % 10, x.channelMap,
+                                int(x.txPower), x.primaryPhy, x.enabled ? "on" : "off", x.enables, x.disables));
+    }
+    IORegistryEntry::getRegistryRoot()->setProperty("BTLEAdvAdvSets", sets);
+    char ring[900];
+    used = 0;
+    const uint32_t total = copy.ringNext < BTLEAdv::kAdvLogRing ? copy.ringNext : BTLEAdv::kAdvLogRing;
+    const uint32_t show = total < 16 ? total : 16;
+    ring[0] = 0;
+    for (uint32_t k = 0; k < show && used < sizeof(ring); ++k) {
+        const BTLEAdv::AdvLogEntry &e = copy.ring[(copy.ringNext - show + k) % BTLEAdv::kAdvLogRing];
+        if (e.kind == 'P')
+            used += size_t(snprintf(ring + used, sizeof(ring) - used, " %u P h%u %u.%u ms ch 0x%x tx %d;", e.ms,
+                                    e.handle, e.intervalMs10 / 10, e.intervalMs10 % 10, e.channelMap, int(e.txPower)));
+        else
+            used += size_t(snprintf(ring + used, sizeof(ring) - used, " %u %c h%u d%u;", e.ms, e.kind, e.handle,
+                                    e.intervalMs10));
+    }
+    IORegistryEntry::getRegistryRoot()->setProperty("BTLEAdvAdvLog", ring);
+}
+
 static IOReturn patched_device_request(void *that, IOService *provider, StandardUSB::DeviceRequest &request, void *data,
                                        IOMemoryDescriptor *descriptor, unsigned int &length,
                                        IOUSBHostCompletion *completion, uint32_t timeout) {
@@ -280,6 +325,8 @@ static IOReturn patched_device_request(void *that, IOService *provider, Standard
         BTLEAdv::notePrivacy(privacyStats, hci, hciLength);
         privacyChanged = true;
         action = BTLEAdv::onCommand(hciState, hci, hciLength, patchScanning);
+        if (advLogOn)
+            advLog.onCommand(hci, hciLength, nowNanoseconds() / 1000000ULL);
         IOLockUnlock(hciLock);
         if (lengthLock) {
             const uint64_t now = nowNanoseconds();
@@ -329,6 +376,11 @@ static IOReturn patched_device_request(void *that, IOService *provider, Standard
         noteHook("BTLEAdvFirstRequest", request.bRequest);
     }
     const IOReturn result = FunctionCast(patched_device_request, orig_device_request)(that, provider, request, data, descriptor, length, completion, timeout);
+    if (advLogOn && hciLength >= 3) {
+        const uint16_t op = uint16_t(hci[0] | hci[1] << 8);
+        if (op == BTLEAdv::kOpLeSetExtAdvParams || op == BTLEAdv::kOpLeSetExtAdvEnable)
+            publishAdvLog();
+    }
     if (hciLength >= 3 && privacyChanged) {
         const uint16_t op = uint16_t(hci[0] | hci[1] << 8);
         if (op == BTLEAdv::kOpLeAddResolving || op == BTLEAdv::kOpLeAddressResolution ||
@@ -547,6 +599,11 @@ PluginConfiguration ADDPR(config) {
         // Advertising alone, to compare with both.
         patchScanning = !checkKernelArgument("-btlenoscan");
         patchDuplicateFilter = checkKernelArgument("-btleadvnodupfilter");
+        {
+            uint32_t sched = 0;
+            advLogOn = checkKernelArgument("-btleadvlog") ||
+                (PE_parse_boot_argn("itlawdlsched", &sched, sizeof(sched)) && (sched & 2));
+        }
         // For the integrity check of bluetoothd's patched pages (#62). Without any of these it stays off and the
         // pages are patched as before.
         pagesLock = IOLockAlloc();
