@@ -175,5 +175,22 @@ int main() {
         assert(parseAddbaRequest(f, sizeof(f), own, &got) && !got.amsdu);
         cases += 2;
     }
+    // Test only (itlsimslotskip=N): the first N slots are never handed out; one slot always stays usable.
+    {
+        assert(firstSkippedSlots(0, 11) == 0 && firstSkippedSlots(1, 11) == 1 && firstSkippedSlots(3, 11) == 3);
+        assert(firstSkippedSlots(20, 11) == 10 && firstSkippedSlots(1, 1) == 0);
+        PeerSlot slots[kMaxPeerSlots];
+        for (unsigned i = 0; i < kMaxPeerSlots; ++i)
+            slots[i].station = stationForSlot(i);
+        const AddbaRequest a = request(20), b = request(21);
+        PeerSlot *sa = slotForRequest(slots, 3, a.peer, 1, firstSkippedSlots(1, 3));
+        assert(sa == &slots[1] && sa->requests.note(a));
+        assert(slotForRequest(slots, 3, a.peer, 1, 1) == &slots[1]);           // keeps its slot
+        PeerSlot *sb = slotForRequest(slots, 3, b.peer, 1, 1);
+        assert(sb == &slots[2] && sb->requests.note(b));
+        assert(!slotForRequest(slots, 3, request(22).peer, 1, 1));             // slot 0 is never used
+        assert(slotForRequest(slots, 1, request(22).peer, 1, 1) == &slots[0]); // one slot: as without the flag
+        cases += 3;
+    }
     printf("AWDL peer slots: %u cases passed (host only)\n", cases);
 }

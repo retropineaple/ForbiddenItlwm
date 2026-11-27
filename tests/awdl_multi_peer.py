@@ -33,8 +33,11 @@ bodies = "\n".join([
     method("int ItlIwx::\nawdlCoexBaAddPeer("),
     method("bool ItlIwx::\nawdlCoexBaRxPeer("),
     static("static bool awdlCoexBaQueueCurrent(int generation, uint32_t listener, uint32_t peer, uint8_t slot)\n"),
-    method("bool ItlIwx::\nawdlCoexBaTxPeer("),
     static("static bool awdlPeerScheduleCurrent(const ItlAWDL::PeerSlot &p)"),
+    static("static bool awdlBaPeerAway(const ItlAWDL::PeerSlot &p, uint64_t now)"),
+    static("static uint32_t &awdlBaAsks(ItlAWDL::PeerSlot &p)"),
+    method("bool ItlIwx::\nawdlBaAskPass("),
+    method("bool ItlIwx::\nawdlCoexBaTxPeer("),
     static("static bool awdlPeerGateClosed(ItlAWDL::PeerSlot &p, uint64_t now)"),
     method("void ItlIwx::\nawdlCoexPeerPauseStep("),
 ])
@@ -50,8 +53,10 @@ program = r'''
 #include <AWDLObservation.hpp>
 #include <AWDLBlockAck.hpp>
 #include <AWDLPeerSlot.hpp>
+#include <AWDLBaTxRules.hpp>
 #define htole16(x) (x)
 #define htole32(x) (x)
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define nitems(a) (sizeof(a) / sizeof((a)[0]))
 #define IEEE80211_ADDR_COPY(d, s) memcpy(d, s, 6)
 #define IWX_FW_CMD_ID_AND_COLOR(id, c) ((id) | ((c) << 8))
@@ -90,6 +95,9 @@ static ItlAWDL::BoundedFifo<mbuf_t, 128> awdlPeerHold[ItlAWDL::kMaxPeerSlots];
 static uint8_t awdlCoexSendingPeer;
 static uint8_t sentFor[64];   // the slot each sent management frame was credited to
 static uint32_t awdlPeerSlotAdds, awdlPeerSlotRemoves, awdlPeerSlotFailures;
+// -itlslotdiag is off in this harness; station changes are only noted when it is on.
+static bool awdlSlotDiag = false;
+static struct { void noteEvent(uint64_t, char, uint8_t) {} } awdlSlotDiagState;
 static uint32_t awdlPeerTxQueues, awdlPeerGateHolds, awdlPeerGateForced, awdlPeerPauses, awdlCoexPauseResumeFailures,
     awdlCoexResumeRetirements;
 static bool awdlCoexBaPeerPauseEnabled = true, awdlCoexMovePending, awdlCoexTxHalted, awdlCoexGate = true;
@@ -123,6 +131,11 @@ static uint64_t awdlUptimeUS() { return clockUS; }
 static bool known = true;
 static bool awdlCoexPeerKnown(const uint8_t *, uint64_t, bool = false) { return known; }
 static void awdlCoexBaEvent(char, unsigned, unsigned, unsigned, unsigned = 0, unsigned = 0) {}
+// Slot 0's asking state and schedule (slot 0 isn't exercised here) and the further slots' asking counters.
+static ItlAWDL::PeerSchedule awdlCoexPeerSchedule;
+static bool awdlCoexScheduleCurrent() { return false; }
+static uint32_t awdlCoexBaTxAsks, awdlCoexBaTxIdleHolds, awdlCoexBaAsksSkippedAway, awdlCoexAskSkipsSinceLast,
+    awdlCoexBaTxAskRounds, awdlPeerBaAsksSent, awdlPeerBaAsksSkippedAway, awdlPeerBaAskRounds, awdlPeerBaIdleHolds;
 static int awdlCoexBaWidth(ieee80211com *) { return 80; }
 struct Command { int id; uint8_t sta, mask, tid; uint8_t addr[6]; uint32_t flags; };
 static std::vector<Command> commands;
@@ -191,6 +204,7 @@ public:
     int awdlCoexBaAddPeer(iwx_softc *, ItlAWDL::PeerSlot &, const uint8_t *);
     bool awdlCoexBaRxPeer(iwx_softc *, ItlAWDL::PeerSlot &, int, uint32_t, uint64_t);
     bool awdlCoexBaTxPeer(iwx_softc *, ItlAWDL::PeerSlot &, int, uint32_t, uint64_t);
+    bool awdlBaAskPass(iwx_softc *, ItlAWDL::PeerSlot &, unsigned, uint64_t);
     void awdlCoexPeerPauseStep(iwx_softc *, ItlAWDL::PeerSlot &);
 };
 ''' + bodies + r'''
@@ -358,6 +372,16 @@ int main() {
     (void)txPass();
     assert(b.txState == kCoexBaTxAgreed && count(0x18, 5, 0x2) == 1 && count(0x18, 3, 0x2) == 0);
     ++cases;
+    // Slot 0's start rule for a further slot too: a peer that acknowledged our answer gets a send agreement
+    // without waiting for a bulk send.
+    reset();
+    nextQueue = 5;
+    assert(deliver(request(10, 0, 1)) && deliver(request(11, 0, 2)));
+    settle();
+    awdlPeers[1].accepted = true;
+    (void)driver.awdlCoexBaTxPeer(&hardware, awdlPeers[1], hardware.sc_generation, awdlCoexToken, clockUS);
+    assert(!awdlPeers[1].txBulk.bulk && awdlPeers[1].txState == kCoexBaTxAsking && awdlPeers[1].txQueue == 5);
+    ++cases;
     // A queue that can't be had marks only that slot's sending as failed.
     reset();
     queueFail = 1;
@@ -375,6 +399,7 @@ int main() {
     ItlAWDL::PeerSlot &c = awdlPeers[1];
     c.txState = kCoexBaTxAsking;
     c.txBulk.bulk = true;
+    c.accepted = true;   // keeps asking once the bulk detector cools (slot 0's start rule, which asking obeys too)
     c.txQueue = 6;
     for (unsigned i = 0; i < kAwdlBaTxAsksMax + 2; ++i) {
         clockUS += 250000ULL;
@@ -435,6 +460,18 @@ int main() {
         clockUS = away + 16 * 65536;                                        // the same entry, one sequence later
         d.schedule.heardUS = clockUS;
         assert(d.schedule.shouldPause(clockUS));
+        {
+            // Asking follows slot 0's rule as well: no request is spent while the peer is away.
+            const size_t sentBefore = sent.size();
+            const uint32_t asksBefore = d.txAsks, skipsBefore = awdlPeerBaAsksSkippedAway;
+            const bool bulkBefore = d.txBulk.bulk;
+            d.txBulk.bulk = true;
+            d.lastUS = clockUS;
+            d.txLastAskUS = 0;
+            assert(!driver.awdlBaAskPass(&hardware, d, 1, clockUS));
+            assert(sent.size() == sentBefore && d.txAsks == asksBefore && awdlPeerBaAsksSkippedAway == skipsBefore + 1);
+            d.txBulk.bulk = bulkBefore;
+        }
         assert(awdlPeerGateClosed(d, clockUS));
         assert(!awdlPeerGateClosed(d, clockUS + 600000));                   // past the 450 ms ceiling: opens
         assert(awdlPeerGateForced == 1);

@@ -132,7 +132,9 @@ inline PeerSlot *ownedSlotFor(PeerSlot *slots, unsigned usable, const uint8_t *p
 // its station is another peer's (the slot's own queue then refuses a request while it holds another peer's).
 // With more: the peer's own slot (station added or being added, or requests waiting), else the first free slot that
 // hasn't failed in this generation. A slot whose station is being added belongs to that peer. Null when there is none.
-inline PeerSlot *slotForRequest(PeerSlot *slots, unsigned usable, const uint8_t *peer, int generation) {
+// firstFree (test only, itlsimslotskip=N): free slots below it are never handed out (firstSkippedSlots).
+inline PeerSlot *slotForRequest(PeerSlot *slots, unsigned usable, const uint8_t *peer, int generation,
+                                unsigned firstFree = 0) {
     if (!usable)
         return nullptr;
     if (usable == 1)
@@ -143,12 +145,18 @@ inline PeerSlot *slotForRequest(PeerSlot *slots, unsigned usable, const uint8_t 
             (!s.added && !s.adding && samePeer(s.requests.peer(), peer)))
             return &slots[i];
     }
-    for (unsigned i = 0; i < usable; ++i) {
+    for (unsigned i = firstFree < usable ? firstFree : 0; i < usable; ++i) {
         PeerSlot &s = slots[i];
         if (!s.added && !s.adding && s.requests.empty() && (i == 0 || s.failedGen != generation))
             return &s;
     }
     return nullptr;
+}
+
+// Test only (itlsimslotskip=N, with several slots): the first slot a peer may be given, so a single phone can be
+// tested in a later slot as if other devices held the ones before it. Always leaves one slot; 0 without the flag.
+inline unsigned firstSkippedSlots(unsigned skip, unsigned usable) {
+    return usable > 1 && skip ? (skip < usable ? skip : usable - 1) : 0;
 }
 
 // How many slots a listener can use: one for each firmware station stationForSlot gives below the firmware's

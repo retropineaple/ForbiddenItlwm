@@ -33,7 +33,7 @@ struct ItlAWDLInterface {
     uint16_t transmitSequence = 0;
     uint8_t localFrameAddress[6] = {2, 0, 0, 0, 0, 1};
     bool popTransmit(uint8_t *, size_t, size_t *, const uint8_t *holdPayloadFor, bool holdEverySize = false,
-                     const ItlAWDL::TxPassList *pass = nullptr);
+                     const ItlAWDL::TxPassList *pass = nullptr, const ItlAWDL::TxPassList *holdList = nullptr);
     bool popTransmitFor(uint8_t *, size_t, size_t *, const uint8_t *destination, size_t maxLength);
     // An IPv6 frame from us to `to`, `size` bytes of payload, its id in the payload.
     void push(const uint8_t *to, uint8_t id, size_t size) {
@@ -56,9 +56,9 @@ static const uint8_t P[6] = {6, 1, 1, 1, 1, 1}, Q[6] = {6, 2, 2, 2, 2, 2}, G[6] 
 static uint8_t out[2048];
 // The id of the frame popped, or -1 for none, and its 802.11 sequence number.
 static int pop(ItlAWDLInterface &t, const uint8_t *hold, bool every = false, unsigned *sequence = nullptr,
-               const ItlAWDL::TxPassList *pass = nullptr) {
+               const ItlAWDL::TxPassList *pass = nullptr, const ItlAWDL::TxPassList *holdList = nullptr) {
     size_t written = 0;
-    if (!t.popTransmit(out, sizeof(out), &written, hold, every, pass)) return -1;
+    if (!t.popTransmit(out, sizeof(out), &written, hold, every, pass, holdList)) return -1;
     if (sequence) *sequence = ItlAWDL::read16(out + 22) >> 4;
     for (size_t i = 0; i + 5 <= written; ++i)
         if (!memcmp(out + i, "PARK", 4)) return out[i + 4];
@@ -222,6 +222,20 @@ int main() {
         t.push(P, 8, 100); t.transmitFrames[t.transmitHead].bytes[12] = 0x08;   // not IPv6
         assert(!t.popTransmitFor(out, sizeof(out), &w, P, 2000) && t.transmitQueued == 1);
         assert(pop(t, nullptr) == -1 && t.transmitDropped == 1);
+    }
+    {   // -itlawdlmultipeer hold list: a further slot whose own hold is full parks every size, in order, and may use
+        // the whole ring (not the pass list's half); the others and group frames go. Released, its frames come back
+        // oldest first.
+        ItlAWDLInterface t;
+        ItlAWDL::TxPassList full;
+        assert(full.add(P));
+        for (uint8_t i = 1; i <= 6; ++i)
+            t.push(i % 2 ? P : Q, i, i % 3 ? 1300 : 100);   // P 1,3,5  Q 2,4,6
+        t.push(G, 7, 100);
+        assert(pop(t, nullptr, false, nullptr, nullptr, &full) == 2 && pop(t, nullptr, false, nullptr, nullptr, &full) == 4);
+        assert(pop(t, nullptr, false, nullptr, nullptr, &full) == 6 && pop(t, nullptr, false, nullptr, nullptr, &full) == 7);
+        assert(pop(t, nullptr, false, nullptr, nullptr, &full) == -1 && t.parkedQueued == 3);   // 1, 3 (short), 5
+        assert(pop(t, nullptr) == 1 && pop(t, nullptr) == 3 && pop(t, nullptr) == 5 && pop(t, nullptr) == -1);
     }
     puts("held peer's frames parked in order, others pass; A-MSDU next-frame take: passed (host mocks only)");
 }

@@ -15,6 +15,7 @@ prefix=prefix.replace('int gen=7;','int gen=7;int sc_generation=7;')
 prefix+='''
 namespace ItlAWDL { static bool sameAddress(const uint8_t*a,const uint8_t*b){return !memcmp(a,b,6);} }
 static unsigned awdlCoexBaOtherPeer;
+static unsigned awdlFirstPeerSlot(){return 0;}   // itlsimslotskip off
 '''
 for name,s in [('baseline',old),('candidate',new)]:
  prefix+='static void '+name+'(ItlAWDL::AddbaRequest request){SC*sc=&hardware;\n'+body(s)+'\n}\n'

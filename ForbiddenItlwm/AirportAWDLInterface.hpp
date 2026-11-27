@@ -31,8 +31,9 @@ public:
     bool takeUnicastMI(uint8_t *output, size_t capacity, size_t *written, uint8_t peer[6], uint64_t nowUS);
     void noteUnicastMISent();
     // Under the shared gate. Converts the oldest queued frame into a caller-owned buffer.
+    // holdList: further peer slots (-itlawdlmultipeer) whose frames can't be taken now; theirs park, every size.
     bool popTransmit(uint8_t *, size_t, size_t *, const uint8_t *holdPayloadFor, bool holdEverySize = false,
-                     const ItlAWDL::TxPassList *pass = nullptr);
+                     const ItlAWDL::TxPassList *pass = nullptr, const ItlAWDL::TxPassList *holdList = nullptr);
     // -itlawdlamsdutx: takes the oldest queued frame only if it is unicast data for `destination` that converts to at
     // most `maxLength` bytes, and nothing is parked (so it is the frame popTransmit would return next). Otherwise
     // nothing changes: no frame is taken to be put back.
@@ -87,7 +88,21 @@ public:
     IOReturn setCHANNEL(apple80211_channel_data*) override { return unsupported("setCHANNEL"); }
     IOReturn setAWDL_SYNC_PARAMS(apple80211_awdl_sync_params *data) override { return storeRequested(requested_AWDL_SYNC_PARAMS, data, "AWDL_SYNC_PARAMS"); }
     IOReturn setAWDL_SYNC_ENABLED(apple80211_awdl_sync_enabled *data) override;
-    IOReturn setAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(apple80211_awdl_extension_state_machine_parameter *data) override { return storeRequested(requested_AWDL_EXTENSION_STATE_MACHINE_PARAMETERS, data, "AWDL_EXTENSION_STATE_MACHINE_PARAMETERS"); }
+    // Stored as before; the values are also published (ItlwmAWDLExtensionRequest), read-only: how long macOS wants the
+    // chip to stay on the AWDL channel past a window after multicast, unicast and action frames, and the minimum. The
+    // field order (unk1..unk4 = multicast, unicast, action, minimum) is decoded from IO80211/AppleBCMWLAN, not yet
+    // checked against a live request. Nothing acts on them yet.
+    IOReturn setAWDL_EXTENSION_STATE_MACHINE_PARAMETERS(apple80211_awdl_extension_state_machine_parameter *data) override {
+        const IOReturn result = storeRequested(requested_AWDL_EXTENSION_STATE_MACHINE_PARAMETERS, data,
+                                               "AWDL_EXTENSION_STATE_MACHINE_PARAMETERS");
+        if (result == kIOReturnSuccess && data) {
+            char text[160];
+            snprintf(text, sizeof(text), "sets %u; version %u; multicast %u, unicast %u, action %u, minimum %u",
+                     ++extensionRequestSets, data->version, data->unk1, data->unk2, data->unk3, data->unk4);
+            setProperty("ItlwmAWDLExtensionRequest", text);
+        }
+        return result;
+    }
     IOReturn setAWDL_ELECTION_ID(apple80211_awdl_election_id *data) override { return storeRequested(requested_AWDL_ELECTION_ID, data, "AWDL_ELECTION_ID"); }
     IOReturn setAWDL_BSSID(apple80211_awdl_bssid *data) override { return storeRequested(requestedBSSID, data, "AWDL_BSSID"); }
     IOReturn setAWDL_ELECTION_METRIC(apple80211_awdl_election_metric *data) override { return storeRequested(requested_AWDL_ELECTION_METRIC, data, "AWDL_ELECTION_METRIC"); }
@@ -248,6 +263,7 @@ private:
     }
     // What macOS asks for as this Mac's AWDL channels (published only; the listener doesn't follow it yet).
     uint32_t requestedSequenceSets = 0;
+    uint32_t extensionRequestSets = 0;
     void publishRequestedSequence();
     void releaseNetworkResources();
     static UInt32 rejectTransmit(OSObject*, IOSkywalkTxSubmissionQueue*, IOSkywalkPacket *const*, UInt32, void*);

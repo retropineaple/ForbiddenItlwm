@@ -132,6 +132,9 @@ extern bool itlAWDLDefaults();
 #include <AWDLChannelMix.hpp>
 #include <AWDLAirtime.hpp>
 #include <AWDLRxDup.hpp>
+#include <AWDLSchedRestart.hpp>
+#include <AWDLSlotDiag.hpp>
+#include <AWDLBaTxRules.hpp>
 #include <AWDLChainRssi.hpp>
 #include <AWDLTxPass.hpp>
 #include <AWDLServiceMerge.hpp>
@@ -154,7 +157,12 @@ static uint32_t awdlCoexIrConcurrentUsed; // Channel checks that passed only bec
 static ItlAWDL::PeerSlot awdlPeers[ItlAWDL::kMaxPeerSlots];
 static ItlAWDL::PeerSlot &awdlPeer = awdlPeers[0];
 static bool awdlCoexMultiPeer;
+// Test only (itlsimslotskip=N, with -itlawdlmultipeer): slots below N are never given to a peer, so one phone lands
+// in slot N and runs the further slots' code. The skipped slots stay empty (no station, no airtime), unlike real
+// devices there would. awdlFirstPeerSlot() is 0 without the flag.
+static unsigned awdlSimSlotSkip;
 static unsigned awdlPeerSlotsUsable = 1;
+static unsigned awdlFirstPeerSlot() { return ItlAWDL::firstSkippedSlots(awdlSimSlotSkip, awdlPeerSlotsUsable); }
 static uint32_t awdlPeerSlotAdds, awdlPeerSlotRemoves, awdlPeerSlotFailures, awdlPeerSlotFull;
 // -itlawdlstatest (test only, off by default): once per boot, with the listener up and no further slot in use, add
 // firmware stations 5 and up on the listener with made-up local addresses, note how many the firmware accepts, and
@@ -176,9 +184,10 @@ static bool awdlPeerAnyReceiveSession()
     return false;
 }
 // Sending to the further slots' peers (-itlawdlmultipeer): each gets its own aggregation queue, ADDBA request,
-// agreement, sequence and firmware rate control once bulk data goes to it. Once agreed, all its unicast data goes
-// through that queue in order; while the queue is full its frames wait here (freed with its station). Unlike slot 0
-// there is no pause or send gate for them yet: those need each peer's own schedule.
+// agreement, sequence and firmware rate control by slot 0's rules (AWDLBaTxRules.hpp). Once agreed, all its unicast
+// data goes through that queue in order; while the queue is full or paused, or its send gate is closed, its frames
+// wait here (freed with its station), and once this hold is full they stay parked in awdl0's queue, as slot 0's do.
+// Each slot's own schedule drives its pause and gate (awdlCoexPeerPauseStep, awdlPeerGateClosed).
 constexpr unsigned kAwdlPeerHoldMax = 128;
 static ItlAWDL::BoundedFifo<mbuf_t, kAwdlPeerHoldMax> awdlPeerHold[ItlAWDL::kMaxPeerSlots];
 static uint32_t awdlPeerTxQueues, awdlPeerTxAgreements, awdlPeerTxAggFrames, awdlPeerTxHeld, awdlPeerTxHoldDrops,
@@ -426,6 +435,7 @@ static bool awdlAirtime;
 static ItlAWDL::AirtimeMeter awdlAirtimeMeter;
 static int awdlAirtimeGen = -1;
 static uint8_t awdlAirtimePeer[6];
+static uint8_t awdlAirtimeSlot;   // the peer slot being measured (slot 0, or a further slot when slot 0 is empty)
 static uint32_t awdlAirtimeOutOfGate;
 static bool itlFwCrashRec;
 struct ItlFwCrashRecord {
@@ -458,8 +468,13 @@ static uint32_t itlFwCmdHistNext;
 static uint32_t itlFwCrashCount, itlFwRestartSites[16], itlFwLastRestartSite, itlFwDisables, itlFwCmdTimeouts,
     itlFwLastTimeoutCmd, itlFwPublishedStamp;
 static uint64_t itlFwLastRestartUS, itlFwLastDisableUS, itlFwLastTimeoutUS, itlFwNextPublishUS;
+// Restarts that follow a fault, counted on every boot (not only with -itlfwcrashrec): the AirDrop scheduler's restart
+// limit uses it. Which sites are faults: ItlAWDL::isFaultRestartSite (AWDLSchedRestart.hpp).
+static uint32_t itlFwFaultRestarts;
 static inline void itlFwNoteRestart(unsigned site)
 {
+    if (ItlAWDL::isFaultRestartSite(site))
+        ++itlFwFaultRestarts;
     if (!itlFwCrashRec)
         return;
     if (site < 16)
@@ -749,13 +764,17 @@ static uint64_t awdlSchedSpFirstTickUS, awdlSchedFollowStartedUS;
 // -itlschedsafe: (1) after a firmware restart the follower starts again in the
 // new generation instead of stopping for the rest of the boot (an E1 rule; sync-2, 2026-11-22: after one assert at
 // 40.9 s the follower stayed off and the iPhone no longer saw the Mac); it stops for good after kAwdlSchedMaxRestarts
-// restarts in one boot. (2) In each generation the follower starts only once macOS has had AWDL on for
+// restarts in one boot. Only a restart after a fault (itlFwFaultRestarts) counts: a new generation from a join, a
+// Wi-Fi toggle or a wake resumes without using up the limit (2026-11-27: two joins and one crash stopped it for the
+// boot, and AirDrop from the Mac stalled until the next reboot). (2) In each generation the follower starts only once macOS has had AWDL on for
 // kAwdlSchedSettleUS, its plan has arrived and the listener has not moved channel for kAwdlSchedSettleUS (sync-2: the
 // firmware asserted in SESSION_PROTECTION_CMD 2.2 s after AWDL enable, while the plan and listener were changing).
 static bool awdlSchedSafe;
 static constexpr uint32_t kAwdlSchedMaxRestarts = 3;
 static constexpr uint64_t kAwdlSchedSettleUS = 3000000ULL;
 static uint32_t awdlSchedRestarts, awdlSchedResumes, awdlSchedSettleWaits;
+static uint32_t awdlSchedReinits;      // new generations without a fault: resumed, not counted toward the limit
+static uint32_t awdlSchedSpGenFaults;  // itlFwFaultRestarts when the follower took its current generation
 static uint64_t awdlSchedSyncOnSinceUS, awdlSchedSettledAtUS;   // with the existing awdlCoexLastMoveUS
 // -itlrxloss or itlawdlsched=3: where received AWDL data goes, per second, for the last 30 s with traffic:
 // frames the listener heard, handed to awdl0, refused before the hand-off (off-channel, unknown peer, malformed, or not
@@ -766,6 +785,16 @@ extern volatile uint32_t itlAWDLRxParseBad, itlAWDLRxNotOurs, itlAWDLRxSelf, itl
     itlAWDLRxCopyFail, itlAWDLRxQueueFail, itlAWDLRxDelivered, itlAWDLRxDisabled;
 extern volatile uint32_t itlAWDLRxMetaOther, itlAWDLRxMetaLast;
 static bool awdlRxLoss;
+// -itlslotdiag or itlawdlsched=3: per entry of macOS's 16-entry sequence, how much of each planned listener run a
+// confirmed session covered and which frames the listener heard there (AWDLSlotDiag.hpp; ITLAWDLSlotDiag,
+// ITLAWDLSlotRuns). Measurement only.
+static bool awdlSlotDiag;
+static ItlAWDL::SlotDiag awdlSlotDiagState;
+static bool awdlSlotRunOpen;                 // a plan run's session started and its end is still to come
+static uint64_t awdlSlotRunPlanStartUS, awdlSlotRunPlanEndUS, awdlSlotRunReqUS;
+static uint32_t awdlSlotRunActionMark, awdlSlotRunUcastMark, awdlSlotUcastToUs;
+static uint8_t awdlSlotRunChannel, awdlSlotRunFlags;
+static uint64_t awdlSlotNextPublishUS;
 static uint32_t awdlCoexDataRxNotCopied;
 struct AwdlRxSecond { uint32_t upS, heard, handed, refused, ok, notOurs, fails; };
 static AwdlRxSecond awdlRxSeconds[30];
@@ -6372,6 +6401,8 @@ extern IOReturn itlAWDLBuildTransmit(IOEthernetController*, mbuf_t*);
 extern IOReturn itlAWDLBuildTransmit(IOEthernetController*, mbuf_t*, const uint8_t*);
 extern IOReturn itlAWDLBuildTransmit(IOEthernetController*, mbuf_t*, const uint8_t*, bool);
 extern IOReturn itlAWDLBuildTransmit(IOEthernetController*, mbuf_t*, const uint8_t*, bool, const ItlAWDL::TxPassList*);
+extern IOReturn itlAWDLBuildTransmit(IOEthernetController*, mbuf_t*, const uint8_t*, bool, const ItlAWDL::TxPassList*,
+                                     const ItlAWDL::TxPassList*);
 extern IOReturn itlAWDLBuildTransmitFor(IOEthernetController*, mbuf_t*, const uint8_t*, size_t);
 extern unsigned itlAWDLTransmitHeldShort(IOEthernetController*);
 extern bool itlAWDLServiceTransmit(IOEthernetController*);
@@ -6919,6 +6950,14 @@ enum { kCoexBaTxOff, kCoexBaTxAsking, kCoexBaTxAgreed, kCoexBaTxFailed, kCoexBaT
 static uint32_t awdlCoexBaTxAsks, awdlCoexBaTxAskRounds, awdlCoexBaTxAgreements, awdlCoexBaTxRefusals,
     awdlCoexBaTxFrames, awdlCoexBaTxSubmitErrors, awdlCoexBaTxNotifs, awdlCoexBaTxAcked, awdlCoexBaTxSentAir,
     awdlCoexBaTxQueueResult, awdlCoexBaTxDelbas, awdlCoexBaTxPeerAdds;
+// Reply-delivery probes opened, slot 0 and the further slots (AWDLBaTxRules.hpp).
+static uint32_t awdlCoexBaProbes, awdlPeerBaProbes;
+// Further slots' asking, counted as slot 0's are (ITLAWDLCoexBaTx*, ITLAWDLCoexBaAsksSkippedAway).
+static uint32_t awdlPeerBaAsksSent, awdlPeerBaAsksSkippedAway, awdlPeerBaAskRounds, awdlPeerBaIdleHolds;
+// Further slots' aggregated sending, as slot 0's ITLAWDLCoexBaTxSentAir/Acked and ITLAWDLCoexBaRefill*: firmware
+// Block Ack reports, completion refills, and pump passes that left a full slot's frames parked in awdl0.
+static uint32_t awdlPeerBaTxSentAir, awdlPeerBaTxAcked, awdlPeerBaRefillKicks, awdlPeerBaRefillFrames,
+    awdlPeerTxParkedFull;
 // Asking stops once nothing has gone to or come from the peer for this long and no bulk send runs: after a
 // transfer the rounds went on for minutes (#24). Data to or from it starts a fresh round.
 constexpr uint64_t kAwdlCoexBaIdleAskUS = 30000000;
@@ -6965,8 +7004,10 @@ static bool awdlCoexBaFilterBySession; // -itlawdlfilterbysession: the pre-#57 r
 static bool awdlCoexAwHold;
 // Block Ack event log for the listener (iface151, diagnostic): why does the phone sometimes never answer our
 // ADDBA? Each entry: uptime ms, type, three small values. Published as text, newest last. Types:
-// A ask sent (token, SSN, flags: 1 filter off, 2 schedule usable, 4 RX session open; away deferrals before it)
+// A ask sent (token, SSN, flags: 1 filter off, 2 schedule usable, 4 RX session open, slot in bits 4-7; slot 0's
+//   away deferrals before it)
 // a ask completion (token, acked)        R answer received (token, status, accepted by the real predicate)
+// P reply-delivery probe opened (token, asks in the dialog, slot)
 // B any BA action frame to us (action, from the BA peer, AWDL BSSID, gate: 1 channel valid + 2 peer known)
 // Q phone ADDBA request (token, tid)     q our answer completion (token, acked)
 // d our DELBA completion (tid, acked)    D phone DELBA (tid, 1 if it was the sender)
@@ -7217,6 +7258,9 @@ static uint8_t awdlCoexSlotPeer[nitems(awdlCoexSlotKind)];  // Which peer slot a
 static uint16_t awdlCoexSlotEnqueueId[nitems(awdlCoexSlotKind)];
 static uint32_t awdlCoexUcastOK, awdlCoexUcastFailed, awdlCoexGroupOK, awdlCoexGroupFailed;
 static uint32_t awdlCoexDataRxUcast, awdlCoexDataRxGroup, awdlCoexPromiscDropped;
+// Beacons and probe responses passed on to a running scan although they came in on channel 6's handle or with the
+// listener's promiscuous receive (ITLAWDLScanFramesPassed).
+static uint32_t awdlScanFramesPassed;
 static bool awdlCoexPromiscLive;      // Applied: the firmware accepted a MAC command that set it.
 static bool awdlCoexPromiscUncertain; // A MAC command failed: the firmware may hold either filter.
 static uint32_t awdlCoexPromiscAmbiguous, awdlCoexMacMaskSeen[4];
@@ -7233,9 +7277,14 @@ static bool awdlCoexSameChannelProbeWanted(struct iwx_softc *sc, uint64_t now)
     const auto *station = node && node->in_phyctxt ? node->in_phyctxt->channel : nullptr;
     const unsigned ownNumber = awdlCoexOwnChan ? ieee80211_chan2ieee(&sc->sc_ic, awdlCoexOwnChan) : 0;
     const unsigned stationNumber = station ? ieee80211_chan2ieee(&sc->sc_ic, station) : 0;
-    return awdlCoexSameChannelProbe.wants(ownNumber, stationNumber,
-        awdlPeer.added && awdlPeer.rxTids, awdlPeer.txState == kCoexBaTxAsking,
-        awdlCoexBaFilterOff, awdlPeer.probeUntilUS, now);
+    // Any slot's probe, as the filter rule in awdlCoexBaHandle reads them.
+    for (unsigned i = 0; i < awdlPeerSlotsUsable; ++i) {
+        const ItlAWDL::PeerSlot &p = awdlPeers[i];
+        if (awdlCoexSameChannelProbe.wants(ownNumber, stationNumber, p.added && p.rxTids,
+                                           p.txState == kCoexBaTxAsking, awdlCoexBaFilterOff, p.probeUntilUS, now))
+            return true;
+    }
+    return false;
 }
 
 // The RX descriptor's MAC context mask, valid only for the frame being handed to iwx_rx_frame directly
@@ -7314,6 +7363,67 @@ static void awdlChainPublish(IORegistryEntry *root)
     root->setProperty("ITLAWDLChainRssi", text);
 }
 
+// -itlslotdiag: per entry (eN) of the bank, runs that began there (r), planned and session-covered time (p, c, ms),
+// and frames heard on the listener's channel: action (a), unicast data to our address (u), group data (g), each as
+// total/heard-with-no-session. Then the last 16 finished runs, oldest first: first entry x length, channel, bank
+// (S sparse, D dense), how early the session was asked for, firmware start and end against the plan (us, late +),
+// and the action frames / unicast to us heard during it.
+static void awdlSlotDiagPublish()
+{
+    IORegistryEntry *root = IORegistryEntry::getRegistryRoot();
+    if (!root)
+        return;
+    const ItlAWDL::SlotDiag &d = awdlSlotDiagState;
+    for (unsigned b = 0; b < 2; ++b) {
+        char text[2048];
+        uint32_t runs = 0;
+        for (unsigned e = 0; e < 16; ++e)
+            runs += d.bank[b][e].runs;
+        size_t used = size_t(snprintf(text, sizeof(text), "%s plan entries; runs %u, unplanned sessions %u:",
+                                      b ? "dense (5+ listener)" : "sparse (0-4 listener)", runs, d.runsNoPlan));
+        for (unsigned e = 0; e < 16 && used < sizeof(text); ++e) {
+            const ItlAWDL::SlotStats &x = d.bank[b][e];
+            if (!x.plannedUS && !x.coveredUS && !x.rx[0] && !x.rx[1] && !x.rx[2])
+                continue;
+            used += size_t(snprintf(text + used, sizeof(text) - used,
+                                    " e%u r%u p%llu c%llu a%u/%u u%u/%u g%u/%u;", e, x.runs,
+                                    (unsigned long long)(x.plannedUS / 1000), (unsigned long long)(x.coveredUS / 1000),
+                                    x.rx[0], x.rxNoSession[0], x.rx[1], x.rxNoSession[1], x.rx[2], x.rxNoSession[2]));
+        }
+        root->setProperty(b ? "ITLAWDLSlotDiagDense" : "ITLAWDLSlotDiag", text);
+    }
+    char runsText[1200];
+    size_t used = size_t(snprintf(runsText, sizeof(runsText), "recorded %u:", d.runsRecorded));
+    const uint32_t total = d.ringNext < ItlAWDL::kSlotRunRing ? d.ringNext : ItlAWDL::kSlotRunRing;
+    const uint32_t show = total < 16 ? total : 16;
+    for (uint32_t k = 0; k < show && used < sizeof(runsText); ++k) {
+        const ItlAWDL::SlotRun &r = d.ring[(d.ringNext - show + k) % ItlAWDL::kSlotRunRing];
+        used += size_t(snprintf(runsText + used, sizeof(runsText) - used,
+                                " e%ux%u %u%c lead %d start %+d end %+d a%u u%u %c%c%c%c;", r.slot, r.entries,
+                                r.channel, r.bank ? 'D' : 'S', int(r.requestLeadUS), int(r.startOffUS),
+                                int(r.endOffUS), r.action, r.ucastToUs,
+                                (r.flags & ItlAWDL::kSlotFlagPromiscStart) ? 'P' : '-',
+                                (r.flags & ItlAWDL::kSlotFlagPromiscEnd) ? 'P' : '-',
+                                (r.flags & ItlAWDL::kSlotFlagStationStart) ? 'S' : '-',
+                                (r.flags & ItlAWDL::kSlotFlagStationEnd) ? 'S' : '-'));
+    }
+    root->setProperty("ITLAWDLSlotRuns", runsText);
+    // Receive filter and stations: unicast to us heard with promiscuous receive live / off, the state now, and the
+    // last 16 changes (uptime ms, kind, slot): P/p promiscuous on/off, S/s station added/removed, X removed because
+    // the peer went unheard, I removed for idleness.
+    char state[700];
+    used = size_t(snprintf(state, sizeof(state), "unicast to us: promiscuous %u, filtered %u; now %s, stations %s; "
+                           "changes %u:", d.ucastPromisc, d.ucastFiltered, awdlCoexPromiscLive ? "promiscuous" :
+                           awdlCoexPromiscUncertain ? "uncertain" : "filtered", awdlPeerAnyAdded() ? "yes" : "none",
+                           d.eventNext));
+    const uint32_t evShow = d.eventNext < ItlAWDL::kSlotEventRing ? d.eventNext : ItlAWDL::kSlotEventRing;
+    for (uint32_t k = 0; k < evShow && used < sizeof(state); ++k) {
+        const ItlAWDL::SlotEvent &e = d.events[(d.eventNext - evShow + k) % ItlAWDL::kSlotEventRing];
+        used += size_t(snprintf(state + used, sizeof(state) - used, " %u %c%u;", e.ms, e.kind, e.arg));
+    }
+    root->setProperty("ITLAWDLSlotState", state);
+}
+
 static void awdlCoexPublish()
 {
     auto *root = IORegistryEntry::getRegistryRoot();
@@ -7360,7 +7470,7 @@ static void awdlCoexPublish()
     if (awdlAirtime) {   // where slot 0's send time went, in ms and per mille of the sampled time
         static const char *const names[ItlAWDL::kAirtimeStates] = {"no airtime", "peer away", "no demand",
                                                                      "policy blocked", "empty with ready", "queued"};
-        char at[640];
+        char at[704];
         size_t u = 0;
         const ItlAWDL::AirtimeAccount *accounts[2] = {&awdlAirtimeMeter.bulk, &awdlAirtimeMeter.all};
         for (unsigned k = 0; k < 2 && u < sizeof(at); ++k) {
@@ -7376,7 +7486,8 @@ static void awdlCoexPublish()
                                      (unsigned long long)(a.unsampledUS / 1000), a.samples, a.maxGapUS));
         }
         if (u < sizeof(at))
-            snprintf(at + u, sizeof(at) - u, "; skipped outside the gate %u", awdlAirtimeOutOfGate);
+            snprintf(at + u, sizeof(at) - u, "; skipped outside the gate %u; slot %u", awdlAirtimeOutOfGate,
+                     unsigned(awdlAirtimeSlot));
         root->setProperty("ITLAWDLAirtime", at);
     }
     root->setProperty("ITLAWDLCoexSameChannelProbeEnabled", awdlCoexSameChannelProbe.enabled);
@@ -7521,6 +7632,24 @@ static void awdlCoexPublish()
             }
             root->setProperty("ITLAWDLCoexBaTxQueueResult", awdlCoexBaTxQueueResult, 32);
             root->setProperty("ITLAWDLCoexBaTxPeerAdds", awdlCoexBaTxPeerAdds, 32);
+            {
+                char probes[64];
+                snprintf(probes, sizeof(probes), "slot 0 %u, further slots %u", awdlCoexBaProbes, awdlPeerBaProbes);
+                root->setProperty("ITLAWDLCoexBaProbes", probes);
+                // The further slots' asking, by the same rules as slot 0's ITLAWDLCoexBaTx* keys.
+                char asks[128];
+                snprintf(asks, sizeof(asks), "asks sent %u, skipped away %u, rounds %u, idle holds %u",
+                         awdlPeerBaAsksSent, awdlPeerBaAsksSkippedAway, awdlPeerBaAskRounds, awdlPeerBaIdleHolds);
+                root->setProperty("ITLAWDLPeerBaAsks", asks);
+                char sending[160];
+                snprintf(sending, sizeof(sending),
+                         "sent air %u, acked %u; refill kicks %u, frames %u; parked while hold full %u",
+                         awdlPeerBaTxSentAir, awdlPeerBaTxAcked, awdlPeerBaRefillKicks, awdlPeerBaRefillFrames,
+                         awdlPeerTxParkedFull);
+                root->setProperty("ITLAWDLPeerBaTx", sending);
+                if (awdlSimSlotSkip)   // test only: say so wherever these keys are read
+                    root->setProperty("ITLAWDLSimSlotSkip", awdlFirstPeerSlot(), 32);
+            }
             root->setProperty("ITLAWDLCoexBaTxAsks", awdlCoexBaTxAsks, 32);
             root->setProperty("ITLAWDLCoexBaAskOK", awdlCoexBaAskOK, 32);
             root->setProperty("ITLAWDLCoexBaAskFailed", awdlCoexBaAskFailed, 32);
@@ -7679,6 +7808,7 @@ static void awdlCoexPublish()
             root->setProperty("ITLAWDLCoexGroupFailed", awdlCoexGroupFailed, 32);
             root->setProperty("ITLAWDLCoexPromiscLive", awdlCoexPromiscLive);
             root->setProperty("ITLAWDLCoexPromiscDropped", awdlCoexPromiscDropped, 32);
+            root->setProperty("ITLAWDLScanFramesPassed", awdlScanFramesPassed, 32);
             root->setProperty("ITLAWDLCoexPromiscUncertain", awdlCoexPromiscUncertain);
             root->setProperty("ITLAWDLCoexPromiscAmbiguous", awdlCoexPromiscAmbiguous, 32);
             if (auto *masks = OSData::withBytes(awdlCoexMacMaskSeen, sizeof(awdlCoexMacMaskSeen))) {
@@ -9045,6 +9175,10 @@ awdlCoexTxTask(void *arg)
             if (untilAW)
                 nextMS = MIN(nextMS, MAX(1U, unsigned(untilAW / 1000)));
         }
+        if (awdlSlotDiag && timerNowUS >= awdlSlotNextPublishUS) {
+            awdlSlotNextPublishUS = timerNowUS + 2000000ULL;
+            awdlSlotDiagPublish();
+        }
         // one RX-outcome sample per second while running.
         if (awdlRxLoss && (!awdlRxLastSampleUS || timerNowUS - awdlRxLastSampleUS >= 1000000ULL)) {
             const uint32_t now[11] = {awdlCoexAwdlData, awdlCoexDataRxDelivered,
@@ -9106,31 +9240,41 @@ awdlAirtimeSample(struct iwx_softc *sc)
         ++awdlAirtimeOutOfGate;
         return;
     }
-    if (!awdlCoexAdded || !awdlPeer.added || awdlCoexGeneration != sc->sc_generation || awdlStopping) {
+    // The slot measured: slot 0's peer, else the first further slot with a station (-itlawdlmultipeer), so a
+    // phone in a later slot is measured by the same rules.
+    ItlAWDL::PeerSlot *m = awdlPeer.added ? &awdlPeer : nullptr;
+    for (unsigned i = 1; !m && i < awdlPeerSlotsUsable; ++i)
+        if (awdlPeers[i].added)
+            m = &awdlPeers[i];
+    if (!awdlCoexAdded || !m || awdlCoexGeneration != sc->sc_generation || awdlStopping) {
         awdlAirtimeMeter.restart();
         return;
     }
-    if (awdlAirtimeGen != sc->sc_generation || !ItlAWDL::sameAddress(awdlAirtimePeer, awdlPeer.addr)) {
+    if (awdlAirtimeGen != sc->sc_generation || !ItlAWDL::sameAddress(awdlAirtimePeer, m->addr)) {
         awdlAirtimeMeter.restart();
         awdlAirtimeGen = sc->sc_generation;
-        memcpy(awdlAirtimePeer, awdlPeer.addr, sizeof(awdlAirtimePeer));
+        memcpy(awdlAirtimePeer, m->addr, sizeof(awdlAirtimePeer));
     }
+    awdlAirtimeSlot = uint8_t(m - awdlPeers);
     const uint64_t now = awdlUptimeUS();
     ItlAWDL::AirtimeSample s;
     // On the AWDL channel: inside the follower's session when sessions decide it, else always.
     s.localWindow = !awdlSchedSyncTxGated() ||
         (awdlSchedSpActive && awdlSchedSpStartUS && awdlSchedSpMacId == kAwdlSchedHandleMacId &&
          awdlSchedSpStartUS <= now && awdlSchedSpStartUS + uint64_t(awdlSchedSpCurDurTU) * 1024 > now);
-    s.peerAvailable = !awdlCoexScheduleCurrent() || !awdlCoexPeerSchedule.shouldPause(now);
-    s.hostReady = itlAWDLTransmitQueued(getController()) > 0;
-    const bool aggQueue = awdlPeer.txQueue >= 0 && awdlPeer.txQueue < int(nitems(sc->txq));
+    const ItlAWDL::PeerSchedule *schedule = awdlSlotSchedule(*m);
+    s.peerAvailable = !schedule || !schedule->shouldPause(now);
+    s.hostReady = itlAWDLTransmitQueued(getController()) > 0 || (m != &awdlPeer && !awdlPeerHold[m - awdlPeers].empty());
+    const bool aggQueue = m->txQueue >= 0 && m->txQueue < int(nitems(sc->txq));
     const bool listenQueue = awdlCoexQueue >= 0 && awdlCoexQueue < int(nitems(sc->txq));
-    s.firmwareQueued = (aggQueue && sc->txq[awdlPeer.txQueue].queued > 0) ||
+    s.firmwareQueued = (aggQueue && sc->txq[m->txQueue].queued > 0) ||
         (listenQueue && sc->txq[awdlCoexQueue].queued > 0);
-    const bool gateHeld = awdlCoexGateSinceUS && awdlCoexGateLimitUS && now - awdlCoexGateSinceUS < awdlCoexGateLimitUS;
-    s.policyAllows = now >= awdlCoexTxPauseUntilUS && !awdlPeer.pause.paused && !awdlCoexTxHalted &&
+    const bool gateHeld = m == &awdlPeer ?
+        awdlCoexGateSinceUS && awdlCoexGateLimitUS && now - awdlCoexGateSinceUS < awdlCoexGateLimitUS :
+        m->gateSinceUS && m->gateLimitUS && now - m->gateSinceUS < m->gateLimitUS;
+    s.policyAllows = now >= awdlCoexTxPauseUntilUS && !m->pause.paused && !awdlCoexTxHalted &&
         !awdlCoexMovePending && !gateHeld;
-    (void)awdlAirtimeMeter.sample(now, s, awdlPeer.txBulk.bulk);
+    (void)awdlAirtimeMeter.sample(now, s, m->txBulk.bulk);
 #endif
 }
 
@@ -9202,8 +9346,13 @@ awdlCoexDataPump(struct iwx_softc *sc, unsigned budget)
         awdlPeer.txQueue >= 0 && awdlPeer.txQueue < int(nitems(sc->txq));
     // iface161 send gate; see awdlCoexGate. It replaces -itlawdlcoexawhold, which held everything and only
     // with a calibrated schedule.
+    // The schedule peer may be a further slot's (slot 0 empty or someone else's): that slot has its own gate and
+    // pause, which let its bulk send through (awdlPeerGateClosed, awdlCoexPeerPauseStep). Slot 0's gate would
+    // hold its frames through a bulk send, as slot 0's own never does once aggregated.
+    const bool schedPeerOwnSlot = awdlPeerSlotsUsable > 1 &&
+        ItlAWDL::addedSlotFor(awdlPeers + 1, awdlPeerSlotsUsable - 1, awdlCoexSchedPeer);
     bool gateClosed = false;
-    if (awdlCoexGate && !aggregate && !away && awdlCoexScheduleCurrent()) {
+    if (awdlCoexGate && !aggregate && !away && !schedPeerOwnSlot && awdlCoexScheduleCurrent()) {
         const uint64_t gateNowUS = awdlUptimeUS();
         const bool dozing = awdlCoexPeerSchedule.presentEntries() <= ItlAWDL::kPeerDozeMaxEntries &&
             (!awdlCoexSchedPeerRxUS || gateNowUS - awdlCoexSchedPeerRxUS > kAwdlGateAwakeUS);
@@ -9238,7 +9387,7 @@ awdlCoexDataPump(struct iwx_softc *sc, unsigned budget)
         awdlCoexGateSinceUS = 0;
         awdlCoexGateKind = 0;
     }
-    if (!awdlCoexGate && awdlCoexAwHold && !aggregate && !away && awdlCoexScheduleCurrent()) {
+    if (!awdlCoexGate && awdlCoexAwHold && !aggregate && !away && !schedPeerOwnSlot && awdlCoexScheduleCurrent()) {
         const uint64_t holdNowUS = awdlUptimeUS();
         if (awdlCoexPeerSchedule.shouldPause(holdNowUS)) {
             if (!awdlCoexHoldSinceUS) {
@@ -9357,8 +9506,17 @@ awdlCoexDataPump(struct iwx_softc *sc, unsigned budget)
         // A closed gate holds every frame for the schedule peer; frames for others still go.
         const uint8_t *holdFor = slot0Parked ? awdlPeer.addr : gateClosed ? awdlCoexSchedPeer :
             holdAggregatePayload ? awdlPeer.addr : nullptr;
-        if (itlAWDLBuildTransmit(getController(), &next, holdFor, slot0Parked || gateClosed || holdEverySize, pass) !=
-                kIOReturnSuccess ||
+        // A further slot whose own hold is full leaves its frames in awdl0's queue, parked in order as slot 0's are,
+        // instead of taking them here and dropping them (awdlPeerTxHoldDrops): a dropped frame costs a TCP or QUIC
+        // send its congestion window. They come back once the hold has room.
+        ItlAWDL::TxPassList holdList;
+        for (unsigned i = 1; i < awdlPeerSlotsUsable; ++i)
+            if (awdlPeers[i].added && awdlPeerHold[i].full())
+                (void)holdList.add(awdlPeers[i].addr);
+        if (holdList.count)
+            ++awdlPeerTxParkedFull;
+        if (itlAWDLBuildTransmit(getController(), &next, holdFor, slot0Parked || gateClosed || holdEverySize, pass,
+                                 holdList.count ? &holdList : nullptr) != kIOReturnSuccess ||
             !next)
             break;
         --budget;
@@ -9371,8 +9529,8 @@ awdlCoexDataPump(struct iwx_softc *sc, unsigned budget)
             if (mbuf_len(next) >= 1200)
                 ++own->txFrames;
             own->lastUS = awdlUptimeUS();
-        } else if (unicast && awdlPeerSlotsUsable > 1 && awdlPeer.added &&
-                   !ItlAWDL::sameAddress(nextBytes + 4, awdlPeer.addr)) {
+        } else if (unicast && awdlPeerSlotsUsable > 1 &&
+                   ((awdlPeer.added && !ItlAWDL::sameAddress(nextBytes + 4, awdlPeer.addr)) || awdlFirstPeerSlot())) {
             // Bulk to a peer without a station while slot 0 is another's: a candidate for a further slot.
             if (!ItlAWDL::sameAddress(nextBytes + 4, awdlTxCand)) {
                 memcpy(awdlTxCand, nextBytes + 4, sizeof(awdlTxCand));
@@ -9639,6 +9797,8 @@ awdlCoexBaRemovePeer(struct iwx_softc *sc, ItlAWDL::PeerSlot &awdlPeer)
     if (flushErr || rmErr)
         awdlCoexBaFail(awdlPeer, gen);
     ++awdlPeerSlotRemoves;
+    if (awdlSlotDiag)
+        awdlSlotDiagState.noteEvent(awdlUptimeUS(), 's', uint8_t(&awdlPeer - awdlPeers));
     // Promiscuous receive comes back once no peer station is left.
     if (!awdlPeerAnyAdded() &&
         (awdlCoexBaFilterOff || (awdlCoexSameChannelProbe.applied || awdlCoexSameChannelProbe.restorePending))) {
@@ -9787,6 +9947,8 @@ awdlCoexBaAddPeer(struct iwx_softc *sc, ItlAWDL::PeerSlot &awdlPeer, const uint8
     }
     awdlPeer.added = true;
     ++awdlPeerSlotAdds;
+    if (awdlSlotDiag)
+        awdlSlotDiagState.noteEvent(awdlUptimeUS(), 'S', uint8_t(&awdlPeer - awdlPeers));
     awdlPeer.txAsks = 0;
     if (&awdlPeer != &awdlPeers[0]) {
         awdlPeer.schedule.reset();
@@ -10084,6 +10246,8 @@ awdlCoexBaRxPeer(struct iwx_softc *sc, ItlAWDL::PeerSlot &awdlPeer, int gen, uin
             !awdlPeer.rxTids && quiet > 60000000ULL;
         if (expired || idle) {
             awdlCoexBaEvent('X', expired ? 1U : 2U, awdlPeer.txState, 0);
+            if (awdlSlotDiag)
+                awdlSlotDiagState.noteEvent(now, expired ? 'X' : 'I', uint8_t(&awdlPeer - awdlPeers));
             (void)awdlCoexBaRemovePeer(sc, awdlPeer);
             return false;
         }
@@ -10310,6 +10474,88 @@ awdlCoexBaRxPeer(struct iwx_softc *sc, ItlAWDL::PeerSlot &awdlPeer, int gen, uin
     return true;
 }
 
+// Whether a slot's peer is away from our channel by its schedule (slot 0 keeps its own copy of the schedule).
+static bool awdlBaPeerAway(const ItlAWDL::PeerSlot &p, uint64_t now)
+{
+    if (&p == &awdlPeers[0])
+        return awdlCoexScheduleCurrent() && awdlCoexPeerSchedule.shouldPause(now);
+    return awdlPeerScheduleCurrent(p) && p.schedule.shouldPause(now);
+}
+
+// Requests in this round: slot 0 keeps its count in awdlCoexBaTxAsks (published), the others in the slot.
+static uint32_t &awdlBaAsks(ItlAWDL::PeerSlot &p)
+{
+    return &p == &awdlPeers[0] ? awdlCoexBaTxAsks : p.txAsks;
+}
+
+// One pass of a slot's asking state, by the same rules for every slot (AWDLBaTxRules.hpp). Returns true when a
+// request went out.
+bool ItlIwx::
+awdlBaAskPass(struct iwx_softc *sc, ItlAWDL::PeerSlot &p, unsigned slot, uint64_t now)
+{
+    const bool slot0 = &p == &awdlPeers[0];
+    uint32_t &asks = awdlBaAsks(p);
+    const ItlAWDL::BaAskView view{p.txBulk.bulk, p.lastUS, p.txRestUntilUS, p.txLastAskUS, awdlBaPeerAway(p, now),
+                                  asks};
+    const ItlAWDL::BaAskStep step = ItlAWDL::baAskStep(view, now, kAwdlCoexBaIdleAskUS, kAwdlBaTxAsksMax,
+                                                       awdlCoexTxPauseUntilUS);
+    if (step == ItlAWDL::BaAskStep::IdleHold) {
+        // Idle peer, no bulk send: hold, and let the next data start a fresh round without waiting out a rest.
+        if (asks || p.txRestUntilUS) {
+            asks = 0;
+            p.txRestUntilUS = 0;
+            ++(slot0 ? awdlCoexBaTxIdleHolds : awdlPeerBaIdleHolds);
+        }
+        return false;
+    }
+    if (step == ItlAWDL::BaAskStep::Resting)
+        return false;
+    p.txRestUntilUS = 0;
+    switch (step) {
+    case ItlAWDL::BaAskStep::TooSoon:
+    case ItlAWDL::BaAskStep::Paused:
+        return false;
+    case ItlAWDL::BaAskStep::PeerAway:
+        // A calibrated schedule rules out this window; don't spend one of the round's requests on it.
+        ++(slot0 ? awdlCoexBaAsksSkippedAway : awdlPeerBaAsksSkippedAway);
+        if (slot0)
+            ++awdlCoexAskSkipsSinceLast;
+        return false;
+    case ItlAWDL::BaAskStep::RoundOver:
+        asks = 0;
+        ++p.txToken;
+        p.probeTried = false;   // a new dialog may probe again
+        p.probeUntilUS = 0;
+        ++(slot0 ? awdlCoexBaTxAskRounds : awdlPeerBaAskRounds);
+        p.txRestUntilUS = now + kAwdlBaTxRestUS;
+        return false;
+    default:
+        break;
+    }
+    static const uint8_t kBssid[6] = {0x00, 0x25, 0x00, 0xff, 0x94, 0x73};
+    uint8_t ask[ItlAWDL::kAddbaResponseLength];
+    const size_t askLength = ItlAWDL::buildAddbaRequest(ask, sizeof(ask), p.addr, awdlCoexAddr, kBssid,
+        p.txToken, kAwdlBaTxTid, ItlAWDL::kBaWindowMax, p.txSeq, ++awdlCoexBaSequence, awdlAmsduTx);
+    if (!askLength || !awdlCoexSendMgmt(sc, ask, askLength, kCoexSlotBaAsk))
+        return false;
+    awdlAmsduTxOffers += awdlAmsduTx;
+    p.txLastAskUS = now;
+    ++asks;
+    if (!slot0)
+        ++awdlPeerBaAsksSent;
+    const bool scheduleUsable = slot0 ?
+        awdlCoexScheduleCurrent() && awdlCoexPeerSchedule.known() && awdlCoexPeerSchedule.fresh(now) :
+        awdlPeerScheduleCurrent(p) && p.schedule.known() && p.schedule.fresh(now);
+    // Flags: 1 filter off, 2 schedule usable, 4 receive session open; the slot in the high four bits.
+    awdlCoexBaEvent('A', p.txToken, p.txSeq,
+                    (awdlCoexBaFilterOff ? 1U : 0U) | (scheduleUsable ? 2U : 0U) | (p.rxTids ? 4U : 0U) |
+                    ((slot & 0xf) << 4),
+                    slot0 ? MIN(awdlCoexAskSkipsSinceLast, 255U) : 0, awdlCoexLastMgmtEnqueueId);
+    if (slot0)
+        awdlCoexAskSkipsSinceLast = 0;
+    return true;
+}
+
 // A further slot's send agreement for the task: once bulk data goes to its peer, an aggregation queue on the
 // peer's station with firmware rate control, our ADDBA request (in rounds, as for slot 0), and aggregation turned on
 // once the peer agrees. Returns false when the task's pass should end here.
@@ -10330,8 +10576,11 @@ awdlCoexBaTxPeer(struct iwx_softc *sc, ItlAWDL::PeerSlot &awdlPeer, int gen, uin
         ++awdlPeerTxRetries;
     }
     (void)ItlAWDL::noteBaTxTraffic(awdlPeer.txBulk, now, awdlPeer.txFrames, awdlPeer.txState == kCoexBaTxAgreed);
+    // Slot 0's start rule: the peer accepted our answer to its own request, or a bulk send to it runs.
+    if (!ItlAWDL::baTxShouldStart(awdlPeer.accepted, awdlPeer.txBulk.bulk))
+        return true;
     if (awdlPeer.txState == kCoexBaTxOff) {
-        if (!awdlPeer.txBulk.bulk || awdlPeer.queueAllocPending)
+        if (awdlPeer.queueAllocPending)
             return true;
         awdlPeer.queueAllocPending = true;
         const CoexBaQueueOwner owner{gen, tok, awdlPeer.epoch, index};
@@ -10390,34 +10639,7 @@ awdlCoexBaTxPeer(struct iwx_softc *sc, ItlAWDL::PeerSlot &awdlPeer, int gen, uin
     }
     if (awdlPeer.txState != kCoexBaTxAsking)
         return true;
-    // Idle peer, no bulk send: hold, and let the next data start a fresh round.
-    if (!awdlPeer.txBulk.bulk && now - awdlPeer.lastUS > kAwdlCoexBaIdleAskUS) {
-        awdlPeer.txAsks = 0;
-        awdlPeer.txRestUntilUS = 0;
-        return true;
-    }
-    if (awdlPeer.txRestUntilUS && now < awdlPeer.txRestUntilUS)
-        return true;
-    awdlPeer.txRestUntilUS = 0;
-    if (awdlPeer.txLastAskUS && now - awdlPeer.txLastAskUS < 200000ULL)
-        return true;
-    if (awdlPeer.txAsks >= kAwdlBaTxAsksMax) {
-        awdlPeer.txAsks = 0;
-        ++awdlPeer.txToken;
-        awdlPeer.txRestUntilUS = now + kAwdlBaTxRestUS;
-        return true;
-    }
-    if (now < awdlCoexTxPauseUntilUS)
-        return true;
-    static const uint8_t kBssid[6] = {0x00, 0x25, 0x00, 0xff, 0x94, 0x73};
-    uint8_t ask[ItlAWDL::kAddbaResponseLength];
-    const size_t askLength = ItlAWDL::buildAddbaRequest(ask, sizeof(ask), awdlPeer.addr, awdlCoexAddr, kBssid,
-        awdlPeer.txToken, kAwdlBaTxTid, ItlAWDL::kBaWindowMax, awdlPeer.txSeq, ++awdlCoexBaSequence, awdlAmsduTx);
-    if (askLength && awdlCoexSendMgmt(sc, ask, askLength, kCoexSlotBaAsk)) {
-        awdlAmsduTxOffers += awdlAmsduTx;
-        awdlPeer.txLastAskUS = now;
-        ++awdlPeer.txAsks;
-    }
+    (void)awdlBaAskPass(sc, awdlPeer, index, awdlUptimeUS());
     return true;
 }
 
@@ -10728,21 +10950,24 @@ awdlCoexBaHandle(struct iwx_softc *sc)
         filterChange = awdlPeerAnyReceiveSession() && stillOurs() &&
             ItlAWDL::noteBaFilterTraffic(awdlCoexBaFilter, awdlUptimeUS(), awdlCoexDataRxUcast);
     } else if (stillOurs()) {
-        const bool receiveSession = awdlPeer.added && awdlPeer.rxTids;
-        const bool recentRxPayload = awdlPeer.lastRxPayloadUS &&
-            answerNow - awdlPeer.lastRxPayloadUS < 300000ULL;
-        const bool canProbe = receiveSession && !recentRxPayload && awdlPeer.txState == kCoexBaTxAsking &&
-            !awdlPeer.txRestUntilUS;
-        if (!canProbe)
-            awdlPeer.probeUntilUS = 0;
-        if (canProbe && !awdlPeer.probeTried && awdlCoexBaFilterOff && awdlCoexBaTxAsks >= 3 &&
-            awdlCoexBaTxAsks < kAwdlBaTxAsksMax && answerNow >= awdlCoexTxPauseUntilUS &&
-            answerNow - awdlPeer.txLastAskUS >= 200000ULL &&
-            !(awdlCoexScheduleCurrent() && awdlCoexPeerSchedule.shouldPause(answerNow))) {
-            // Test reply delivery with promiscuous RX briefly open, once per dialog.
-            awdlPeer.probeTried = true;
-            awdlPeer.probeUntilUS = answerNow + 250000ULL;
-            awdlCoexBaEvent('P', awdlPeer.txToken, awdlCoexBaTxAsks, 0);
+        // Test reply delivery with promiscuous RX briefly open, once per dialog, for every slot's send agreement
+        // (slot 0 only before 2026-11-27, so a later slot's peer could ask without end: #103).
+        for (unsigned i = 0; i < awdlPeerSlotsUsable; ++i) {
+            ItlAWDL::PeerSlot &p = awdlPeers[i];
+            const ItlAWDL::BaProbeView view{p.added && p.rxTids != 0, p.lastRxPayloadUS,
+                                            p.txState == kCoexBaTxAsking, p.txRestUntilUS, p.probeTried,
+                                            awdlBaAsks(p), p.txLastAskUS};
+            if (!ItlAWDL::baProbeAllowed(view, answerNow)) {
+                p.probeUntilUS = 0;
+                continue;
+            }
+            if (ItlAWDL::baProbeDue(view, answerNow, awdlCoexBaFilterOff, kAwdlBaTxAsksMax, awdlCoexTxPauseUntilUS,
+                                    awdlBaPeerAway(p, answerNow))) {
+                p.probeTried = true;
+                p.probeUntilUS = answerNow + ItlAWDL::kBaProbeUS;
+                ++(i == 0 ? awdlCoexBaProbes : awdlPeerBaProbes);
+                awdlCoexBaEvent('P', p.txToken, view.asks, i);
+            }
         }
         // Off while the peer's station exists, not only while a receive TID is open. A receive TID is torn
         // down after 60 s idle, but the station and our send agreement live for ten minutes. With promiscuous
@@ -10754,7 +10979,7 @@ awdlCoexBaHandle(struct iwx_softc *sc)
         // off), the station-lifetime rule stopped Mac → iPhone sends, and the session rule fixed it (#63).
         const bool sessionRule = awdlCoexBaFilterBySession || !awdlCoexMultiActive;
         bool wantOff = (sessionRule ? awdlPeerAnyReceiveSession() : awdlPeerAnyAdded()) &&
-            answerNow >= awdlPeer.probeUntilUS;
+            !ItlAWDL::baProbeOpen(awdlPeers, awdlPeerSlotsUsable, answerNow);
         if (wantOff != awdlCoexBaFilterOff) {
             awdlCoexBaFilter.off = wantOff;
             filterChange = true;
@@ -10784,7 +11009,7 @@ awdlCoexBaHandle(struct iwx_softc *sc)
         if (awdlTxCandBulk.bulk && ItlAWDL::knownAddress(awdlTxCand) && awdlCoexPeerKnown(awdlTxCand, now) &&
             !ItlAWDL::addedSlotFor(awdlPeers, awdlPeerSlotsUsable, awdlTxCand)) {
             ItlAWDL::PeerSlot *free = nullptr;
-            for (unsigned i = 1; i < awdlPeerSlotsUsable && !free; ++i)
+            for (unsigned i = awdlFirstPeerSlot() > 1 ? awdlFirstPeerSlot() : 1; i < awdlPeerSlotsUsable && !free; ++i)
                 if (!awdlPeers[i].added && awdlPeers[i].requests.empty() && awdlPeers[i].failedGen != gen)
                     free = &awdlPeers[i];
             if (free) {
@@ -10823,6 +11048,8 @@ awdlCoexBaHandle(struct iwx_softc *sc)
                                   awdlPeer.txState == kCoexBaTxAgreed);
 
     if (!awdlPeer.added) {
+        if (awdlFirstPeerSlot())
+            return;   // itlsimslotskip: slot 0 stays empty; the bulk candidate path gives the peer a later slot
         if (!awdlPeer.txBulk.bulk || !ItlAWDL::knownAddress(awdlCoexTxDest) ||
             !awdlCoexPeerKnown(awdlCoexTxDest, now))
             return;
@@ -10847,8 +11074,9 @@ awdlCoexBaHandle(struct iwx_softc *sc)
         awdlPeer.txState = kCoexBaTxOff;
         ++awdlPeerTxRetries;
     }
-    if (!awdlPeer.accepted &&
-        (!awdlPeer.txBulk.bulk || !ItlAWDL::sameAddress(awdlCoexTxDest, awdlPeer.addr)))
+    // Slot 0's bulk detector counts sends to any peer, so a bulk send counts here only if it goes to this one.
+    if (!ItlAWDL::baTxShouldStart(awdlPeer.accepted,
+                                  awdlPeer.txBulk.bulk && ItlAWDL::sameAddress(awdlCoexTxDest, awdlPeer.addr)))
         return;
     if (awdlPeer.txState == kCoexBaTxOff) {
         if (awdlPeer.queueAllocPending)
@@ -10909,54 +11137,7 @@ awdlCoexBaHandle(struct iwx_softc *sc)
     }
     if (awdlPeer.txState != kCoexBaTxAsking)
         return;
-    const uint64_t askNow = awdlUptimeUS();
-    // Idle peer, no bulk send: hold, and let the next data start a fresh round without waiting out a rest.
-    if (!awdlPeer.txBulk.bulk && askNow - awdlPeer.lastUS > kAwdlCoexBaIdleAskUS) {
-        if (awdlCoexBaTxAsks || awdlPeer.txRestUntilUS) {
-            awdlCoexBaTxAsks = 0;
-            awdlPeer.txRestUntilUS = 0;
-            ++awdlCoexBaTxIdleHolds;
-        }
-        return;
-    }
-    if (awdlPeer.txRestUntilUS && askNow < awdlPeer.txRestUntilUS)
-        return;
-    awdlPeer.txRestUntilUS = 0;
-    if (awdlPeer.txLastAskUS && askNow - awdlPeer.txLastAskUS < 200000ULL)
-        return;
-    // A calibrated schedule can rule out this window. Otherwise keep the ordinary retry cadence.
-    if (awdlCoexScheduleCurrent() && awdlCoexPeerSchedule.shouldPause(askNow)) {
-        ++awdlCoexBaAsksSkippedAway;
-        ++awdlCoexAskSkipsSinceLast;
-        return;
-    }
-    if (awdlCoexBaTxAsks >= kAwdlBaTxAsksMax) {
-        awdlCoexBaTxAsks = 0;
-        ++awdlPeer.txToken;
-        awdlPeer.probeTried = false;
-        awdlPeer.probeUntilUS = 0;
-        ++awdlCoexBaTxAskRounds;
-        awdlPeer.txRestUntilUS = askNow + kAwdlBaTxRestUS;
-        return;
-    }
-    if (askNow < awdlCoexTxPauseUntilUS)
-        return;
-    static const uint8_t kBssid[6] = {0x00, 0x25, 0x00, 0xff, 0x94, 0x73};
-    uint8_t ask[ItlAWDL::kAddbaResponseLength];
-    const size_t askLength = ItlAWDL::buildAddbaRequest(ask, sizeof(ask), awdlPeer.addr, awdlCoexAddr, kBssid,
-        awdlPeer.txToken, kAwdlBaTxTid, ItlAWDL::kBaWindowMax, awdlPeer.txSeq, ++awdlCoexBaSequence, awdlAmsduTx);
-    if (askLength && awdlCoexSendMgmt(sc, ask, askLength, kCoexSlotBaAsk)) {
-        awdlAmsduTxOffers += awdlAmsduTx;
-        awdlPeer.txLastAskUS = askNow;
-        ++awdlCoexBaTxAsks;
-        awdlCoexBaEvent('A', awdlPeer.txToken, awdlPeer.txSeq,
-                        (awdlCoexBaFilterOff ? 1U : 0U) |
-                        (awdlCoexScheduleCurrent() && awdlCoexPeerSchedule.known() &&
-                         awdlCoexPeerSchedule.fresh(askNow) ? 2U : 0U) |
-                        (awdlPeer.rxTids ? 4U : 0U),
-                        MIN(awdlCoexAskSkipsSinceLast, 255U), awdlCoexLastMgmtEnqueueId);
-        awdlCoexAskSkipsSinceLast = 0;
-    }
+    (void)awdlBaAskPass(sc, awdlPeer, 0, awdlUptimeUS());
 #endif
 }
 
@@ -11599,6 +11780,9 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
             ++awdlCoexRxWhileFilterOff;
         if ((awdlFrame || baToUs) && cf[0] == 0xd0) {
             ++awdlCoexAwdlAction;
+            if (awdlSlotDiag && chanValid && unsigned(chanidx) == awdlCoexChannel)
+                awdlSlotDiagState.noteRx(awdlSchedPlanClockNow, ItlAWDL::SlotDiag::bankFor(awdlSchedPlanListener),
+                                         awdlUptimeUS(), ItlAWDL::kSlotRxAction, awdlSchedSpActive);
             ++(unsigned(chanidx) == awdlCoexChannel ? awdlCoexActionOnChannel : awdlCoexActionOffChannel);
             if (awdlSchedCh6 && chanValid && unsigned(chanidx) == kAwdlSchedCh6Channel)
                 ++awdlSchedCh6Frames;
@@ -11886,7 +12070,8 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                         if (request.immediate) {
                             // The peer's slot, or a free one with -itlawdlmultipeer (slot 0 only without it).
                             ItlAWDL::PeerSlot *slot = ItlAWDL::slotForRequest(awdlPeers, awdlPeerSlotsUsable,
-                                                                              request.peer, sc->sc_generation);
+                                                                              request.peer, sc->sc_generation,
+                                                                              awdlFirstPeerSlot());
                             if (!slot) {
                                 ++awdlCoexBaOtherPeer;
                                 if (awdlPeerSlotsUsable > 1)
@@ -11983,6 +12168,19 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
         }
         else if (awdlFrame && (cf[0] & 0x0c) == 0x08) {
             ++awdlCoexAwdlData;
+            if (awdlSlotDiag) {
+                const bool group = cf[4] & 1;
+                const bool toUs = !group && awdlCoexAddrKnown && ItlAWDL::sameAddress(cf + 4, awdlCoexAddr);
+                if (toUs) {
+                    ++awdlSlotUcastToUs;
+                    ++(awdlCoexPromiscLive ? awdlSlotDiagState.ucastPromisc : awdlSlotDiagState.ucastFiltered);
+                }
+                if ((group || toUs) && chanValid && unsigned(chanidx) == awdlCoexChannel)
+                    awdlSlotDiagState.noteRx(awdlSchedPlanClockNow,
+                                             ItlAWDL::SlotDiag::bankFor(awdlSchedPlanListener), awdlUptimeUS(),
+                                             group ? ItlAWDL::kSlotRxGroup : ItlAWDL::kSlotRxUcastToUs,
+                                             awdlSchedSpActive);
+            }
 #if defined(ITL_AWDL_NATIVE)
             // AWDL data heard by the listener, without the FCS. awdl0's hand-off expects the monitor-mode
             // layout, four bytes after the frame, so it gets a copy with them zeroed.
@@ -12062,9 +12260,23 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
             return;
         }
     }
+    // While a scan runs, beacons and probe responses go on to net80211 whatever channel they came in on: the
+    // scan's results come from them. Without this, the two rules below hid every network on channel 6 and on the
+    // listener's channel (an iPhone's hotspot, typically) from macOS's scans, unless the station was already there.
+    // AWDL's own frames carry its BSSID and stopped at the hand-off above.
+    const uint8_t *scanFrame = mtod(m, const uint8_t *);
+    const bool scanResult = mbuf_len(m) >= 24 && (scanFrame[0] == 0x80 || scanFrame[0] == 0x50) &&
+        (ic->ic_state == IEEE80211_S_SCAN || (ic->ic_flags & IEEE80211_F_BGSCAN)
+#ifdef AIRPORT_WCL
+         || ic->ic_wcl_scan_active
+#endif
+        );
+    if (scanResult && ((awdlSchedCh6 && awdlSchedCh6Added && chanValid && unsigned(chanidx) == kAwdlSchedCh6Channel) ||
+                       (awdlCoexProbe && (awdlCoexPromiscLive || awdlCoexPromiscUncertain))))
+        ++awdlScanFramesPassed;
     // channel 6's handle is always promiscuous. What it hears on 6 goes no further than the AWDL
     // hand-off above, unless the station itself is on 6.
-    if (awdlSchedCh6 && awdlSchedCh6Added && chanValid && unsigned(chanidx) == kAwdlSchedCh6Channel) {
+    if (!scanResult && awdlSchedCh6 && awdlSchedCh6Added && chanValid && unsigned(chanidx) == kAwdlSchedCh6Channel) {
         struct iwx_node *stationNode6 = (struct iwx_node *)ic->ic_bss;
         const bool stationOn6 = stationNode6 && stationNode6->in_phyctxt && stationNode6->in_phyctxt->channel &&
             ieee80211_chan2ieee(ic, stationNode6->in_phyctxt->channel) == kAwdlSchedCh6Channel;
@@ -12078,7 +12290,7 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
     // further than the AWDL hand-off above, whatever its length. A frame is the listener's if the firmware's
     // MAC mask names the listener and not the station, or if it came in on the listener's channel while the
     // station is on another. A frame with neither usable is counted and left to the station.
-    if (awdlCoexProbe && (awdlCoexPromiscLive || awdlCoexPromiscUncertain)) {
+    if (!scanResult && awdlCoexProbe && (awdlCoexPromiscLive || awdlCoexPromiscUncertain)) {
         struct iwx_node *stationNode = (struct iwx_node *)ic->ic_bss;
         const unsigned stationChannel = stationNode && stationNode->in_phyctxt && stationNode->in_phyctxt->channel ?
             unsigned(ieee80211_chan2ieee(ic, stationNode->in_phyctxt->channel)) : 0;
@@ -13070,6 +13282,7 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         return;
 
     bool coexReclaimed = false, coexNotified = false;
+    ItlAWDL::PeerSlot *peerReclaimed = nullptr;   // a further slot whose aggregation queue just drained some
     /* Free per TID */
     for (i = 0; i < le16toh(ba_res->tfd_cnt); i++) {
         struct iwx_compressed_ba_tfd *ba_tfd = &ba_res->tfd[i];
@@ -13083,10 +13296,15 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         const bool coexQueue = (awdlCoexQueue >= 0 && int(qid) == awdlCoexQueue) ||
             (awdlCoexOrphanQueue >= 0 && int(qid) == awdlCoexOrphanQueue) || notifSlot ||
             (awdlCh6TxQueue >= 0 && int(qid) == awdlCh6TxQueue);
-        // Slot 0's queue as before; a further slot's notifications only note its queue draining.
+        // Slot 0's queue as before; a further slot's notifications note its queue draining and what it reclaimed,
+        // for the same refill slot 0 gets below.
         const bool coexBaQueue = notifSlot == &awdlPeers[0];
-        if (notifSlot && !coexBaQueue)
+        if (notifSlot && !coexBaQueue) {
             notifSlot->txLastNotifUS = awdlUptimeUS();
+            awdlPeerBaTxSentAir += le16toh(ba_res->txed);
+            awdlPeerBaTxAcked += le16toh(ba_res->done);
+        }
+        const int peerQueuedBefore = notifSlot && !coexBaQueue ? ring->queued : 0;
         if (coexBaQueue) {
             coexNotified = true;
             ++awdlCoexBaTxNotifs;
@@ -13120,6 +13338,8 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         }
         if (coexBaQueue && ring->queued < queuedBefore)
             coexReclaimed = true;
+        if (notifSlot && !coexBaQueue && ring->queued < peerQueuedBefore)
+            peerReclaimed = notifSlot;
         iwx_clear_oactive(sc, ring);
         awdlAfterCompletion(sc);
     }
@@ -13150,6 +13370,19 @@ iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_r
         awdlCoexBaRefillFrames += awdlCoexBaTxFrames - before;
         if (sc->txq[queue].queued == 0 && itlAWDLTransmitQueued(getController()))
             ++awdlCoexBaRefillStillEmptyReady;
+    }
+    // A further slot's queue gets the same refill, by the same rule (its own cap, bulk and pause), so its sends are
+    // fed from the completion and don't wait for the next timer pass. The pump drains that slot's hold first.
+    if (peerReclaimed && awdlCoexBaRefillEnabled && !awdlCoexMovePending && getMainWorkLoop()->inGate()) {
+        ItlAWDL::PeerSlot &p = *peerReclaimed;
+        const bool recent = p.txLastAggUS && awdlUptimeUS() - p.txLastAggUS < 300000ULL;
+        if (awdlPeerTxReady(p, sc) && sc->txq[p.txQueue].queued < int((awdlPeerTxCap(p) + 1) / 2) &&
+            (p.txBulk.bulk || recent) && !p.pause.paused) {
+            const uint32_t before = awdlPeerTxAggFrames;
+            awdlCoexDataPump(sc, 64);
+            ++awdlPeerBaRefillKicks;
+            awdlPeerBaRefillFrames += awdlPeerTxAggFrames - before;
+        }
     }
     if (sampleRefill)
         awdlCoexBaLastRefillSample = {baUS, uint32_t(sc->sc_generation), awdlCoexToken, awdlPeer.epoch,
@@ -18359,6 +18592,8 @@ awdlCoexMacSend(struct iwx_softc *sc, uint32_t action)
         if (!sameChannelProbe)
             awdlCoexSameChannelProbe.restorePending = false;
         awdlCoexSameChannelProbe.noteApplied(promiscWanted && sameChannelProbe, awdlUptimeUS());
+        if (awdlSlotDiag && promiscWanted != awdlCoexPromiscLive)
+            awdlSlotDiagState.noteEvent(awdlUptimeUS(), promiscWanted ? 'P' : 'p', 0);
         awdlCoexPromiscLive = promiscWanted;
         awdlCoexPromiscUncertain = false;
     } else {
@@ -18800,10 +19035,10 @@ static void awdlSchedSpPublish()
             IORegistryEntry::getRegistryRoot()->setProperty("ITLAWDLSchedFollowErr", fe);
         }
         {
-            char sd[520];
+            char sd[600];
             auto ms = [](uint64_t us) { return (unsigned long long)(us / 1000ULL); };
             snprintf(sd, sizeof(sd), "delay %llu s; first tick %llu ms uptime; follower started %llu ms after it; safe %s: "
-                     "settled at %llu ms, settle waits %u, restarts %u, resumes %u; blocked ms before start: station %llu, "
+                     "settled at %llu ms, settle waits %u, restarts %u, resumes %u, Wi-Fi re-inits %u; blocked ms before start: station %llu, "
                      "no sync %llu, sync settling %llu, no plan %llu, move %llu, recent move %llu, start delay %llu, "
                      "handle %llu (last %u); first session at %llu ms, first good start at %llu ms uptime; failed starts %u",
                      (unsigned long long)(awdlSchedStartDelayUS / 1000000ULL),
@@ -18812,7 +19047,8 @@ static void awdlSchedSpPublish()
                                           awdlSchedFollowStartedUS >= awdlSchedSpFirstTickUS ?
                                           (awdlSchedFollowStartedUS - awdlSchedSpFirstTickUS) / 1000ULL : 0),
                      awdlSchedSafe ? "on" : "off", ms(awdlSchedSettledAtUS),
-                     awdlSchedSettleWaits, awdlSchedRestarts, awdlSchedResumes, ms(awdlStartBlockUS[1]),
+                     awdlSchedSettleWaits, awdlSchedRestarts, awdlSchedResumes, awdlSchedReinits,
+                     ms(awdlStartBlockUS[1]),
                      ms(awdlStartBlockUS[2]), ms(awdlStartBlockUS[3]), ms(awdlStartBlockUS[4]), ms(awdlStartBlockUS[5]),
                      ms(awdlStartBlockUS[6]), ms(awdlStartBlockUS[7]), ms(awdlStartBlockUS[8]), unsigned(awdlStartLastBlock),
                      ms(awdlStartFirstSessionUS), ms(awdlStartFirstOkUS), awdlSchedSpFailedStarts);
@@ -19189,8 +19425,18 @@ awdlSchedSpTick(struct iwx_softc *sc)
         awdlSchedSpPublish();
         return;
     }
-    if (awdlSchedSpGen >= 0 && awdlSchedSpGen != gen && awdlSchedSpSent) {
-        if (awdlSchedSafe && ++awdlSchedRestarts < kAwdlSchedMaxRestarts) {
+    // A fault restart bumps itlFwFaultRestarts before it queues the init task that brings the new generation, so the
+    // count has moved by the time the follower first sees that generation here.
+    const bool newGen = awdlSchedSpGen != gen;
+    const bool genFault = newGen && awdlSchedSpGen >= 0 && itlFwFaultRestarts != awdlSchedSpGenFaults;
+    if (newGen)
+        awdlSchedSpGenFaults = itlFwFaultRestarts;
+    if (awdlSchedSpGen >= 0 && newGen && awdlSchedSpSent) {
+        const ItlAWDL::SchedGenAction action =
+            ItlAWDL::schedOnNewGeneration(genFault, awdlSchedSafe, awdlSchedRestarts, kAwdlSchedMaxRestarts);
+        if (action == ItlAWDL::SchedGenAction::Resume)
+            ++awdlSchedReinits;
+        if (action != ItlAWDL::SchedGenAction::Stop) {
             // the new generation has none of the old sessions or contexts; the handle and channel-6 ensure paths
             // add theirs again. Start over, with the start delay and the settle rule.
             awdlSchedSpActive = false;
@@ -19204,7 +19450,8 @@ awdlSchedSpTick(struct iwx_softc *sc)
             awdlSchedSecondSwitching = awdlSchedSecondDraining = false;
             awdlSchedSpGen = gen;
             ++awdlSchedResumes;
-            awdlSchedSpState = "running (resumed after a firmware restart)";
+            awdlSchedSpState = genFault ? "running (resumed after a firmware restart)" :
+                                          "running (resumed after Wi-Fi came up again)";
             awdlSchedSpPublish();
         } else {
             awdlSchedSpOff = true;
@@ -23553,6 +23800,18 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                         awdlSchedSpRunStartUS = 0;
                         awdlSchedSpPublish();
                     } else if (le32toh(notif->start)) {
+                        if (awdlSlotDiag) {
+                            awdlSlotRunOpen = true;
+                            awdlSlotRunPlanStartUS = awdlSchedSpAwaitStart ? awdlSchedSpRunStartUS : 0;
+                            awdlSlotRunPlanEndUS = awdlSchedSpPlannedEndUS;
+                            awdlSlotRunReqUS = awdlSchedSpSentUS;
+                            awdlSlotRunActionMark = awdlCoexAwdlAction;
+                            awdlSlotRunUcastMark = awdlSlotUcastToUs;
+                            awdlSlotRunChannel = uint8_t(awdlSchedSpMacId == kAwdlSchedCh6MacId ?
+                                                         kAwdlSchedCh6Channel : awdlCoexChannel);
+                            awdlSlotRunFlags = uint8_t((awdlCoexPromiscLive ? ItlAWDL::kSlotFlagPromiscStart : 0) |
+                                (awdlPeerAnyAdded() ? ItlAWDL::kSlotFlagStationStart : 0));
+                        }
                         if (!awdlStartFirstOkUS)
                             awdlStartFirstOkUS = spNow;
                         ++awdlSchedSpStarts;
@@ -23589,6 +23848,17 @@ iwx_rx_pkt(struct iwx_softc *sc, struct iwx_rx_data *data, struct mbuf_list *ml)
                     } else {
                         ++awdlSchedSpEnds;
                         awdlSchedSpEndedUS = spNow;
+                        if (awdlSlotDiag && awdlSlotRunOpen && awdlSchedSpActive && awdlSchedSpStartUS)
+                            awdlSlotDiagState.noteRun(awdlSchedPlanClockNow,
+                                                      ItlAWDL::SlotDiag::bankFor(awdlSchedPlanListener),
+                                                      awdlSlotRunChannel, awdlSlotRunReqUS, awdlSlotRunPlanStartUS,
+                                                      awdlSlotRunPlanEndUS, awdlSchedSpStartUS, spNow,
+                                                      uint16_t(awdlCoexAwdlAction - awdlSlotRunActionMark),
+                                                      uint16_t(awdlSlotUcastToUs - awdlSlotRunUcastMark),
+                                                      uint8_t(awdlSlotRunFlags |
+                                                          (awdlCoexPromiscLive ? ItlAWDL::kSlotFlagPromiscEnd : 0) |
+                                                          (awdlPeerAnyAdded() ? ItlAWDL::kSlotFlagStationEnd : 0)));
+                        awdlSlotRunOpen = false;
                         if (awdlSchedSpActive && awdlSchedSpStartUS) {
                             const uint64_t len = spNow - awdlSchedSpStartUS;
                             awdlSchedSpInUS += len;
@@ -25549,6 +25819,11 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
             !PE_parse_boot_argn("-itlawdlnosamechprobe", &dummy, sizeof(dummy));
         awdlCoexPeerHandoffEnabled = awdlCoexData && PE_parse_boot_argn("-itlawdlpeerhandoff", &dummy, sizeof(dummy));
         awdlCoexMultiPeer = awdlCoexData && PE_parse_boot_argn("-itlawdlmultipeer", &dummy, sizeof(dummy));
+        {
+            uint32_t skip = 0;
+            awdlSimSlotSkip = awdlCoexMultiPeer && PE_parse_boot_argn("itlsimslotskip", &skip, sizeof(skip)) &&
+                skip < ItlAWDL::kMaxPeerSlots ? skip : 0;
+        }
         for (unsigned i = 0; i < ItlAWDL::kMaxPeerSlots; ++i)
             awdlPeers[i].station = ItlAWDL::stationForSlot(i);
         awdlCoexStationTestEnabled = awdlCoexData && PE_parse_boot_argn("-itlawdlstatest", &dummy, sizeof(dummy));
@@ -25572,6 +25847,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         awdlCoexAwSyncAssume = awdlCoexData && PE_parse_boot_argn("-itlawdlcoexawsync0", &dummy, sizeof(dummy));
         awdlCoexGate = !PE_parse_boot_argn("-itlawdlcoexnogate", &dummy, sizeof(dummy));
         awdlRxLoss = itlResFlag("-itlrxloss", kItlResDiag);
+        awdlSlotDiag = itlResFlag("-itlslotdiag", kItlResDiag);
         awdlMcastAw = itlResFlag("-itlawdlmcastaw", kItlResWork);
         awdlMcastRepeat = awdlMcastAw && itlResFlag("-itlawdlmcastrepeat", kItlResWork);
         awdlCoexAssumeZero = !PE_parse_boot_argn("-itlawdlcoexcalwait", &dummy, sizeof(dummy));

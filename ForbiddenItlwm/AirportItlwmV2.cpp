@@ -1071,13 +1071,17 @@ UInt32 ItlAWDLInterface::acceptTransmit(IOSkywalkPacket *const *packets, UInt32 
 }
 
 bool ItlAWDLInterface::popTransmit(uint8_t *output, size_t available, size_t *written,
-                                   const uint8_t *holdPayloadFor, bool holdEverySize, const ItlAWDL::TxPassList *pass)
+                                   const uint8_t *holdPayloadFor, bool holdEverySize, const ItlAWDL::TxPassList *pass,
+                                   const ItlAWDL::TxPassList *holdList)
 {
     ++transmitDepthBins[ItlAWDL::depthBin(transmitQueued + parkedQueued)];
-    // Whether a peer's unicast data waits now: the one peer the radio holds (holdPayloadFor), or, while the listener
-    // is on a second channel (-itlschedsecond), every peer that isn't on that channel (pass).
+    // Whether a peer's unicast data waits now: the one peer the radio holds (holdPayloadFor), a further slot's
+    // peer that can't take frames now (holdList, -itlawdlmultipeer), or, while the listener is on a second channel
+    // (-itlschedsecond), every peer that isn't on that channel (pass).
+    auto listHeld = [&](const uint8_t *addr) { return holdList && holdList->contains(addr); };
     auto peerHeld = [&](const uint8_t *addr) {
-        return (holdPayloadFor && ItlAWDL::sameAddress(addr, holdPayloadFor)) || (pass && pass->holds(addr));
+        return (holdPayloadFor && ItlAWDL::sameAddress(addr, holdPayloadFor)) || listHeld(addr) ||
+            (pass && pass->holds(addr));
     };
     auto findParked = [&](const uint8_t *addr) -> int {
         for (unsigned i = 0; i < parkedPeerCount; ++i)
@@ -1148,7 +1152,7 @@ bool ItlAWDLInterface::popTransmit(uint8_t *output, size_t available, size_t *wr
         const bool unicastData = dataFrame && !(output[4] & 1);
         const bool held = (unicastData && holdPayloadFor && (holdEverySize || *written >= 1200) &&
                            ItlAWDL::sameAddress(output + 4, holdPayloadFor)) ||
-            (dataFrame && pass && pass->holds(output + 4));
+            (unicastData && listHeld(output + 4)) || (dataFrame && pass && pass->holds(output + 4));
         const int parkedAt = dataFrame && parkedQueued ? findParked(output + 4) : -1;
         const bool behindParked = parkedAt >= 0;
         if (held || behindParked) {
@@ -1156,7 +1160,7 @@ bool ItlAWDLInterface::popTransmit(uint8_t *output, size_t available, size_t *wr
             // A frame held only by the pass list (another channel) may use half the ring: the rest stays for the
             // home channel's own holds, so a visit can't fill it and stop awdl0 behind a held frame once home.
             const bool passOnly = !(unicastData && holdPayloadFor && ItlAWDL::sameAddress(output + 4, holdPayloadFor)) &&
-                pass && pass->holds(output + 4);
+                !(unicastData && listHeld(output + 4)) && pass && pass->holds(output + 4);
             const bool roomForPass = !passOnly || parkedUsed < parkedFrameCount / 2;
             if (parkedFrames && parkedUsed < parkedFrameCount && roomForPass &&
                 (behindParked || parkedPeerCount < parkedPeerMax)) {
@@ -1977,6 +1981,15 @@ IOReturn itlAWDLBuildTransmit(IOEthernetController *owner, mbuf_t *packet, const
     return controller ? controller->buildAWDLTransmit(packet, holdPayloadFor, holdEverySize, pass) : kIOReturnNotReady;
 }
 
+// -itlawdlmultipeer: as above, and the further slots in holdList park their frames, as the slot 0 peer's do.
+IOReturn itlAWDLBuildTransmit(IOEthernetController *owner, mbuf_t *packet, const uint8_t *holdPayloadFor,
+                              bool holdEverySize, const ItlAWDL::TxPassList *pass, const ItlAWDL::TxPassList *holdList)
+{
+    auto *controller = OSDynamicCast(AirportItlwm, owner);
+    return controller ? controller->buildAWDLTransmit(packet, holdPayloadFor, holdEverySize, pass, holdList) :
+        kIOReturnNotReady;
+}
+
 unsigned itlAWDLTransmitHeldShort(IOEthernetController *owner)
 {
     auto *controller = OSDynamicCast(AirportItlwm, owner);
@@ -1996,7 +2009,7 @@ bool itlAWDLServiceTransmit(IOEthernetController *owner)
 }
 
 IOReturn AirportItlwm::buildAWDLTransmit(mbuf_t *packet, const uint8_t *holdPayloadFor, bool holdEverySize,
-                                         const ItlAWDL::TxPassList *pass)
+                                         const ItlAWDL::TxPassList *pass, const ItlAWDL::TxPassList *holdList)
 {
     if (!packet || *packet || !_fWorkloop || !_fWorkloop->inGate() || !awdlManagementInputEnabled || !fAWDLInterface)
         return kIOReturnNotReady;
@@ -2007,7 +2020,7 @@ IOReturn AirportItlwm::buildAWDLTransmit(mbuf_t *packet, const uint8_t *holdPayl
     auto *interface = static_cast<ItlAWDLInterface *>(fAWDLInterface);
     interface->retain();
     const bool ready = interface->popTransmit(static_cast<uint8_t *>(mbuf_data(result)), mbuf_maxlen(result), &length, holdPayloadFor,
-                                                 holdEverySize, pass);
+                                                 holdEverySize, pass, holdList);
     interface->release();
     if (!ready) {
         mbuf_freem(result);

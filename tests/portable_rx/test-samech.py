@@ -39,6 +39,8 @@ struct iwx_mac_ctx_cmd { uint32_t id_and_color,action,mac_type,tsf_id; uint8_t n
 enum { IWX_FW_CTXT_ACTION_ADD=1,IWX_FW_CTXT_ACTION_MODIFY=2,IWX_FW_CTXT_ACTION_REMOVE=3,IWX_FW_MAC_TYPE_LISTENER=4,IWX_FW_MAC_TYPE_P2P_DEVICE=6,IWX_FW_MAC_TYPE_P2P_STA=7,IWX_TSF_ID_B=1,IWX_MAC_CONTEXT_CMD=77,kAwdlCoexMacId=1,kCoexBaTxAsking=1,kCoexBaTxAgreed=2 };
 enum { IWX_MAC_FILTER_IN_PROMISC=1,IWX_MAC_FILTER_IN_CONTROL_AND_MGMT=2,IWX_MAC_FILTER_ACCEPT_GRP=4,IWX_MAC_FILTER_IN_BEACON=64,IWX_MAC_FILTER_IN_PROBE_REQUEST=4096 };
 static bool awdlCoexAddrKnown=true,awdlCoexBaFilterOff=false,awdlCoexBaTxEnabled=true,awdlCoexPromiscLive=false,awdlCoexPromiscUncertain=false;
+// -itlslotdiag is off in this harness; the MAC command only notes filter changes when it is on.
+static bool awdlSlotDiag=false; static struct { void noteEvent(uint64_t,char,uint8_t){} } awdlSlotDiagState;
 static uint32_t awdlCoexToken=1;static unsigned awdlCoexFilter=3;
 static uint8_t awdlCoexAddr[6]={2,1,2,3,4,6},etherbroadcastaddr[6]={255,255,255,255,255,255};
 static ieee80211_channel own;static ieee80211_channel *awdlCoexOwnChan=&own;
@@ -119,7 +121,9 @@ import hashlib
 # listener session start (awdlSchedStartedGen), which the overlap exceptions wait for. Then a frame-release
 # notification for a cleared or unused reorder entry is dropped instead of released (added lines only). -itlschedsecond's
 # itlsecondvar 1 notes when the follower's last session ended (awdlSchedSpEndedUS, one added line).
-a=s.index('iwx_rx_pkt(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='6c76613787fef8b66e4d170bd79fda5ecd6d80b38dd88dae80ca822178565283'
+# -itlslotdiag: the session-protection handler also records each plan run's planned and confirmed window and the
+# receive filter/station state at its start and end (added lines only; the session bookkeeping is unchanged).
+a=s.index('iwx_rx_pkt(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='6413a7f4d3d4d89b364bdbf0b3f51bcb429c399311c0b2ffa00078a18c977589'
 # iwx_rx_mpdu_mq: the next release adds only a read-only per-antenna signal tap (ITLAWDLChainRssi) after the RSSI,
 # and a read-only count of A-MSDU subframes with AWDL's BSSID inside the existing A-MSDU branch (ITLAWDLAmsduRx).
 a=s.index('iwx_rx_mpdu_mq(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='7639048af6c0864698f341a5a8bce663ea86802dca8ac8dea490a3f12f7fa545'
@@ -147,4 +151,9 @@ a=s.index('iwx_rx_mpdu_mq(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib
 # -itlawdlamsdutx (A-MSDU send, step A2): our send agreement keeps the answer's A-MSDU bit per slot and clears it on
 # a DELBA of that session (added lines only; the answer's matching and every receive check are unchanged).
 # Both merged for 0.7.0-alpha.4 (second-channel steps 2b-2d and the A-MSDU send agreement).
-a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='7567eeb97bf2f9a167f10cafa9b96faa7b5279de990300ed9e55405c54260795'
+# After 0.7.0-alpha.4: while a scan runs, beacons and probe responses are no longer dropped by channel 6's handle
+# or the listener's promiscuous receive, so networks on 6 and on the listener's channel reach macOS's scan
+# (added condition only; AWDL's hand-off and every receive check are unchanged).
+# -itlslotdiag: AWDL action frames and data to us or to a group are counted by plan entry, and unicast to us by the
+# receive filter's state (added lines only; every receive check and the hand-off are unchanged).
+a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='23a8354cd09fbca9fb0eb9735b303aeb7eecbc2379d9aedcfc4f681bada5f74a'
