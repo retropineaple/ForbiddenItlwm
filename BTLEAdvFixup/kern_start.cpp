@@ -19,6 +19,7 @@
 #include "BTLEAdvHci.hpp"
 #include "BTLEAdvVerify.hpp"
 #include "BTLEAdvAdvLog.hpp"
+#include "BTLEAdvKcSymbol.hpp"
 
 // Patches bluetoothd's pages as they're validated, the same way BlueToolFixup does.
 // Lilu's onProcLoad route was tried first and didn't apply to this process.
@@ -163,6 +164,35 @@ struct VerifyArgs {
 };
 static mach_vm_address_t orig_apfs_verify {};
 static uint32_t verifyRescues {}, verifyRescueFailures {};
+
+// #121: _apfs_vnop_verify's address, found in the Boot KC's symbol table when Lilu's patcher loads
+// (BTLEAdvKcSymbol.hpp). Without keepsyms=1 the kernel frees that table about a second into boot, at about the time
+// APFS loads, so a lookup by name on APFS's load event can read freed memory (Lilu faulted at boot on one Mac).
+// Found early, the hook is routed by address and needs no lookup then. BTLEAdvVerifyLookup is the early lookup's
+// result (1 found, other values as BTLEAdv::KcLookup). With keepsyms=1, BTLEAdvVerifyLookupMatch is 1 when Lilu's
+// own lookup on APFS's load gives the same address.
+static bool apfsHookWanted {}, keepSymbols {};
+static mach_vm_address_t apfsVerifyAddress {};
+static const uint8_t *readRunningKC(void *, uint64_t addr, uint64_t) {
+    return reinterpret_cast<const uint8_t *>(addr);
+}
+static void findApfsVerify() {
+    uint32_t result = BTLEAdv::KcNoHeader;
+    MachInfo *kc = MachInfo::create();
+    if (kc) {
+        const mach_vm_address_t base = kc->findKernelBase();
+        MachInfo::deleter(kc);
+        uint64_t value = 0;
+        if (base)
+            result = BTLEAdv::kcFindSymbol(nullptr, readRunningKC, base, "com.apple.filesystems.apfs",
+                                           "_apfs_vnop_verify", value);
+        if (result == BTLEAdv::KcFound)
+            apfsVerifyAddress = value;
+    }
+    if (result != BTLEAdv::KcFound)
+        SYSLOG("btleadv", "integrity check: _apfs_vnop_verify not found in the Boot KC (%u)", result);
+    noteHook("BTLEAdvVerifyLookup", result);
+}
 
 static int patched_apfs_verify(VerifyArgs *args) {
     // Only checks of file data: no flags, or the filesystem's own context (VNODE_VERIFY_WITH_CONTEXT).
@@ -625,23 +655,56 @@ PluginConfiguration ADDPR(config) {
             pageScratch = nullptr;
             pagesLock = nullptr;
         }
+        // -btleadvnoapfs skips the APFS hook (#121). The #62 crash after long uptimes can then come back.
+        const bool noApfs = checkKernelArgument("-btleadvnoapfs");
+        apfsHookWanted = pagesLock && !noApfs;
+        {
+            int keep = 0;
+            keepSymbols = PE_parse_boot_argn("keepsyms", &keep, sizeof(keep)) && keep;
+        }
         lilu.onPatcherLoadForce([](void *, KernelPatcher &patcher) {
+            // Before anything else: the Boot KC's symbols are only sure to be there this early (#121).
+            if (apfsHookWanted)
+                findApfsVerify();
             KernelPatcher::RouteRequest route("_cs_validate_page", patched_cs_validate_page, orig_cs_validate);
             if (!patcher.routeMultipleLong(KernelPatcher::KernelID, &route, 1))
                 SYSLOG("btleadv", "failed to route cs validation");
         });
-        // Routed on its own: if it fails, bluetoothd is still patched, as before.
-        if (pagesLock)
+        // Routed on its own: if it fails, bluetoothd is still patched, as before. BTLEAdvVerifyHook: 1 routed,
+        // 0 failed, 2 skipped by -btleadvnoapfs, 3 skipped because the address wasn't found early and, without
+        // keepsyms=1, a lookup by name now could read freed memory.
+        if (noApfs) {
+            SYSLOG("btleadv", "-btleadvnoapfs: APFS integrity check hook skipped");
+            noteHook("BTLEAdvVerifyHook", 2);
+        } else if (apfsHookWanted)
             lilu.onKextLoadForce(&apfsInfo, 1, [](void *, KernelPatcher &patcher, size_t index, mach_vm_address_t address, size_t size) {
                 if (index != apfsInfo.loadIndex)
                     return;
-                KernelPatcher::RouteRequest route("_apfs_vnop_verify", patched_apfs_verify, orig_apfs_verify);
-                const bool routed = patcher.routeMultipleLong(index, &route, 1, address, size);
-                if (!routed) {
-                    SYSLOG("btleadv", "failed to route the integrity check");
+                mach_vm_address_t from = apfsVerifyAddress;
+                if (from && size && (from < address || from - address >= size))
+                    from = 0;   // not inside the APFS that loaded
+                if (keepSymbols) {
+                    // The symbols stay mapped, so Lilu's own lookup is safe: check the early address against it,
+                    // and use it if the early one is missing or differs.
+                    const mach_vm_address_t byName = patcher.solveSymbol(index, "_apfs_vnop_verify", address, size);
                     patcher.clearError();
+                    if (from)
+                        noteHook("BTLEAdvVerifyLookupMatch", byName == from ? 1 : 0);
+                    if (byName)
+                        from = byName;
                 }
-                noteHook("BTLEAdvVerifyHook", routed ? 1 : 0);
+                uint32_t state = 3;
+                if (from) {
+                    orig_apfs_verify = patcher.routeFunctionLong(from, reinterpret_cast<mach_vm_address_t>(patched_apfs_verify), true);
+                    state = orig_apfs_verify ? 1 : 0;
+                    if (!orig_apfs_verify) {
+                        SYSLOG("btleadv", "failed to route the integrity check");
+                        patcher.clearError();
+                    }
+                } else {
+                    SYSLOG("btleadv", "integrity check hook skipped: no early address and no keepsyms=1");
+                }
+                noteHook("BTLEAdvVerifyHook", state);
             });
         hciLock = IOLockAlloc();
         lengthLock = IOSimpleLockAlloc();
