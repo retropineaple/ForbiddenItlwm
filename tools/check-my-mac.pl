@@ -10,7 +10,7 @@
 #   perl check-my-mac.pl --bluetoothd FILE --kext FILE [--skywalk FILE] --family tahoe|sequoia|sonoma
 #                                        check loose copies (IO80211Family / IOSkywalkFamily from a KDK, a bluetoothd)
 #
-# Needs only what every macOS ships: /usr/bin/perl, codesign, sw_vers, uname. Intel Macs only (x86_64 code).
+# Needs only what every macOS ships: /usr/bin/perl, codesign, kmutil, sw_vers, uname. Intel Macs only (x86_64 code).
 use strict;
 use warnings;
 # Safety: a runaway recursion or loop stops the script instead of filling memory and swap.
@@ -112,6 +112,13 @@ if ($live) {
 
 # ---------------------------------------------------------------- Mach-O helpers
 sub slurp { my ($p) = @_; open(my $f, '<:raw', $p) or return undef; local $/; my $d = <$f>; close $f; return $d; }
+# Whether the kext with this bundle id is loaded (kmutil's list, read once).
+my $loadedKexts;
+sub kext_loaded {
+    my ($id) = @_;
+    $loadedKexts = `/usr/bin/kmutil showloaded --list-only 2>/dev/null` // '' unless defined $loadedKexts;
+    return $loadedKexts =~ /\s\Q$id\E\s/ ? 1 : 0;
+}
 sub u32 { unpack('V', substr($_[0], $_[1], 4)) }
 sub u64 { my ($lo, $hi) = unpack('VV', substr($_[0], $_[1], 8)); return $hi * 4294967296 + $lo; }
 
@@ -455,9 +462,21 @@ if (!defined $bt) {
         }
     }
     if ($live) {
+        # codesign reads the file through the shared file cache, where BlueToolFixup and BTLEAdvFixup patch
+        # bluetoothd's code pages, so it sees the patched bytes while the file on disk is unchanged (#121).
+        # Its own "invalid signature" line goes to /dev/null: the result is explained below.
+        open(my $err, '>&', \*STDERR);
+        open(STDERR, '>', '/dev/null');
         my $valid = system('/usr/bin/codesign', '-v', $opt{bluetoothd}) == 0;
+        open(STDERR, '>&', $err);
+        my @patchers;
+        push @patchers, 'BTLEAdvFixup' if $patchedSeen;
+        push @patchers, 'BlueToolFixup' if kext_loaded('as.acidanthera.BlueToolFixup');
         if ($valid) { say_('  Apple signature: valid'); }
-        elsif ($patchedSeen) { say_('  Apple signature: not valid while BTLEAdvFixup patches it in memory (expected)'); }
+        elsif (@patchers) {
+            say_('  Apple signature: not valid while ' . join(' and ', @patchers) . (@patchers == 1 ? ' patches' : ' patch') .
+                 ' it in memory (expected: the file on disk is unchanged)');
+        }
         else { say_('  Apple signature: NOT VALID (modified system?)'); push @problems, 'bluetoothd signature not valid'; }
     }
 }
