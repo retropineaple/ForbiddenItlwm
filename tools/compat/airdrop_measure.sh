@@ -12,8 +12,9 @@
 #   it sent to (iPhone, iPad, Mac; a Mac is a real Mac or another hackintosh).
 # - device -> Hackintosh: from the first connection the device opens to its ASK, and from the ASK to the end of
 #   the data. The moment you tap this Mac on the device isn't visible here, so the time before the
-#   first connection isn't included. macOS doesn't log the kind of device that sent; when an earlier send
-#   in this run went to the same driver slot, that kind is shown with "by slot".
+#   first connection isn't included. macOS doesn't log the kind of device that sent, so it shows as
+#   "device" until a send from this Mac in the same run has gone to the same driver slot.
+# With the AirDrop build running, the device's driver slot follows its name, e.g. "iPhone (slot 0)".
 # When ForbiddenItlwm's AirDrop build is running (live mode only), it also shows after each transfer:
 # the driver slot the device used, the channel and width its frames came in on, the Wi-Fi network's
 # channel and width, macOS's AirDrop schedule (16 slots, 0 = AirDrop off) and the listener's state.
@@ -140,7 +141,7 @@ function busiest(before, after, dir,   bt, br, bo, bs, at, ar, ao, as, k, d, bes
 }
 function slotline(slot,   t) {
     if (!live || !have_traffic) return ""
-    t = (slot < 0) ? "slot ?" : sprintf("slot %d, its frames on %s MHz, its station %s MHz", slot, (slot_on == "0/0" ? "-" : slot_on), slot_sta)
+    t = (slot < 0) ? "slot unknown" : sprintf("its frames on %s MHz, its station %s MHz", (slot_on == "0/0" ? "-" : slot_on), slot_sta)
     return t sprintf("; Wi-Fi %s%s", (wifi_now == "" || wifi_now == "-") ? "not joined" : wifi_now, (wifi_now == "" || wifi_now == "-") ? "" : " MHz")
 }
 {
@@ -171,18 +172,18 @@ function slotline(slot,   t) {
         slot = busiest(tx_before, after, "tx"); if (slot >= 0) slot_kind[slot] = kind
         total = (tx_start && tx_end >= tx_start) ? (tx_end - tx_start) / 1000 : 0
         data = (bps > 0 && tx_size > 0) ? tx_size / bps : 0
-        printf "%s  Hackintosh -> %s  %s  %.1f MB at %s MB/s via %s\n", ts, kind, (ok == "true" ? "OK    " : "FAILED"), tx_size / 1000000, mb(bps), (tx_transport == "" ? "?" : tx_transport)
+        printf "%s  Hackintosh -> %s  %s  %.1f MB at %s MB/s via %s\n", ts, kind (slot >= 0 ? " (slot " slot ")" : ""), (ok == "true" ? "OK    " : "FAILED"), tx_size / 1000000, mb(bps), (tx_transport == "" ? "?" : tx_transport)
         printf "                         connect: HELLO %s ms, ASK %s ms (includes the %s accepting); data about %.1f s; total %.1f s\n", (tx_hello == "" ? "?" : tx_hello), (tx_ask == "" ? "?" : tx_ask), kind, data, total
         sl = slotline(slot)
         if (csv != "") printf "%s,hackintosh_to_device,%s,%s,%s,%s,%.1f,%.1f,%s,%s,%s,%s,%s\n", ts, tx_size, mb(bps), tx_hello, tx_ask, data, total, tx_transport, kind, (slot < 0 ? "" : slot), slot_on, wifi_now >> csv
         tx_start = tx_end = 0; tx_size = ""; tx_kind = ""; tx_before = ""
     } else {
         slot = busiest(rx_before, after, "rx")
-        kind = (slot >= 0 && (slot in slot_kind)) ? slot_kind[slot] " (by slot)" : "device"
+        kind = (slot >= 0 && (slot in slot_kind)) ? slot_kind[slot] : "device"
         bucket = field("totalBytesBucket")
         conn = (rx_conn && rx_ask >= rx_conn) ? rx_ask - rx_conn : -1
         data = (rx_ask && rx_end >= rx_ask) ? (rx_end - rx_ask) / 1000 : 0
-        printf "%s  %s -> Hackintosh  %s  up to %s at %s MB/s\n", ts, kind, (ok == "true" ? "OK    " : "FAILED"), bucket, mb(bps)
+        printf "%s  %s -> Hackintosh  %s  up to %s at %s MB/s\n", ts, kind (slot >= 0 ? " (slot " slot ")" : ""), (ok == "true" ? "OK    " : "FAILED"), bucket, mb(bps)
         printf "                         connect: first connection to ASK %s ms; ASK to end of data %.1f s\n", (conn < 0 ? "?" : conn), data
         sl = slotline(slot)
         if (csv != "") printf "%s,device_to_hackintosh,%s,%s,%s,,%.1f,,awdl,%s,%s,%s,%s\n", ts, bucket, mb(bps), (conn < 0 ? "" : conn), data, kind, (slot < 0 ? "" : slot), slot_on, wifi_now >> csv

@@ -1829,6 +1829,8 @@ IOReturn itlAWDLReceiveAction(IOEthernetController *owner, mbuf_t packet, size_t
 // Which sync frames were built: with macOS's MI (services, host name), PSF, or an ordinary frame in an MI
 // slot because no MI was available or it failed. Counts only; no frame content is published.
 
+// ItlIwx.cpp, -itlawdlframedump: keeps a copy of a built sync frame (AWDLFrameDump.hpp).
+extern void itlAWDLFrameDumpTx(const uint8_t *frame, size_t length, uint64_t nowUS);
 IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
 {
 #if defined(ITL_AWDL_NATIVE)
@@ -1883,6 +1885,8 @@ IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
     setProperty("ItlwmAWDLRequestedTimingPresent", snapshot->hasRequestedTiming);
     setProperty("ItlwmAWDLRequestedAWLength", snapshot->parameters.availability_window_length, 32);
     setProperty("ItlwmAWDLRequestedAWPeriod", snapshot->parameters.availability_window_period, 32);
+    // the 24th byte of AWDL_SYNC_PARAMS (see apple80211_ioctl.h): published to learn its values; nothing acts on it.
+    setProperty("ItlwmAWDLRequestedNonElectionMaster", snapshot->parameters.non_election_master, 32);
     // Reject contradictory native channel-sequence TLVs rather than claiming
     // the native requested sequence was applied to this fixed-channel test.
     bool valid = true;
@@ -1929,7 +1933,11 @@ IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
     }
     uint8_t sync[73]; size_t syncLength = 0;
     const uint8_t fixedChannel = uint8_t(itlAWDLFixedChannel());
-    ItlAWDL::SyncPrefix settings = {fixedChannel,fixedChannel,0,0,16,110,0x1000,16,16,0,3,3,3,3,{}};
+    // Sync parameter flags: 0x1800, as every Apple device sends (2026-11-27/28 frame dumps: iPhone and a real Mac both
+    // 0x1800; ours was 0x1000). macOS's IO80211 parser doesn't read this word (parseAwdlSyncParamsTlv), so any
+    // effect is in the peer's firmware; bit 0x0800's meaning isn't known.
+    constexpr uint16_t kSyncFlags = 0x1800;
+    ItlAWDL::SyncPrefix settings = {fixedChannel,fixedChannel,0,0,16,110,kSyncFlags,16,16,0,3,3,3,3,{}};
     memcpy(settings.master, elect ? electAdvert.master : snapshot->address, 6);
     // the elected clock (the master's, or our own epoch-0 clock as before).
     uint64_t clockEpochUS = 0;
@@ -1967,6 +1975,7 @@ IOReturn AirportItlwm::buildAWDLSyncProbe(mbuf_t *packet, uint64_t nowUS)
                     mbuf_maxlen(result), &length) == ItlAWDL::BuildResult::Ready) {
                 mbuf_setlen(result,length); mbuf_pkthdr_setlen(result,length);
                 *packet = result; error = kIOReturnSuccess;
+                itlAWDLFrameDumpTx(static_cast<const uint8_t *>(mbuf_data(result)), length, nowUS);
                 // A unicast MI doesn't take a turn of the MI/PSF alternation (its sequence number is still new).
                 awdlProbeSequence = uint16_t((awdlProbeSequence + (isUMI ? 2 : 1)) & 4095);
                 if (isUMI)

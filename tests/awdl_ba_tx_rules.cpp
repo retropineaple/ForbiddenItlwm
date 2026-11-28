@@ -25,10 +25,53 @@ int main() {
     v.lastAskUS = now - 100000;
     assert(!baProbeDue(v, now, true, asksMax, 0, false));
     cases += 3;
-    // Once per dialog; only while receive is filtered; not while sends are paused or the peer is away.
+    // A second window in the dialog only 5 s and three requests after the first; at most three; only while receive
+    // is filtered; not while sends are paused or the peer is away.
     v = due;
-    v.tried = true;
-    assert(!baProbeDue(v, now, true, asksMax, 0, false) && baProbeAllowed(v, now));
+    v.probes = 1;
+    v.asksAtProbe = 3;
+    v.lastProbeUS = now - 1000000;
+    v.asks = 9;
+    assert(!baProbeDue(v, now, true, asksMax, 0, false) && baProbeAllowed(v, now));   // 1 s after the first
+    v.lastProbeUS = now - kBaProbeRetryUS;
+    assert(baProbeDue(v, now, true, asksMax, 0, false));                             // 5 s and 6 requests after
+    v.asks = 5;
+    assert(!baProbeDue(v, now, true, asksMax, 0, false));                            // only 2 requests after
+    v.asks = 6;
+    assert(baProbeDue(v, now, true, asksMax, 0, false));
+    v.asks = 4;   // the count started again (idle hold): counts as new requests
+    v.asksAtProbe = 30;
+    assert(baProbeDue(v, now, true, asksMax, 0, false));
+    v = due;
+    v.probes = kBaProbeMaxPerDialog;
+    v.asksAtProbe = 3;
+    v.lastProbeUS = now - 30000000;
+    v.asks = 20;
+    assert(!baProbeDue(v, now, true, asksMax, 0, false) && baProbeAllowed(v, now));   // three used
+    v.probes = kBaProbeMaxPerDialog - 1;
+    assert(baProbeDue(v, now, true, asksMax, 0, false));
+    cases += 7;
+    // #103's slot 3: a window every 5 s while it keeps asking, three in the round, not one per 30 s round.
+    {
+        BaProbeView s = due;
+        s.asks = 0;
+        unsigned windows = 0;
+        uint64_t t = now;
+        for (unsigned ask = 0; ask < asksMax; ++ask, t += 400000) {
+            s.asks = ask + 1;
+            s.lastAskUS = t;
+            const uint64_t check = t + kBaProbeAskGapUS;
+            if (baProbeDue(s, check, true, asksMax, 0, false)) {
+                ++windows;
+                s.probes = uint8_t(s.probes + 1);
+                s.asksAtProbe = s.asks;
+                s.lastProbeUS = check;
+            }
+        }
+        assert(windows == kBaProbeMaxPerDialog);
+        ++cases;
+    }
+    v = due;
     assert(!baProbeDue(due, now, false, asksMax, 0, false));
     assert(!baProbeDue(due, now, true, asksMax, now + 1, false));
     assert(!baProbeDue(due, now, true, asksMax, 0, true));

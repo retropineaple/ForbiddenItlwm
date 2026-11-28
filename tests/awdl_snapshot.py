@@ -17,7 +17,8 @@ program = r'''
 using IOReturn = unsigned;
 enum { kIOReturnSuccess=0, kIOReturnBadArgument=1, kIOReturnNotReady=2 };
 struct apple80211_awdl_sync_params { uint32_t version, availability_window_length,
-    availability_window_period, extension_length, synchronization_frame_period; };
+    availability_window_period, extension_length, synchronization_frame_period, non_election_master; };
+static_assert(sizeof(apple80211_awdl_sync_params) == 24, "the native 24-byte record");
 static unsigned depth;
 static void IOLockLock(void*) { assert(!depth); ++depth; }
 static void IOLockUnlock(void*) { assert(depth==1); --depth; }
@@ -31,7 +32,7 @@ public:
         bool present=false;
         IOReturn get(apple80211_awdl_sync_params *p) {
             assert(depth==1); if (!present) return kIOReturnNotReady;
-            *p={1,16,64,16,110}; return kIOReturnSuccess;
+            *p={1,16,64,16,110,7}; return kIOReturnSuccess;
         }
     } requested_AWDL_SYNC_PARAMS;
     struct Template {
@@ -57,6 +58,7 @@ int main() {
     obj.requested_AWDL_SYNC_PARAMS.present=true;
     assert(obj.copyFrameConfiguration(&out)==0 && !depth && out.hasRequestedTiming);
     assert(out.parameters.availability_window_period==64);
+    assert(out.parameters.non_election_master==7);   // the trailing word survives the snapshot
     obj.frameTemplate.length=0;
     auto before=out;
     assert(obj.copyFrameConfiguration(&out)==kIOReturnNotReady && !depth);

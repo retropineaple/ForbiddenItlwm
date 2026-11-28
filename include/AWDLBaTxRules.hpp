@@ -53,11 +53,15 @@ inline BaAskStep baAskStep(const BaAskView &v, uint64_t now, uint64_t idleUS, ui
 
 // The reply-delivery probe. With a peer's station set the listener filters what it receives, and some phones' ADDBA
 // answers then don't get through. After three unanswered requests in a dialog the driver opens promiscuous receive
-// for 250 ms, once per dialog, so the answer can arrive.
+// for 250 ms so the answer can arrive. Until 2026-11-27 that was once per dialog, and a dialog's window could fall
+// while another slot's bulk send held the air: a later slot then asked until the next round, 30 s on (#103, slot 3
+// agreed only on the third round). Now a dialog gets up to three windows, 5 s and three more requests apart.
 constexpr uint64_t kBaProbeUS = 250000;          // how long receive stays open
 constexpr uint64_t kBaProbeAskGapUS = 200000;    // since our last request
 constexpr uint64_t kBaProbeRecentRxUS = 300000;  // data from the peer this recently: replies already get through
-constexpr uint32_t kBaProbeMinAsks = 3;
+constexpr uint32_t kBaProbeMinAsks = 3;          // unanswered requests before a window (and between windows)
+constexpr uint8_t kBaProbeMaxPerDialog = 3;
+constexpr uint64_t kBaProbeRetryUS = 5000000;    // between a dialog's windows
 
 // One slot's state, as the probe reads it.
 struct BaProbeView {
@@ -65,9 +69,11 @@ struct BaProbeView {
     uint64_t lastRxPayloadUS; // last data heard from the peer (0 = none)
     bool asking;              // our send agreement is in its asking state
     uint64_t restUntilUS;     // nonzero while resting between rounds
-    bool tried;               // already probed in this dialog
+    uint8_t probes;           // windows already opened in this dialog
     uint32_t asks;            // requests sent in this dialog
     uint64_t lastAskUS;
+    uint32_t asksAtProbe = 0; // requests sent when the last window opened
+    uint64_t lastProbeUS = 0; // when it opened
 };
 
 // Whether a probe could apply to this slot at all. When it can't, the slot's open window is closed.
@@ -81,7 +87,10 @@ inline bool baProbeAllowed(const BaProbeView &v, uint64_t now)
 inline bool baProbeDue(const BaProbeView &v, uint64_t now, bool filterOff, uint32_t asksMax, uint64_t txPauseUntilUS,
                        bool peerAway)
 {
-    return baProbeAllowed(v, now) && !v.tried && filterOff && v.asks >= kBaProbeMinAsks && v.asks < asksMax &&
+    const bool windowLeft = !v.probes || (v.probes < kBaProbeMaxPerDialog && now - v.lastProbeUS >= kBaProbeRetryUS &&
+                                          // (a count that started again, after an idle hold, counts as new)
+                                          (v.asks < v.asksAtProbe || v.asks - v.asksAtProbe >= kBaProbeMinAsks));
+    return baProbeAllowed(v, now) && windowLeft && filterOff && v.asks >= kBaProbeMinAsks && v.asks < asksMax &&
         now >= txPauseUntilUS && now - v.lastAskUS >= kBaProbeAskGapUS && !peerAway;
 }
 

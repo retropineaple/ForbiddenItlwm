@@ -23,6 +23,7 @@ static bool itlAWDLClockState(ItlAWDL::ElectionAdvert *, ItlAWDL::Clock *) { ret
 static volatile uint32_t itlAWDLSelfMetric, itlAWDLSelfCounter, itlAWDLSelfKnown;
 static volatile uint32_t itlAWDLSelfElectionId, itlAWDLSelfElectionIdKnown;
 static void itlSvcNoteMiBuilt() {}
+static void itlAWDLFrameDumpTx(const uint8_t *, size_t, uint64_t) {}   // -itlawdlframedump: off
 static volatile uint32_t itlAWDLUmiPending, itlAWDLUmiGo;
 static volatile int itlAWDLForceMI, itlAWDLLastBuildMI;
 using IOReturn=unsigned;
@@ -46,7 +47,7 @@ static Loop loop; static Loop *_fWorkloop=&loop;
 static bool awdlExtendFrames=false;
 struct ItlAWDLInterface {
     struct FrameConfiguration {
-        struct { unsigned availability_window_length=16,availability_window_period=16; } parameters;
+        struct { unsigned availability_window_length=16,availability_window_period=16,non_election_master=0; } parameters;
         bool hasRequestedTiming=true; uint8_t address[6]={2,0,0,0,0,1};
         size_t templateLength=110; uint8_t staticTLVs[1828]={};
     };

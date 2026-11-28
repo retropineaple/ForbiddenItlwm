@@ -1056,13 +1056,19 @@ static_assert(__offsetof(apple80211_awdl_sync_state, flags) == 16, "AWDL sync fl
 static_assert(__offsetof(apple80211_awdl_sync_state, driver_flags) == 20, "AWDL driver flags offset");
 #endif
 
+// 24 bytes: IO80211's get/set routes for this request check a length of 0x18 on Tahoe 25G332, Sequoia 24H241 and
+// Sonoma 23J631. The trailing word was missing here, so the driver stored 20 bytes and handed back 20 of the 24.
+// AppleBCMWLAN keeps it in host state (not firmware) and its diagnostic labels it "as non election master"; its full
+// value range isn't known, so it is only stored and returned as macOS gave it.
 struct apple80211_awdl_sync_params {
     uint32_t    version;
     uint32_t    availability_window_length;
     uint32_t    availability_window_period;
     uint32_t    extension_length;
     uint32_t    synchronization_frame_period;
+    uint32_t    non_election_master;
 } __attribute__((packed));
+static_assert(sizeof(apple80211_awdl_sync_params) == 0x18, "IO80211 passes 24 bytes for AWDL_SYNC_PARAMS");
 
 struct apple80211_awdl_cap {
     uint32_t    version;

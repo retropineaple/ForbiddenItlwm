@@ -55,7 +55,11 @@ struct PeerSlot {
     bool queueAllocPending = false;
     uint64_t txFailedUS = 0;     // when the send agreement failed before the firmware held a queue (retried later)
     uint32_t aggFailStreak = 0;  // aggregate copies that failed in a row (a held frame waits for the next try)
-    bool probeTried = false;
+    // Reply-delivery probes opened in this dialog (0 = none; old code's true/false still reads as 1/0), and the
+    // request count and time of the last one (AWDLBaTxRules.hpp).
+    uint8_t probeTried = 0;
+    uint32_t probeAsks = 0;
+    uint64_t probeLastUS = 0;
     uint64_t probeUntilUS = 0, lastRxPayloadUS = 0;
     // A further slot's own count of payload-sized frames to the peer (the bulk detector's input) and of our
     // ADDBA requests in the current round. Slot 0 uses the listener-wide awdlCoexTxDestFrames and BaTxAsks.

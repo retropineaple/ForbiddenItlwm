@@ -40,6 +40,17 @@ The firmware opens channel 149 only after a nearby network tells it the country.
 - **Channels 149 to 161 marked passive** (China, for example): from 0.5.0, once the hackintosh hears a Wi-Fi network's beacon on one of these channels, the listener may use it (Linux does this only before the country is known; here it also counts after, see HOW-IT-WORKS). `ITLAWDLCoexBeaconHints` shows which channels were heard (bits 0 to 3 = 149, 153, 157, 161). A router on 149 at 80 MHz covers all four. The same applies to 36 to 48 for channel 44 (bits 8 to 11). From 0.6.0 such a channel can also be used while the Mac's own Wi-Fi is connected on a channel in the same group (36–48, 52–64, 100–144 or 149–165), if the firmware marks it for that (Linux's rule for Wi-Fi Direct interfaces): `ITLAWDLCoexIrConcurrent` lists the channels, `ITLAWDLCoexIrConcurrentUsed` counts the uses. With neither, AirDrop stays on 6.
 - The driver never overrides the country's rules, and `itlwm_cc` doesn't help.
 
+## AirDrop stays at 20 MHz, or on channel 6, with the router at 160 MHz
+
+Seen with the Mac's Wi-Fi on a 160 MHz channel in 36–64 (`ITLAWDLCoexOverlap` = 2) and the iPhone on 44 ([#122](https://github.com/retropineaple/ForbiddenItlwm/issues/122)). `ITLAWDLCoexOwnWidth` shows 20, or `ITLAWDLCoexChannel` shows 6.
+
+A listener at 80 MHz inside the router's 160 MHz channel used to get the Wi-Fi disconnected about every 20 s ([PR #21](https://github.com/retropineaple/ForbiddenItlwm/pull/21)). So the driver allows 44 there only with the scheduler on, and 80 MHz only once the scheduler is really running AirDrop's slots.
+- **Without the scheduler** (0.7.0-alpha.4's defaults), 44 is refused there. If 149 can't be used either, the listener stays on 6. Add `itlawdlsched=1`, which is the default from the next release.
+- **With the scheduler, but `ITLAWDLSchedSp` says "paused: macOS wants 149, listener on 44":** macOS picked a channel the card can't use here, so the scheduler pauses and the listener stays at 20 MHz. From the next release the scheduler runs macOS's slots on 44 instead ("macOS's 149 runs on 44"), and the listener can then widen to 80 MHz by the usual rules (see `-itlschednosub` in [BOOT-FLAGS](BOOT-FLAGS.md)).
+- **Or change the router:** at 80 MHz with 44 as its main channel, the listener shares the router's channel at 80 MHz, with or without the scheduler.
+
+If `ItlwmChannelsInfoLast` shows a country other than yours, a nearby network probably advertises the wrong country (an imported router, for example). Setting that router's region to your country fixes the channel choice too.
+
 ## The listener moves between 44 and 149
 
 `ITLAWDLCoexMoves` and `ITLAWDLCoexPeer5GHzChanges` keep rising, `ITLAWDLCoexChannel` alternates between 44 and 149, and `ITLAWDLCoexBaTxStateName` falls back to `asking` or `off` after each move ([#68](https://github.com/retropineaple/ForbiddenItlwm/issues/68)). Transfers are slow or never finish.
@@ -74,10 +85,11 @@ Fixed in 0.5.1-test1 ([#7](https://github.com/retropineaple/ForbiddenItlwm/issue
 
 ## The first iPhone → Mac send is slow to connect, or sits on "Waiting"
 
-**Try 0.7.0-alpha.1's experimental flags.** Add `itlawdlsched=1 -btleadvnodupfilter` to the tested set ([BOOT-FLAGS](BOOT-FLAGS.md#experimental)); they work only from 0.7.0-alpha.1, and in 0.7.0-alpha.1 the scheduler runs on AX210-family cards only (0.7.0-alpha.2 adds the AX200 family). On the project's hackintosh (AX211) connects take about 1 to 2 s, the first send no longer fails, even after the iPhone sat idle for a long time, and Mac → iPhone sends no longer sit on "Waiting". The Mac's announcement now reaches the iPhone first, and with `-btleadvnodupfilter` the Mac notices at once when the iPhone asks for a link over Bluetooth. Please report your result and your card, with `ioreg -l -w0 | grep '"ITLAWDLSched'`.
+**Try 0.7.0-alpha.1's experimental flags.** Add `itlawdlsched=1 -btleadvnodupfilter` to the tested set ([BOOT-FLAGS](BOOT-FLAGS.md#experimental)); they work only from 0.7.0-alpha.1, and in 0.7.0-alpha.1 the scheduler runs on AX210-family cards only (0.7.0-alpha.2 adds the AX200 family). On the project's hackintosh (AX211) connects take about 1 to 2 s, the first send fails much less often, and Mac → iPhone sends no longer sit on "Waiting". The Mac's announcement now reaches the iPhone first, and with `-btleadvnodupfilter` the Mac notices at once when the iPhone asks for a link over Bluetooth. Please report your result and your card, with `ioreg -l -w0 | grep '"ITLAWDLSched'`.
 
 **Up to 0.6.0-beta.4, or without the flags,** this is the main known problem. The time goes into the iPhone finding the Mac's AirDrop service before any data moves, and it's worst when both devices have been idle. Cancelling and sending again usually connects quickly. Mac → iPhone can sit on "Waiting" too, less often.
 
+**Still on "Waiting" with the scheduler on?** An iPhone → Mac send can still sit on "Waiting" for about 45 s and then fail, mostly the first send after the iPhone has been locked for a minute or two. Cancel it and send again: the second try connects within a few seconds. The iPhone's own logs show why. Right after it brings its AirDrop link to the Mac up, it refuses its first connection attempt with "No network route", even though its route to the Mac is already in place, and it doesn't try again until that 45 s timeout. The refusal comes from iOS, so the driver can't prevent it so far.
 
 **Both directions stay on "Waiting"?** Check that the Mac is connected to a Wi-Fi network. The AirDrop listener runs beside the Wi-Fi connection, so with Wi-Fi on but no network joined, AirDrop can't connect (a known limitation; a real Mac doesn't need a network).
 
@@ -152,6 +164,22 @@ ioreg -l -w0 | grep -E '"BTLEAdv(VerifyHook|PatchedPages|VerifyRescues|VerifyRes
 Without BTLEAdvFixup (BlueToolFixup alone, with any Bluetooth card), a restart brings Bluetooth back until it happens again. More memory makes it rarer.
 
 **A second, different crash: "Code Signature Invalid"** ([#62](https://github.com/retropineaple/ForbiddenItlwm/issues/62)). Here `bluetoothd` is killed (SIGKILL, not SIGBUS) with "Code Signature Invalid", again and again, also after long uptimes. macOS checks a page's code signature again while the page still holds the patches, so its bytes don't match. BTLEAdvFixup 0.9.4 doesn't cover this. From BTLEAdvFixup 0.9.8 (0.7.0-alpha.4) such a page gets its original bytes for the check and its patches back afterwards. `ioreg -l -w0 | grep BTLEAdvVerifyRevalidations` counts these. It hasn't been reproduced on the project's hackintosh, so please report the counter after a few days of uptime.
+
+## Kernel panic at boot with `-btleadv`, in Lilu
+
+Seen on one Sequoia 15.8.3 Mac ([#121](https://github.com/retropineaple/ForbiddenItlwm/issues/121)). The Mac panics about a second into boot, and the panic's backtrace names `as.vit9696.Lilu` and `org.forbiddenitlwm.BTLEAdvFixup`. Removing `-btleadv` makes it boot. Lilu crashes while it looks up the APFS function BTLEAdvFixup hooks for the #62 fix. Without `keepsyms=1`, macOS frees the symbol table of its boot kexts about a second into boot, at nearly the same moment APFS loads. When APFS loads after that, the lookup reads freed memory. On the project's hackintosh, APFS loaded 84 ms before the table was freed.
+
+Until the next release, add `keepsyms=1` to boot-args. The table then stays in memory and the lookup works.
+
+From the next release, BTLEAdvFixup finds that function when Lilu starts, before the table is freed, and no longer looks it up when APFS loads, so it works with or without `keepsyms=1`. Check:
+
+```bash
+ioreg -l -w0 | grep -E '"BTLEAdv(VerifyHook|VerifyLookup|VerifyLookupMatch)"'
+```
+
+`BTLEAdvVerifyLookup` is 1 when the early lookup found it, and `BTLEAdvVerifyHook` is 1 when the hook is in place. With `keepsyms=1`, `BTLEAdvVerifyLookupMatch` is 1 when Lilu's own lookup gives the same address. `BTLEAdvVerifyHook` 3 means the early lookup failed and, without `keepsyms=1`, the hook was left out rather than risk the crash.
+
+If it still panics, add `-btleadvnoapfs` to boot-args (keep `-btleadv`): BTLEAdvFixup then skips that hook, and all its patches still apply. The cost is the crash in the section above: after a day or two of uptime, `bluetoothd` can crash and Bluetooth stays off until you restart. `BTLEAdvVerifyHook` is 2 with the flag. Please post the new panic in #121.
 
 ## Wi-Fi is off or greyed out, and there's no `en0`
 

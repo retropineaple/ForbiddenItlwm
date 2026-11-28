@@ -158,4 +158,8 @@ a=s.index('iwx_rx_mpdu_mq(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib
 # receive filter's state (added lines only; every receive check and the hand-off are unchanged).
 # ITLAWDLPeerTraffic: a further count, channel and width per slot for bulk data from a known peer (added lines
 # only; every receive check and the hand-off are unchanged).
-a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='189579483251c485855745474e1b0d8b901bd1848640240888da4c1155f4f6a2'
+# #119: the scan exception reads macOS's in-progress scan (ic_wcl_scan_requested) instead of the request's type
+# (one condition swapped; every receive check and the hand-off are unchanged).
+# -itlawdlframedump: a copy of each heard AWDL sync frame is kept for the registry (added lines only; every receive
+# check and the hand-off are unchanged).
+a=s.index('iwx_rx_frame(struct');b=s.index("\nvoid ItlIwx::",a);assert hashlib.sha256(s[a:b].encode()).hexdigest()=='1699ef85ea8a0ecc8280f6286baa12fa17517359112f1c0fda89392ce69bef47'

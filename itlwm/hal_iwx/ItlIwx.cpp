@@ -134,6 +134,7 @@ extern bool itlAWDLDefaults();
 #include <AWDLRxDup.hpp>
 #include <AWDLSchedRestart.hpp>
 #include <AWDLSlotDiag.hpp>
+#include <AWDLFrameDump.hpp>
 #include <AWDLBaTxRules.hpp>
 #include <AWDLListenerWidth.hpp>
 #include <AWDLChainRssi.hpp>
@@ -628,6 +629,18 @@ static bool awdlSched80;
 static bool awdlSimSta160, awdlSimUnusable;
 static unsigned awdlSimMacChan;
 static unsigned awdlSchedMacChanWant, awdlSchedMacChanPicked;
+// #122: macOS's AirDrop channel can't be used here (passive with nothing heard on it, e.g. 149 under CN), while the
+// listener is on another 5 GHz channel the iPhone's own sequence uses. -itlschedsub (part of itlawdlsched=1, off with
+// -itlschednosub): instead of pausing (#101), macOS's AirDrop entries run on the listener's channel and our frames
+// advertise that channel there, so macOS keeps its timing and only the channel differs. The scheduler then really
+// runs, and the 80 MHz overlap rules apply as for any running scheduler (inside a 160 MHz station channel too).
+// awdlSchedSubst: the substitution in force (ItlAWDL::substitutionUpdate), from 0 when none. It holds for
+// kAwdlSchedSubHoldUS after the iPhone was last seen naming the listener's channel, so a stale sequence doesn't flip it
+// between ticks.
+static bool awdlSchedSub;
+static ItlAWDL::PlanSubstitution awdlSchedSubst;
+static uint32_t awdlSchedSubTicks;
+static constexpr uint64_t kAwdlSchedSubHoldUS = 60000000ULL;
 static uint32_t awdlSchedMacChanFollowed, awdlSchedMacChanUnusable, awdlSchedMacChanNone, awdlSchedMacChanFromPlan;
 // -itlawdlumi: macOS's one-shot unicast MI (AirportItlwmV2.cpp) goes out as the next sync frame, at the
 // start of the peer's AW on our channel (the multicast AW timing), or at once without timing, or anyway after 1.1 s.
@@ -830,6 +843,34 @@ static uint64_t awdlSlotRunPlanStartUS, awdlSlotRunPlanEndUS, awdlSlotRunReqUS;
 static uint32_t awdlSlotRunActionMark, awdlSlotRunUcastMark, awdlSlotUcastToUs;
 static uint8_t awdlSlotRunChannel, awdlSlotRunFlags;
 static uint64_t awdlSlotNextPublishUS;
+// -itlawdlframedump: our last built AWDL sync frames and the last heard ones, raw, in the registry (AWDLFrameDump.hpp).
+static bool awdlFrameDump;
+static ItlAWDL::FrameDump awdlFrameDumpTx, awdlFrameDumpRx;
+static uint64_t awdlFrameDumpNextPublishUS;
+// AirportItlwmV2.cpp's sync frame builder: a frame it built. Stamped with awdlUptimeUS, the clock the heard frames
+// use, so the two dumps line up (the builder's own time is passed for reference only).
+void itlAWDLFrameDumpTx(const uint8_t *frame, size_t length, uint64_t)
+{
+    if (awdlFrameDump && ItlAWDL::frameDumpIsSync(frame, length))
+        (void)ItlAWDL::frameDumpNote(awdlFrameDumpTx, awdlUptimeUS(), frame, length, 0);
+}
+static void awdlFrameDumpPublish()
+{
+    IORegistryEntry *root = IORegistryEntry::getRegistryRoot();
+    if (!root)
+        return;
+    static uint8_t buffer[ItlAWDL::kFrameDumpEntries * (ItlAWDL::kFrameDumpHeader + ItlAWDL::kFrameDumpBytes)];
+    size_t length = ItlAWDL::frameDumpSerialize(awdlFrameDumpTx, buffer, sizeof(buffer));
+    if (length)
+        root->setProperty("ITLAWDLFrameDumpTx", buffer, unsigned(length));
+    length = ItlAWDL::frameDumpSerialize(awdlFrameDumpRx, buffer, sizeof(buffer));
+    if (length)
+        root->setProperty("ITLAWDLFrameDumpRx", buffer, unsigned(length));
+    char text[128];
+    snprintf(text, sizeof(text), "on; built kept %u skipped %u; heard kept %u skipped %u", awdlFrameDumpTx.next,
+             awdlFrameDumpTx.skipped, awdlFrameDumpRx.next, awdlFrameDumpRx.skipped);
+    root->setProperty("ITLAWDLFrameDump", text);
+}
 static uint32_t awdlCoexDataRxNotCopied;
 struct AwdlRxSecond { uint32_t upS, heard, handed, refused, ok, notOurs, fails; };
 static AwdlRxSecond awdlRxSeconds[30];
@@ -8806,6 +8847,9 @@ bool itlAWDLExecPlan(uint8_t *out)
         ++awdlSchedAdvertiseRefused;
         return false;
     }
+    // #122 (awdlSchedSub): the entries the follower runs on the listener's channel are advertised as it.
+    if (!awdlSimMacChan)
+        (void)ItlAWDL::substitutePlan(plan, awdlSchedSubst, awdlCoexChannel);
     const bool ch6 = awdlSchedCh6 && !awdlSchedCh6Off && awdlSchedCh6Added && awdlSchedCh6Gen == awdlCoexGeneration;
     // A simulated excursion replaces home slots too. Do not tell the peer we remain home in those slots.
     // -itlschedsecondsync: the second channel's entries (macOS's, or the simulated ones) are advertised as that
@@ -9276,6 +9320,10 @@ awdlCoexTxTask(void *arg)
         if (awdlSlotDiag && timerNowUS >= awdlSlotNextPublishUS) {
             awdlSlotNextPublishUS = timerNowUS + 2000000ULL;
             awdlSlotDiagPublish();
+        }
+        if (awdlFrameDump && timerNowUS >= awdlFrameDumpNextPublishUS) {
+            awdlFrameDumpNextPublishUS = timerNowUS + 1000000ULL;
+            awdlFrameDumpPublish();
         }
         // one RX-outcome sample per second while running.
         if (awdlRxLoss && (!awdlRxLastSampleUS || timerNowUS - awdlRxLastSampleUS >= 1000000ULL)) {
@@ -10078,7 +10126,7 @@ awdlCoexBaAddPeer(struct iwx_softc *sc, ItlAWDL::PeerSlot &awdlPeer, const uint8
     awdlPeer.bulk = ItlAWDL::PeerBulkState{};
     ++awdlPeer.txToken;
     awdlPeer.txRestUntilUS = 0;
-    awdlPeer.probeTried = false;
+    awdlPeer.probeTried = 0;
     awdlPeer.probeUntilUS = awdlPeer.lastRxPayloadUS = awdlPeer.txLastAggUS = 0;
     memcpy(awdlPeer.addr, peer, sizeof(awdlPeer.addr));
     awdlPeer.requests.keepPeer(peer);
@@ -10629,7 +10677,7 @@ awdlBaAskPass(struct iwx_softc *sc, ItlAWDL::PeerSlot &p, unsigned slot, uint64_
     case ItlAWDL::BaAskStep::RoundOver:
         asks = 0;
         ++p.txToken;
-        p.probeTried = false;   // a new dialog may probe again
+        p.probeTried = 0;   // a new dialog may probe again
         p.probeUntilUS = 0;
         ++(slot0 ? awdlCoexBaTxAskRounds : awdlPeerBaAskRounds);
         p.txRestUntilUS = now + kAwdlBaTxRestUS;
@@ -11055,20 +11103,22 @@ awdlCoexBaHandle(struct iwx_softc *sc)
         filterChange = awdlPeerAnyReceiveSession() && stillOurs() &&
             ItlAWDL::noteBaFilterTraffic(awdlCoexBaFilter, awdlUptimeUS(), awdlCoexDataRxUcast);
     } else if (stillOurs()) {
-        // Test reply delivery with promiscuous RX briefly open, once per dialog, for every slot's send agreement
-        // (slot 0 only before 2026-11-27, so a later slot's peer could ask without end: #103).
+        // Test reply delivery with promiscuous RX briefly open, up to three times per dialog, for every slot's send
+        // agreement (slot 0 only before 2026-11-27, so a later slot's peer could ask without end: #103).
         for (unsigned i = 0; i < awdlPeerSlotsUsable; ++i) {
             ItlAWDL::PeerSlot &p = awdlPeers[i];
             const ItlAWDL::BaProbeView view{p.added && p.rxTids != 0, p.lastRxPayloadUS,
                                             p.txState == kCoexBaTxAsking, p.txRestUntilUS, p.probeTried,
-                                            awdlBaAsks(p), p.txLastAskUS};
+                                            awdlBaAsks(p), p.txLastAskUS, p.probeAsks, p.probeLastUS};
             if (!ItlAWDL::baProbeAllowed(view, answerNow)) {
                 p.probeUntilUS = 0;
                 continue;
             }
             if (ItlAWDL::baProbeDue(view, answerNow, awdlCoexBaFilterOff, kAwdlBaTxAsksMax, awdlCoexTxPauseUntilUS,
                                     awdlBaPeerAway(p, answerNow))) {
-                p.probeTried = true;
+                p.probeTried = uint8_t(p.probeTried + 1);
+                p.probeAsks = view.asks;
+                p.probeLastUS = answerNow;
                 p.probeUntilUS = answerNow + ItlAWDL::kBaProbeUS;
                 ++(i == 0 ? awdlCoexBaProbes : awdlPeerBaProbes);
                 awdlCoexBaEvent('P', p.txToken, view.asks, i);
@@ -11885,6 +11935,13 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
             ++awdlCoexRxWhileFilterOff;
         if ((awdlFrame || baToUs) && cf[0] == 0xd0) {
             ++awdlCoexAwdlAction;
+            if (awdlFrameDump) {
+                uint8_t dumpCopy[ItlAWDL::kFrameDumpBytes];
+                const size_t dumpLength = mbuf_len(m) < sizeof(dumpCopy) ? mbuf_len(m) : sizeof(dumpCopy);
+                if (!mbuf_copydata(m, 0, dumpLength, dumpCopy) && ItlAWDL::frameDumpIsSync(dumpCopy, dumpLength))
+                    (void)ItlAWDL::frameDumpNote(awdlFrameDumpRx, awdlUptimeUS(), dumpCopy, mbuf_len(m),
+                                                 chanValid ? uint8_t(chanidx) : 0);
+            }
             if (awdlSlotDiag && chanValid && unsigned(chanidx) == awdlCoexChannel)
                 awdlSlotDiagState.noteRx(awdlSchedPlanClockNow, ItlAWDL::SlotDiag::bankFor(awdlSchedPlanListener),
                                          awdlUptimeUS(), ItlAWDL::kSlotRxAction, awdlSchedSpActive);
@@ -12218,7 +12275,7 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                             awdlPeer.txAmsduAgreed = false;   // a new agreement decides again
                             awdlPeer.txState = kCoexBaTxAsking;
                             ++awdlPeer.txToken;
-                            awdlPeer.probeTried = false;
+                            awdlPeer.probeTried = 0;
                             awdlPeer.probeUntilUS = 0;
                             (&awdlPeer == &awdlPeers[0] ? awdlCoexBaTxAsks : awdlPeer.txAsks) = 0;
                             awdlPeer.txLastAskUS = 0;
@@ -12246,7 +12303,7 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
                                 ++awdlCoexBaTxRefusals;
                                 awdlPeer.txRestUntilUS = awdlUptimeUS() + 20000000ULL;
                                 ++awdlPeer.txToken;
-                                awdlPeer.probeTried = false;
+                                awdlPeer.probeTried = 0;
                                 awdlPeer.probeUntilUS = 0;
                                 askCount = 0;
                             } else {
@@ -12375,11 +12432,13 @@ iwx_rx_frame(struct iwx_softc *sc, mbuf_t m, int chanidx,
     // scan's results come from them. Without this, the two rules below hid every network on channel 6 and on the
     // listener's channel (an iPhone's hotspot, typically) from macOS's scans, unless the station was already there.
     // AWDL's own frames carry its BSSID and stopped at the hand-off above.
+    // macOS's scan is the WCL request until finishWCLScan: ic_wcl_scan_requested. (ic_wcl_scan_active is the
+    // request's type, active or passive, and stays set after the scan, so it kept this open for good: #119.)
     const uint8_t *scanFrame = mtod(m, const uint8_t *);
     const bool scanResult = mbuf_len(m) >= 24 && (scanFrame[0] == 0x80 || scanFrame[0] == 0x50) &&
         (ic->ic_state == IEEE80211_S_SCAN || (ic->ic_flags & IEEE80211_F_BGSCAN)
 #ifdef AIRPORT_WCL
-         || ic->ic_wcl_scan_active
+         || ic->ic_wcl_scan_requested
 #endif
         );
     if (scanResult && ((awdlSchedCh6 && awdlSchedCh6Added && chanValid && unsigned(chanidx) == kAwdlSchedCh6Channel) ||
@@ -18935,6 +18994,12 @@ awdlCoexPickOwn(struct iwx_softc *sc, uint8_t *width)
             ++awdlSchedMacChanNone;
         if (macFollowed && macFromPlan)
             ++awdlSchedMacChanFromPlan;
+        // #122: substitute the listener's channel for macOS's unusable one (see awdlSchedSub).
+        const unsigned subPick = pick > 0 ? unsigned(pick) : 0U;
+        if (ItlAWDL::substitutionUpdate(awdlSchedSubst, awdlSchedSub, macCh, macFollowed, subPick,
+                                        subPick && peerFresh && awdlCoexPeerNames(awdlCoexPeerSeq, subPick),
+                                        awdlUptimeUS(), kAwdlSchedSubHoldUS))
+            awdlSchedSpPublish();
         if (macCh != awdlSchedMacChanWant || unsigned(pick) != awdlSchedMacChanPicked) {
             awdlSchedMacChanWant = macCh;
             awdlSchedMacChanPicked = unsigned(pick);
@@ -19144,6 +19209,9 @@ static void awdlSchedSpPublish()
     if (awdlSchedPaused)
         snprintf(pausedText, sizeof(pausedText), " (paused: macOS wants %u, listener on %u; pauses %u)",
                  awdlSchedMacChanWant, awdlCoexChannel, awdlSchedPauses);
+    else if (awdlSchedSubst.from && awdlSchedSubst.to == awdlCoexChannel)
+        snprintf(pausedText, sizeof(pausedText), " (macOS's %u runs on %u; pauses %u)", awdlSchedSubst.from,
+                 awdlSchedSubst.to, awdlSchedPauses);
     else if (awdlSchedPauses)
         snprintf(pausedText, sizeof(pausedText), " (pauses %u)", awdlSchedPauses);
     snprintf(text, sizeof(text), "%s%s%s%s%s%s; mac %u conf %u sent %u err %d starts %u ends %u fails %u; in %llu ms lis %u sta %u; "
@@ -19395,11 +19463,13 @@ static void awdlSchedSpPublish()
             IORegistryEntry::getRegistryRoot()->setProperty("ITLAWDLUmi", umi);
         }
         if (awdlSchedMacChan) {
-            char mac[160];
-            snprintf(mac, sizeof(mac), "macOS %u (%s), listener %u; picks followed %u (from plan %u), unusable %u, none %u",
+            char mac[224];
+            snprintf(mac, sizeof(mac), "macOS %u (%s), listener %u; picks followed %u (from plan %u), unusable %u, none %u; "
+                     "substitution %s%u -> %u, starts %u, ticks %u",
                      awdlSchedMacChanWant, itlAWDLReqSecondaryMaster >= 36 ? "secondary master" : "plan",
                      awdlSchedMacChanPicked, awdlSchedMacChanFollowed, awdlSchedMacChanFromPlan,
-                     awdlSchedMacChanUnusable, awdlSchedMacChanNone);
+                     awdlSchedMacChanUnusable, awdlSchedMacChanNone, !awdlSchedSub ? "off " : awdlSchedSubst.from ? "" : "none ",
+                     awdlSchedSubst.from, awdlSchedSubst.to, awdlSchedSubst.starts, awdlSchedSubTicks);
             IORegistryEntry::getRegistryRoot()->setProperty("ITLAWDLSchedMacChan", mac);
         }
         if (awdlSchedClock) {
@@ -19710,7 +19780,9 @@ awdlSchedSpTick(struct iwx_softc *sc)
         // #101: macOS's AirDrop channel isn't the listener's (it couldn't be used here). Pause: no sessions, the fixed
         // channel advertised, the listener on its own as without the scheduler. Resumes once they match again.
         const unsigned want = awdlSchedMacChanWant;
-        const bool pause = awdlSchedMacChan && want && want != awdlCoexChannel;
+        // #122: not while macOS's channel is substituted by the listener's (awdlSchedSub).
+        const bool substituted = awdlSchedSubst.from && awdlSchedSubst.from == want && awdlSchedSubst.to == awdlCoexChannel;
+        const bool pause = awdlSchedMacChan && want && want != awdlCoexChannel && !substituted;
         if (pause != awdlSchedPaused) {
             awdlSchedPaused = pause;
             if (pause)
@@ -20374,7 +20446,8 @@ awdlSchedFollowPlan(struct iwx_softc *sc, uint64_t nowUS)
                 if (v && !(v & 1) && v == itlAWDLMacChoiceVersion) {
                     awdlSchedMacOSLast = choice;
                     bool resolved = false;
-                    const ItlAWDL::ElectionResult m = awdlSchedElection.runMacOS(awdlCoexAddr, choice, nowUS, &resolved);
+                    const ItlAWDL::ElectionResult m = awdlSchedElection.runMacOS(awdlCoexAddr, choice, nowUS, &resolved,
+                                                                                         itlAWDLSelfCounter);
                     if (resolved) {
                         if (m.following != r.following || memcmp(m.sync, r.sync, 6))
                             ++awdlSchedMacOSDisagree;   // where our own rules would have chosen differently
@@ -20441,6 +20514,9 @@ awdlSchedFollowPlan(struct iwx_softc *sc, uint64_t nowUS)
                 if (listenerPlan[n] == real)
                     listenerPlan[n] = uint8_t(awdlSimMacChan);
         }
+        // #122 (awdlSchedSub): macOS's entries on its unusable channel run on the listener's.
+        if (!awdlSimMacChan && ItlAWDL::substitutePlan(listenerPlan, awdlSchedSubst, awdlCoexChannel))
+            ++awdlSchedSubTicks;
         const bool shared = awdlSchedSharedChannel;
         if (shared)
             memset(listenerPlan, 0, sizeof(listenerPlan));   // the radio is on the listener's channel already
@@ -26120,6 +26196,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         awdlCoexGate = !PE_parse_boot_argn("-itlawdlcoexnogate", &dummy, sizeof(dummy));
         awdlRxLoss = itlResFlag("-itlrxloss", kItlResDiag);
         awdlSlotDiag = itlResFlag("-itlslotdiag", kItlResDiag);
+        awdlFrameDump = itlResFlag("-itlawdlframedump", kItlResDiag);
         awdlMcastAw = itlResFlag("-itlawdlmcastaw", kItlResWork);
         awdlMcastRepeat = awdlMcastAw && itlResFlag("-itlawdlmcastrepeat", kItlResWork);
         awdlCoexAssumeZero = !PE_parse_boot_argn("-itlawdlcoexcalwait", &dummy, sizeof(dummy));
@@ -26197,6 +26274,8 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
             awdlSchedMiNow = itlResFlag("-itlschedminow", kItlResWork);
             awdlSchedOnAir = itlResFlag("-itlschedonair", kItlResWork);
             awdlSchedMacChan = itlResFlag("-itlschedmacchan", kItlResWork);
+            awdlSchedSub = itlResFlag("-itlschedsub", kItlResWork) &&
+                !PE_parse_boot_argn("-itlschednosub", &dummy, sizeof(dummy));
             awdlUmi = PE_parse_boot_argn("-itlawdlumi", &dummy, sizeof(dummy));   // experiment, flag only
             awdlSchedHandover = itlResFlag("-itlschedhandover", kItlResWork);
             // The second 5 GHz channel (#45) is part of itlawdlsched=1 from 0.7.0-alpha.4: listening, sending and

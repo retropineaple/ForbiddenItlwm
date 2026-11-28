@@ -190,4 +190,43 @@ inline uint8_t advertisedEntry(uint8_t planEntry, uint8_t secondEntry, unsigned 
     return advertise6 ? ch6 : uint8_t(station);
 }
 
+// #122: macOS's AirDrop channel `mac` can't be used here, and the listener is on `pick`, another 5 GHz channel.
+// When the iPhone's own sequence names `pick` (peerNamesPick, seen at nowUS), macOS's entries on `mac` run on `pick`
+// instead of the scheduler pausing (#101). Started only on a fresh sighting (within 1 s), then held for holdUS after
+// the last one, as long as `mac` and `pick` stay the same. Returns whether the substitution changed.
+struct PlanSubstitution { unsigned from = 0, to = 0; uint64_t seenUS = 0; uint32_t starts = 0; };
+inline bool substitutionUpdate(PlanSubstitution &s, bool enabled, unsigned mac, bool macFollowed, unsigned pick,
+                               bool peerNamesPick, uint64_t nowUS, uint64_t holdUS) {
+    unsigned from = 0, to = 0;
+    if (enabled && mac && !macFollowed && isFiveGHz(mac) && isFiveGHz(pick) && pick != mac) {
+        if (peerNamesPick)
+            s.seenUS = nowUS;
+        const bool held = s.from == mac && s.to == pick;
+        if (s.seenUS && nowUS >= s.seenUS && nowUS - s.seenUS < (held ? holdUS : 1000000ULL)) {
+            from = mac;
+            to = pick;
+        }
+    }
+    if (from == s.from && to == s.to)
+        return false;
+    if (from)
+        ++s.starts;
+    s.from = from;
+    s.to = to;
+    return true;
+}
+// The plan with the substituted entries moved to the listener's channel (`home`); nothing when the substitution
+// isn't for the listener's current channel.
+inline unsigned substitutePlan(uint8_t plan[16], const PlanSubstitution &s, unsigned home) {
+    if (!s.from || s.to != home)
+        return 0;
+    unsigned moved = 0;
+    for (unsigned n = 0; n < 16; ++n)
+        if (plan[n] == s.from) {
+            plan[n] = uint8_t(s.to);
+            ++moved;
+        }
+    return moved;
+}
+
 }  // namespace ItlAWDL

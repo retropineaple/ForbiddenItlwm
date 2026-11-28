@@ -152,5 +152,41 @@ int main() {
         assert(advertisedEntry(149, 149, 149, 149, false, 6, 36) == 149);
         cases += 6;
     }
+    {
+        // #122: macOS wants 149, which can't be used (CN, nothing heard), listener on 44, which the iPhone names.
+        const uint64_t hold = 60000000ULL;
+        PlanSubstitution sub;
+        // off: nothing, ever
+        assert(!substitutionUpdate(sub, false, 149, false, 44, true, 1000000, hold) && !sub.from);
+        // macOS's channel is followed, or the listener is already on it, or on 2.4 GHz: nothing
+        assert(!substitutionUpdate(sub, true, 149, true, 44, true, 1000000, hold) && !sub.from);
+        assert(!substitutionUpdate(sub, true, 149, false, 149, true, 1000000, hold) && !sub.from);
+        assert(!substitutionUpdate(sub, true, 149, false, 6, true, 1000000, hold) && !sub.from);
+        assert(!substitutionUpdate(sub, true, 0, false, 44, true, 1000000, hold) && !sub.from);
+        // the iPhone doesn't name 44: no start, even with an old sighting from another case
+        PlanSubstitution quiet;
+        assert(!substitutionUpdate(quiet, true, 149, false, 44, false, 1000000, hold) && !quiet.from);
+        // starts on a fresh sighting
+        assert(substitutionUpdate(sub, true, 149, false, 44, true, 2000000, hold));
+        assert(sub.from == 149 && sub.to == 44 && sub.starts == 1);
+        // held while the sequence is stale, up to the hold time
+        assert(!substitutionUpdate(sub, true, 149, false, 44, false, 2000000 + hold - 1, hold) && sub.from == 149);
+        assert(substitutionUpdate(sub, true, 149, false, 44, false, 2000000 + hold, hold) && !sub.from);
+        // a stale sighting doesn't restart it
+        assert(!substitutionUpdate(sub, true, 149, false, 44, false, 2000000 + hold + 10, hold) && !sub.from);
+        assert(substitutionUpdate(sub, true, 149, false, 44, true, 90000000, hold) && sub.starts == 2);
+        // macOS's channel becomes usable: ends at once
+        assert(substitutionUpdate(sub, true, 149, true, 149, true, 90000001, hold) && !sub.from);
+        // the plan: macOS's 149 entries move to 44, others stay; not for another listener channel
+        assert(substitutionUpdate(sub, true, 149, false, 44, true, 91000000, hold));
+        uint8_t plan[16] = {36, 36, 149, 0, 0, 0, 0, 36, 6, 36, 149, 36, 0, 0, 0, 36};
+        uint8_t copy[16];
+        memcpy(copy, plan, 16);
+        assert(substitutePlan(copy, sub, 149) == 0 && !memcmp(copy, plan, 16));
+        assert(substitutePlan(copy, sub, 44) == 2 && copy[2] == 44 && copy[10] == 44 && copy[8] == 6 && copy[0] == 36);
+        // advertised as the listener's home channel once moved
+        assert(advertisedEntry(copy[2], 0, 44, 0, false, 6, 36) == 44);
+        cases += 17;
+    }
     printf("AWDL channel mix: %u cases passed (host only)\n", cases);
 }

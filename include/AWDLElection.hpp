@@ -416,12 +416,17 @@ struct Election {
 
     // macOS's choice as the follower's result. *resolved is false when it can't be followed (stale, or the
     // parent isn't a peer heard here recently); the caller then keeps its own election's result.
+    // selfCounter: our own counter (the template's election v2 self counter). When macOS is master the result
+    // advertises it as the master counter, as run() and runApple() do and as Apple devices do in their own frames:
+    // a master counter of 0 is what IO80211's election treats as a legacy peer and never adopts (2026-11-27
+    // frame dump: our MIs said "master counter 0" while the iPhone and a real Mac sent their real counter).
     ElectionResult runMacOS(const uint8_t *self, const MacOSElectionChoice &c, uint64_t nowUS,
-                            bool *resolved) const {
+                            bool *resolved, uint32_t selfCounter) const {
         ElectionResult r{};
         r.peer = -1;
         memcpy(r.master, self, 6);
         memcpy(r.sync, self, 6);
+        r.masterCounter = selfCounter;
         r.clock = ownClock();
         if (resolved) *resolved = false;
         if (!c.valid || nowUS < c.atUS || nowUS - c.atUS >= kMacOSChoiceStaleUS) return r;

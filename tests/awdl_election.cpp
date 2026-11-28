@@ -408,57 +408,64 @@ int main() {
         Election m{};
         PeerSyncInfo ms{};
         ms.awCounter = 8000; ms.downCounterTU = 20; ms.awPeriodTU = 16;
-        ElectionView mv = view(phone, phone, 0, 0, 524, 524);
+        ElectionView mv = view(phone, phone, 6103, 0, 524, 524);
         m.note(phone, &mv, &ms, tm - 500000, -66);   // below IO80211's -65: runApple wouldn't follow
         AppleElectionInputs in{};
         in.selfMetric = 515; in.minRssi5Dbm = -65; in.hostEdgeDbm = -45;
         assert(!m.runApple(self, in, tm + 1000).following);
         bool ok = false;
-        ElectionResult mr = m.runMacOS(self, c, tm + 1000, &ok);
+        ElectionResult mr = m.runMacOS(self, c, tm + 1000, &ok, 96);
         assert(ok && mr.following && !memcmp(mr.sync, phone, 6) && !memcmp(mr.master, phone, 6) && mr.height == 1 &&
                mr.masterMetric == 524 && mr.clockValid && mr.clock.anchorEaw == 2000);
+        assert(mr.masterCounter == 6103);   // following: the master's counter as the parent advertises it
         // the parent from ADVERTISERS wins over the root (two hops: root far away, parent the phone)
         MacOSElectionChoice two = c;
         two.hopCount = 2;
         memcpy(two.root, pad, 6);
-        mr = m.runMacOS(self, two, tm + 1000, &ok);
+        mr = m.runMacOS(self, two, tm + 1000, &ok, 96);
         assert(ok && mr.following && !memcmp(mr.sync, phone, 6) && !memcmp(mr.master, pad, 6) && mr.height == 2);
         // two hops without a fresh parent: unresolved (the root isn't whom to sync to)
         two.haveParent = false;
-        mr = m.runMacOS(self, two, tm + 1000, &ok);
+        mr = m.runMacOS(self, two, tm + 1000, &ok, 96);
         assert(!ok && !mr.following);
         two.haveParent = true; two.parentAtUS = two.atUS - kMacOSParentMatchUS;   // too old for this programming
-        mr = m.runMacOS(self, two, tm + 1000, &ok);
+        mr = m.runMacOS(self, two, tm + 1000, &ok, 96);
         assert(!ok);
         // macOS is master (hop count 0): our own clock, resolved
         MacOSElectionChoice own = c;
         own.hopCount = 0;
-        mr = m.runMacOS(self, own, tm + 1000, &ok);
+        mr = m.runMacOS(self, own, tm + 1000, &ok, 96);
         assert(ok && !mr.following && !memcmp(mr.master, self, 6) && !mr.clockValid &&
                mr.clock.anchorEndUS == ownClock().anchorEndUS);
+        // and it advertises our own counter as the master counter, never 0 (IO80211 skips 0 as a legacy peer)
+        assert(mr.masterCounter == 96 && mr.height == 0 && mr.masterMetric == 515 && !memcmp(mr.sync, self, 6));
+        // the follower's own runApple() result for the same case says the same
+        AppleElectionInputs alone{};
+        alone.selfMetric = 515; alone.selfCounter = 96;
+        assert(Election{}.runApple(self, alone, tm).masterCounter == mr.masterCounter);
         // stale choice, or before it arrived: unresolved
-        mr = m.runMacOS(self, c, tm + kMacOSChoiceStaleUS, &ok);
+        mr = m.runMacOS(self, c, tm + kMacOSChoiceStaleUS, &ok, 96);
         assert(!ok);
-        mr = m.runMacOS(self, c, tm - 1, &ok);
+        mr = m.runMacOS(self, c, tm - 1, &ok, 96);
         assert(!ok);
         // the parent isn't a peer heard here (or not recently): unresolved
-        mr = m.runMacOS(self, c, tm - 500000 + kElectionPeerStaleUS, &ok);
+        mr = m.runMacOS(self, c, tm - 500000 + kElectionPeerStaleUS, &ok, 96);
         assert(!ok);
         MacOSElectionChoice other = c;
         memcpy(other.parent, pad, 6); memcpy(other.root, pad, 6);
-        mr = m.runMacOS(self, other, tm + 1000, &ok);
+        mr = m.runMacOS(self, other, tm + 1000, &ok, 96);
         assert(!ok);
         // a parent that is us: unresolved, never a loop
         MacOSElectionChoice loop = c;
         memcpy(loop.parent, self, 6);
-        mr = m.runMacOS(self, loop, tm + 1000, &ok);
+        mr = m.runMacOS(self, loop, tm + 1000, &ok, 96);
         assert(!ok && !mr.following);
         // followed but the clock is old: following, own clock until a fresh sync TLV
-        mr = m.runMacOS(self, c, tm - 500000 + kElectionClockStaleUS + 1, &ok);
+        mr = m.runMacOS(self, c, tm - 500000 + kElectionClockStaleUS + 1, &ok, 96);
         assert(ok && mr.following && !mr.clockValid);
         // no choice at all
         MacOSElectionChoice none{};
-        mr = m.runMacOS(self, none, tm, &ok);
+        mr = m.runMacOS(self, none, tm, &ok, 96);
         assert(!ok);
     }
 

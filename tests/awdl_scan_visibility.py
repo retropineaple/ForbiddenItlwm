@@ -35,7 +35,8 @@ struct ieee80211com {
     int ic_state;
     unsigned ic_flags;
 #ifdef AIRPORT_WCL
-    bool ic_wcl_scan_active;
+    bool ic_wcl_scan_requested;
+    bool ic_wcl_scan_active;   // the request's type; left set after a scan (#119)
 #endif
 };
 struct Packet { uint8_t *data; size_t length; bool freed = false; };
@@ -66,6 +67,7 @@ int main() {
         ic.ic_state = IEEE80211_S_RUN;
         ic.ic_flags = 0;
 #ifdef AIRPORT_WCL
+        ic.ic_wcl_scan_requested = false;
         ic.ic_wcl_scan_active = false;
 #endif
         stationChannel.number = 36;
@@ -109,6 +111,9 @@ int main() {
                         ic.ic_flags = IEEE80211_F_BGSCAN;
 #ifdef AIRPORT_WCL
                     if (mode == 3)
+                        ic.ic_wcl_scan_requested = true;
+                    // An active scan that has finished leaves ic_wcl_scan_active set: no exception from it (#119).
+                    if (mode == 0)
                         ic.ic_wcl_scan_active = true;
 #endif
                     const bool expected = mode != 0 && length >= 24 &&
